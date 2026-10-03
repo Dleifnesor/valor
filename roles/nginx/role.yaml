@@ -1,0 +1,10 @@
+description: nginx web server with a minimal site naming the host and range
+families: [debian]
+ports: [80]
+params:
+  port:
+    default: 80
+    description: TCP port nginx listens on
+  server_name:
+    default: "_"
+    description: server_name of the site (default catch-all)

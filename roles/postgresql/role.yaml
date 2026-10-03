@@ -1,0 +1,15 @@
+description: PostgreSQL server on the host's segment address, reachable only from the listed clients
+families: [debian]
+ports: [5432]
+params:
+  allow_from:
+    default: ""
+    description: >
+      Hosts or segments allowed to connect (spec names; hosts become /32, segments their network).
+      Remember the router policy must also allow the traffic.
+  database:
+    default: app
+    description: Database to create (owned by 'user')
+  user:
+    default: app
+    description: Login role to create; its random password is stored on the host in /root/.valor-postgres-<user>

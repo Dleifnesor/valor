@@ -1,0 +1,43 @@
+apiVersion: valor/v1
+name: web2tier
+description: >
+  Reference range 1 (MVP spec 6.1): a DMZ with an nginx web server that has internet access,
+  and an isolated LAN running PostgreSQL that only the web server can reach, on TCP 5432.
+baseline: ubuntu-l1
+
+segments:
+  - name: dmz
+    vlan: 110
+    cidr: 10.110.0.0/24
+    internet: true
+  - name: lan
+    vlan: 120
+    cidr: 10.120.0.0/24
+    internet: false
+
+hosts:
+  - name: web
+    segment: dmz
+    address: 10.110.0.10
+    roles:
+      - name: nginx
+  - name: db
+    segment: lan
+    address: 10.120.0.10
+    memory: 2048
+    roles:
+      - name: postgresql
+        params:
+          allow_from: [web]
+
+policy:
+  - from: dmz
+    to: lan
+    proto: tcp
+    ports: [5432]
+    description: web tier to database
+
+tests:
+  - {name: web reaches db on 5432, from: web, to: db, proto: tcp, port: 5432, expect: open}
+  - {name: web cannot reach db on SSH, from: web, to: db, proto: tcp, port: 22, expect: closed}
+  - {name: db cannot reach web, from: db, to: web, proto: tcp, port: 80, expect: closed}

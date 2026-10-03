@@ -1,0 +1,17 @@
+#cloud-config
+# VALOR template preparation (used once by `valor-admin template build`, never by range VMs).
+# Installs the QEMU guest agent - the engine's only management channel into range VMs -
+# bakes in current updates, cleans cloud-init state and powers off so the VM can become a template.
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+runcmd:
+  - [systemctl, enable, qemu-guest-agent]
+  - [sh, -c, "apt-get clean && rm -rf /var/lib/apt/lists/*"]
+  - [cloud-init, clean, --logs, --machine-id]
+power_state:
+  mode: poweroff
+  message: VALOR template prepared
+  timeout: 60
+  condition: true

@@ -1,0 +1,37 @@
+# Example GitLab pipeline: build a disposable range, verify it, always tear it down.
+# Requires a shell runner on the Proxmox node (tag "valor") running as `valorop`.
+# Spec file name == range name (ranges/web2tier.yaml -> range "web2tier").
+variables:
+  RANGE: web2tier
+  VALOR: sudo -n -u valor /opt/valor/bin/valor
+
+stages: [validate, build, teardown]
+
+default:
+  tags: [valor]
+  resource_group: valor-engine          # one infrastructure job at a time
+
+publish-and-validate:
+  stage: validate
+  script:
+    - rsync -a --delete ranges/ /srv/valor/ranges/
+    - rsync -a roles/ /srv/valor/roles/
+    - rsync -a baselines/ /srv/valor/baselines/
+    - $VALOR validate "$RANGE.yaml"
+    - $VALOR plan "$RANGE.yaml"
+
+apply-and-verify:
+  stage: build
+  script:
+    - $VALOR apply "$RANGE.yaml" --verify
+  after_script:
+    - cp "/srv/valor/journals/$RANGE.md" journal.md || true
+  artifacts:
+    when: always
+    paths: [journal.md]
+
+destroy:
+  stage: teardown
+  when: always
+  script:
+    - $VALOR destroy "$RANGE" --yes

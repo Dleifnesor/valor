@@ -1,0 +1,7 @@
+description: Developer workstation basics (git, build tools, Python virtual environments, tmux, vim)
+families: [debian]
+ports: []
+params:
+  extra_packages:
+    default: ""
+    description: Additional apt packages to install (space separated)

@@ -1,0 +1,56 @@
+# Example pipeline: build a disposable range, verify it, always tear it down.
+# Copy to .github/workflows/valor-range.yml in the repository that holds your range specs.
+#
+# Requirements
+# - A self-hosted runner on the Proxmox node (label "valor") running as the operator account `valorop`,
+#   which may run the engine as `valor` (sudo rule installed by `valor-admin deploy`).
+# - Convention: the spec file name equals the range name (ranges/web2tier.yaml -> range "web2tier").
+# The engine is the same one Claude uses; no agent is involved. Non-zero exit codes fail the job:
+# 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy.
+name: valor-range
+
+on:
+  workflow_dispatch:
+    inputs:
+      range:
+        description: Range spec name (without .yaml)
+        default: web2tier
+  push:
+    paths: ["ranges/**", "roles/**", "baselines/**"]
+
+concurrency: valor-engine          # the engine runs one infrastructure job at a time anyway
+
+jobs:
+  range:
+    runs-on: [self-hosted, valor]
+    env:
+      RANGE: ${{ inputs.range || 'web2tier' }}
+      VALOR: sudo -n -u valor /opt/valor/bin/valor
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish specs, roles and baselines to the VALOR project
+        run: |
+          rsync -a --delete ranges/ /srv/valor/ranges/
+          rsync -a roles/ /srv/valor/roles/
+          rsync -a baselines/ /srv/valor/baselines/
+
+      - name: Validate
+        run: $VALOR validate "$RANGE.yaml"
+
+      - name: Plan
+        run: $VALOR plan "$RANGE.yaml"
+
+      - name: Apply and verify
+        run: $VALOR apply "$RANGE.yaml" --verify
+
+      - name: Your tests against the range go here
+        run: echo "e.g. run integration tests through a role-provisioned test runner host"
+
+      - name: Journal
+        if: always()
+        run: cat "/srv/valor/journals/$RANGE.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Destroy
+        if: always()
+        run: $VALOR destroy "$RANGE" --yes
