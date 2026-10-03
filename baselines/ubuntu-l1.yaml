@@ -1,0 +1,138 @@
+id: ubuntu-l1
+title: Ubuntu/Debian Linux hardening baseline (aligned with common CIS Level 1 themes)
+# Results are reported as "aligned with" these themes - never as a certified benchmark implementation.
+claim: aligned-with
+families: [debian]
+# Each control: `check` reads the system's effective state (exit 0 = compliant);
+# `fix` changes the system idempotently. Fixes run during the build; checks run again during verification.
+# `reference` is recorded only from vendor/upstream documentation; `theme` names the CIS L1 theme.
+controls:
+  - id: ssh-root-login
+    area: SSH
+    title: SSH root login disabled
+    theme: CIS Level 1 - SSH server configuration
+    reference: "OpenSSH sshd_config(5): PermitRootLogin"
+    applies_to: all
+    check: |
+      sshd -T 2>/dev/null | grep -qx 'permitrootlogin no'
+    fix: |
+      f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
+      grep -v -i '^PermitRootLogin ' "$f" > "$f.new"; echo 'PermitRootLogin no' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
+      sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
+
+  - id: ssh-password-auth
+    area: SSH
+    title: SSH password authentication disabled
+    theme: CIS Level 1 - SSH server configuration
+    reference: "OpenSSH sshd_config(5): PasswordAuthentication, KbdInteractiveAuthentication"
+    applies_to: all
+    check: |
+      sshd -T 2>/dev/null | grep -qx 'passwordauthentication no' && sshd -T 2>/dev/null | grep -qx 'kbdinteractiveauthentication no'
+    fix: |
+      f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
+      grep -v -i -E '^(PasswordAuthentication|KbdInteractiveAuthentication) ' "$f" > "$f.new"
+      printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
+      sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
+
+  - id: ssh-max-auth-tries
+    area: SSH
+    title: SSH authentication attempts limited (4 or fewer)
+    theme: CIS Level 1 - SSH server configuration
+    reference: "OpenSSH sshd_config(5): MaxAuthTries"
+    applies_to: all
+    check: |
+      v=$(sshd -T 2>/dev/null | awk '$1=="maxauthtries"{print $2}'); [ -n "$v" ] && [ "$v" -le 4 ]
+    fix: |
+      f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
+      grep -v -i '^MaxAuthTries ' "$f" > "$f.new"; echo 'MaxAuthTries 4' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
+      sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
+
+  - id: ssh-config-permissions
+    area: SSH
+    title: SSH server configuration files owned by root, not readable by others
+    theme: CIS Level 1 - SSH server configuration
+    reference: "OpenSSH sshd(8): FILES (sshd_config must be writable only by root)"
+    applies_to: all
+    check: |
+      for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf; do
+        [ -e "$f" ] || continue
+        [ "$(stat -c '%U:%G' "$f")" = root:root ] || exit 1
+        [ $(( 0$(stat -c '%a' "$f") & 077 )) -eq 0 ] || exit 1
+      done
+    fix: |
+      for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf; do [ -e "$f" ] && chown root:root "$f" && chmod 600 "$f"; done
+
+  - id: kernel-aslr
+    area: Kernel
+    title: Full address space layout randomization (kernel.randomize_va_space = 2)
+    theme: CIS Level 1 - process hardening
+    reference: "Linux kernel admin-guide, sysctl/kernel: randomize_va_space"
+    applies_to: all
+    check: |
+      [ "$(sysctl -n kernel.randomize_va_space)" = 2 ] && grep -qs '^kernel.randomize_va_space = 2' /etc/sysctl.d/60-valor-baseline.conf
+    fix: |
+      f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
+      grep -v '^kernel.randomize_va_space' "$f" > "$f.new"; echo 'kernel.randomize_va_space = 2' >> "$f.new"; mv "$f.new" "$f"
+      sysctl -q -w kernel.randomize_va_space=2
+
+  - id: kernel-suid-dumpable
+    area: Kernel
+    title: Core dumps of setuid programs disabled (fs.suid_dumpable = 0)
+    theme: CIS Level 1 - process hardening
+    reference: "Linux kernel admin-guide, sysctl/fs: suid_dumpable"
+    applies_to: all
+    check: |
+      [ "$(sysctl -n fs.suid_dumpable)" = 0 ] && grep -qs '^fs.suid_dumpable = 0' /etc/sysctl.d/60-valor-baseline.conf
+    fix: |
+      f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
+      grep -v '^fs.suid_dumpable' "$f" > "$f.new"; echo 'fs.suid_dumpable = 0' >> "$f.new"; mv "$f.new" "$f"
+      sysctl -q -w fs.suid_dumpable=0
+
+  - id: ip-forwarding-disabled
+    area: Kernel
+    title: IP forwarding disabled (not a router)
+    theme: CIS Level 1 - network parameters (host only)
+    reference: "Linux kernel networking/ip-sysctl: ip_forward, conf/all/forwarding"
+    applies_to: non-router
+    check: |
+      [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ] && [ "$(sysctl -n net.ipv6.conf.all.forwarding)" = 0 ] && grep -qs '^net.ipv4.ip_forward = 0' /etc/sysctl.d/60-valor-baseline.conf
+    fix: |
+      f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
+      grep -v -E '^net.ipv(4.ip_forward|6.conf.all.forwarding)' "$f" > "$f.new"
+      printf 'net.ipv4.ip_forward = 0\nnet.ipv6.conf.all.forwarding = 0\n' >> "$f.new"; mv "$f.new" "$f"
+      sysctl -q -w net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+
+  - id: auditd-running
+    area: Auditing
+    title: auditd installed, enabled and running
+    theme: CIS Level 1 - system auditing
+    reference: "auditd(8) manual page"
+    applies_to: all
+    check: |
+      dpkg-query -W -f='${Status}' auditd 2>/dev/null | grep -q 'install ok installed' && systemctl is-enabled -q auditd && systemctl is-active -q auditd
+    fix: |
+      dpkg-query -W -f='${Status}' auditd 2>/dev/null | grep -q 'install ok installed' || { $APT update && $APT install auditd; }
+      systemctl enable --now auditd
+
+  - id: automatic-security-updates
+    area: Patching
+    title: Automatic security updates installed and enabled
+    theme: CIS Level 1 - software updates
+    reference: "Debian/Ubuntu unattended-upgrades documentation (APT::Periodic::Unattended-Upgrade)"
+    applies_to: all
+    check: |
+      dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'install ok installed' && apt-config dump | grep -q '^APT::Periodic::Unattended-Upgrade "1";'
+    fix: |
+      dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'install ok installed' || { $APT update && $APT install unattended-upgrades; }
+      printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+
+  - id: tmp-sticky-bit
+    area: Filesystem
+    title: /tmp is world-writable only with the sticky bit set (mode 1777)
+    theme: CIS Level 1 - filesystem configuration
+    reference: "Filesystem Hierarchy Standard 3.0, /tmp; chmod(1): restricted deletion flag"
+    applies_to: all
+    check: |
+      [ -k /tmp ] && [ "$(stat -c %a /tmp)" = 1777 ]
+    fix: |
+      chmod 1777 /tmp

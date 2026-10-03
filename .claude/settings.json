@@ -1,0 +1,39 @@
+{
+  "enabledMcpjsonServers": ["valor"],
+  "permissions": {
+    "allow": [
+      "mcp__valor__cluster_info",
+      "mcp__valor__range_validate",
+      "mcp__valor__range_plan",
+      "mcp__valor__range_verify",
+      "mcp__valor__job_status",
+      "Read(//srv/valor/**)",
+      "Edit(//srv/valor/ranges/**)",
+      "Write(//srv/valor/ranges/**)",
+      "Edit(//srv/valor/roles/**)",
+      "Write(//srv/valor/roles/**)",
+      "Edit(//srv/valor/baselines/**)",
+      "Write(//srv/valor/baselines/**)",
+      "Edit(//srv/valor/journals/*.notes.md)",
+      "Write(//srv/valor/journals/*.notes.md)",
+      "Edit(//srv/valor/.claude/skills/proxmox-reference/known-issues.md)"
+    ],
+    "ask": [
+      "mcp__valor__range_apply",
+      "mcp__valor__range_destroy",
+      "mcp__valor__guest_run"
+    ],
+    "deny": [
+      "Read(//etc/valor/**)",
+      "Edit(//srv/valor/valor/**)",
+      "Write(//srv/valor/valor/**)",
+      "Bash(sudo:*)",
+      "Bash(qm:*)",
+      "Bash(pvesh:*)",
+      "Bash(pveum:*)",
+      "Bash(pct:*)",
+      "Bash(ssh:*)",
+      "Bash(valor-admin:*)"
+    ]
+  }
+}

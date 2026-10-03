@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "valor": {
+      "type": "stdio",
+      "command": "sudo",
+      "args": ["-n", "-u", "valor", "/opt/valor/bin/valor-mcp"]
+    }
+  }
+}

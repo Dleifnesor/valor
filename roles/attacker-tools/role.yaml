@@ -1,0 +1,7 @@
+description: Penetration-testing toolbox for an attacker host (nmap, netcat, tcpdump, curl, dig)
+families: [debian]
+ports: []
+params:
+  extra_packages:
+    default: ""
+    description: Additional apt packages to install (space separated)
