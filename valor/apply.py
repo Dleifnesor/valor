@@ -88,6 +88,10 @@ def create_vm_from_iso(pve: PVE, spec: RangeSpec, d: Desired, vmid: int) -> int:
                              cfg.guest_user, pub, device=mac,
                              repos=isos.load_catalog(cfg).get(entry["install_iso"], {}).get("kickstart_repos"))
     name = ks_iso_name(spec, d)
+    try:                                    # a CD left by an interrupted install of this host
+        pve.delete_volume(cfg.iso_storage, f"{cfg.iso_storage}:iso/{name}")
+    except ValorError:
+        pass
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / name
         kickstart.build_iso(ks, path)
