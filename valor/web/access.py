@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 
-import segno
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
@@ -13,7 +12,7 @@ from ..cluster import range_vms
 from ..errors import ValorError
 from ..pve import PVE
 from ..spec import ROUTER
-from .core import ApiError, Session, require
+from .core import ApiError, Session, qr_svg, require
 from .ranges import _cfg, _job, _load, _name
 
 router = APIRouter(prefix="/api")
@@ -78,7 +77,7 @@ def peer_config(name: str, peer: str, request: Request, s: Session = Depends(req
     conf = wireguard.peer_conf(data, spec, peer, endpoint)
     s.audit("range.wireguard.config", target=spec.name, detail={"peer": peer})
     return {"peer": peer, "filename": f"{spec.name}-{peer}.conf", "config": conf,
-            "qr_svg": segno.make(conf, error="l").svg_inline(scale=4, border=2, dark="#111111", light="#ffffff")}
+            "qr_svg": qr_svg(conf, error="l")}
 
 
 @router.post("/ranges/{name}/wireguard/peers/{peer}/rotate")

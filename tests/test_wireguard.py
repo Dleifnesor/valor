@@ -1,5 +1,7 @@
+# *tests the secret tunnel* OwO tests/test_wireguard.py: tests for WIREGUARD access (summary in the docstring)! ^w^
 """WireGuard access: spec checks, keys at rest, router and peer configs, firewall rules, hashes, web endpoints."""
 
+# base64/json, pytest, and the modules under test UwU
 import base64
 import dataclasses
 import json
@@ -13,8 +15,10 @@ from valor.netpolicy import render
 from valor.plan import desired_state
 from valor.spec import canonical, normalize, parse_spec
 
+# The web app fixture and helpers from test_web.py >w<
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
 
+# BASE: a two-segment range; WG: the same with two VPN peers reaching one segment (YAML strings) OwO
 BASE = """
 apiVersion: valor/v1
 name: wglab
@@ -32,10 +36,12 @@ WG = BASE + """access:
 """
 
 
+# spec_of(): parse and normalize ^w^
 def spec_of(text: str):
     return normalize(parse_spec(text), "ubuntu-24.04")
 
 
+# kcfg: a config with a real (temporary) secret key UwU
 @pytest.fixture
 def kcfg(cfg, tmp_path):
     key = tmp_path / "secret.key"
@@ -43,6 +49,8 @@ def kcfg(cfg, tmp_path):
     return dataclasses.replace(cfg, secret_key_file=str(key))
 
 
+# Bad VPN settings fail with clear messages: unknown reach, duplicate or uppercase peers, overlapping or public
+# tunnel networks, low ports, bad endpoints >w<
 @pytest.mark.parametrize("change,message", [
     (("reach: [srv]", "reach: [dmz]"), "unknown segment 'dmz'"),
     (("[alice, bob]", "[alice, alice]"), "unique"),
@@ -58,6 +66,7 @@ def test_spec_checks(change, message):
     assert message in json.dumps(e.value.to_dict())
 
 
+# Defaults (port 51820, 10.250.0.0/24), and older specs keep their hash (no "access" key added) OwO
 def test_spec_defaults_and_stable_hashes():
     wg = parse_spec(WG).access.wireguard
     assert wg.port == 51820 and str(wg.network) == "10.250.0.0/24" and wg.endpoint == ""
@@ -65,6 +74,9 @@ def test_spec_defaults_and_stable_hashes():
     assert '"access"' in canonical(parse_spec(WG))
 
 
+# Keys and configs: addresses in order, keys ENCRYPTED at rest, each public key really matches its private key, the
+# router config has no peer private keys, a peer config holds only its own key and routes only the range's networks,
+# and adding/removing peers keeps the others' keys and addresses ^w^
 def test_keys_addresses_and_configs(kcfg):
     spec = spec_of(WG)
     d1 = wireguard.ensure(kcfg, spec)
@@ -94,6 +106,7 @@ def test_keys_addresses_and_configs(kcfg):
     assert d2["peers"]["carol"]["address"] == "10.250.0.2" and d2["server"] == d1["server"]
 
 
+# Rotating a peer changes the router's fingerprint (it must converge); first-time keys don't UwU
 def test_rotation_changes_the_router_hash_adding_keys_does_not(kcfg):
     spec = spec_of(WG)
     before = wireguard.digest(kcfg, spec)
@@ -106,6 +119,8 @@ def test_rotation_changes_the_router_hash_adding_keys_does_not(kcfg):
     assert d2["peers"]["bob"] == d1["peers"]["bob"]
 
 
+# Firewall rules for the VPN appear only with VPN access, reach only the allowed segments, and only the ROUTER's
+# converge fingerprint changes >w<
 def test_router_rules_and_plan(kcfg):
     spec = spec_of(WG)
     rules = render(spec, {"srv": "eth1", "users": "eth2"}, "eth0", build_egress=False, spec_id="x")
@@ -119,6 +134,7 @@ def test_router_rules_and_plan(kcfg):
     assert [d.conv_hash for d in a[1:]] == [d.conv_hash for d in b[1:]]  # the hosts don't
 
 
+# The router script installs (with a quoted heredoc and umask 077) or removes the tunnel; handshake parsing OwO
 def test_router_script_and_handshakes():
     script = wireguard.router_script("[Interface]\nPrivateKey = SECRET\n")
     assert "PrivateKey = SECRET" in script and "<<'VALOR_WG_EOF'" in script and "umask 077" in script
@@ -129,6 +145,8 @@ def test_router_script_and_handshakes():
     assert wireguard.handshakes(dump) == {"PUBA": 1790000000, "PUBB": 0}
 
 
+# The web endpoints: status before/after keys, configs only for operators (403 for viewers, 404 for unknown peers),
+# the QR code, the audit entry, the endpoint, and rotation starts a job ^w^
 def test_web_endpoints(env, tmp_path):
     from valor.web import db
     app, wcfg = env
@@ -149,7 +167,7 @@ def test_web_endpoints(env, tmp_path):
         assert op.get("/api/ranges/wglab/wireguard/peers/mallory").status_code == 404
         r = op.get("/api/ranges/wglab/wireguard/peers/alice")
         assert r.status_code == 200 and "Endpoint = 192.168.1.50:51820" in r.json()["config"]
-        assert r.json()["qr_svg"].startswith("<svg") and r.json()["filename"] == "wglab-alice.conf"
+        assert r.json()["qr_svg"].startswith('<svg xmlns="http://www.w3.org/2000/svg"') and r.json()["filename"] == "wglab-alice.conf"
         audit = db.connect(wcfg.db).execute(
             "SELECT COUNT(*) FROM audit WHERE action='range.wireguard.config'").fetchone()[0]
         assert audit == 1
@@ -161,6 +179,7 @@ def test_web_endpoints(env, tmp_path):
                            headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
 
 
+# Notification titles for finished jobs UwU
 def test_job_notifications_name_the_job():
     from valor.web.worker import _describe
     assert _describe({"kind": "power", "target": {"range": "x", "action": "start"}}, {"ok": True})[1] == \
