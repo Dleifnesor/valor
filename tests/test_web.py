@@ -321,3 +321,33 @@ def test_iso_library_permissions(env):
         assert op.delete("/api/isos/iso-store:iso/a.iso", headers=h).status_code == 403          # admins only
         r = op.post("/api/isos/upload?filename=../x.iso", content=b"x", headers={**h, "Content-Type": "application/octet-stream"})
         assert r.status_code == 400
+
+
+def test_iso_upload_checks_any_listed_algorithm(env):
+    """Checksum files may list SHA-1/MD5 next to SHA-256: uploads verify whichever the user gives."""
+    import dataclasses
+    import hashlib
+    app, _ = env
+    app.state.cfg = dataclasses.replace(app.state.cfg, iso_storage="iso-store")
+    data = b"not really an iso" * 100
+    with client(app) as op:
+        me, _ = enroll(op, "olivia")
+        h = {"X-CSRF-Token": me["csrf"], "Content-Type": "application/octet-stream"}
+        def up(checksum, algorithm=None):
+            q = f"filename=t.iso&checksum={checksum}" + (f"&algorithm={algorithm}" if algorithm else "")
+            return op.post(f"/api/isos/upload?{q}", content=data, headers=h)
+        r = up("ab" * 20, "sha256")                                   # 40 hex chars are not a SHA-256
+        assert r.status_code == 400 and r.json()["error"] == "invalid_checksum" and "64" in r.json()["message"]
+        r = up(hashlib.sha1(b"other").hexdigest())                   # SHA-1 guessed from the length, wrong file
+        assert r.status_code == 400 and r.json()["error"] == "checksum_mismatch"
+        r = up(hashlib.md5(data).hexdigest(), "md5")                 # matches: goes on to Proxmox (absent here)
+        assert r.json().get("error") != "checksum_mismatch"
+
+
+def test_checksum_lengths():
+    from valor import isos
+    from valor.errors import ValorError
+    assert isos.check_checksum("a" * 64, None) == "sha256" and isos.check_checksum("A" * 128, "sha512") == "sha512"
+    for checksum, algorithm in (("a" * 63, None), ("a" * 64, "sha512"), ("z" * 64, "sha256")):
+        with pytest.raises(ValorError):
+            isos.check_checksum(checksum, algorithm)
