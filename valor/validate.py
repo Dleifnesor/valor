@@ -28,14 +28,14 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
             err("os", f"unknown OS '{os_name}'", f"Known: {', '.join(catalog)}")
         elif not tpls[os_name]["present"]:
             err("os", f"no template built for '{os_name}' yet",
-                f"An administrator must run: valor-admin template build {os_name}")
+                f"An administrator can build it on a Proxmox node: ./install.sh --template {os_name}")
         elif catalog[os_name].get("family") != "debian":
             err("os", f"'{os_name}' is not an apt-based OS; MVP roles and baselines support the debian family only")
 
     bridges = {i["iface"]: i for i in pve.network() if i.get("type") == "bridge"}
     if cfg.segment_bridge not in bridges:
         err("network", f"segment bridge {cfg.segment_bridge} is missing or not usable by the engine",
-            f"An administrator must run: valor-admin bridge create {cfg.segment_bridge}")
+            "Re-run the installer on the range node to recreate it")
     elif not bridges[cfg.segment_bridge].get("bridge_vlan_aware"):
         err("network", f"{cfg.segment_bridge} is not VLAN-aware")
     if cfg.uplink_bridge not in bridges:
@@ -50,9 +50,9 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
             free = [v for v in range(cfg.vlan_min, cfg.vlan_max + 1) if v not in used][:5]
             err(f"segments.{i}.vlan", f"VLAN {s.vlan} is already used by range '{owner}'",
                 f"Free VLANs include {free}")
-        for net in cfg.extra.get("reserved_networks", ["192.168.1.0/24", "10.10.10.0/24"]):
-            if s.cidr.overlaps(ipaddress.IPv4Network(net)):
-                err(f"segments.{i}.cidr", f"{s.cidr} overlaps reserved network {net} (home LAN / cluster)",
+        for net in cfg.reserved_networks:
+            if s.cidr.overlaps(ipaddress.IPv4Network(net, strict=False)):
+                err(f"segments.{i}.cidr", f"{s.cidr} overlaps reserved network {net} (a network of the cluster itself)",
                     "Pick another private range, e.g. 10.1xx.0.0/24")
 
     try:

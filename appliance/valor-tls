@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# valor-tls: the web UI's certificate.
+#   valor-tls ensure valor-ca|own HOSTNAME DOMAIN   (setup)     valor-tls renew   (daily timer)
+#
+# valor-ca: VALOR keeps its own CA (EC P-256, 10 years) and issues the server certificate from it (397 days,
+# the IP addresses and names of this VM). The certificate is reissued 30 days before it expires and whenever the
+# VM's addresses change. own: your certificate is used as is; VALOR only warns before it expires.
+set -euo pipefail
+umask 077
+D=/etc/valor/tls
+WEB=/opt/valor/web
+
+settings() { [[ -f $D/settings ]] && source "$D/settings" || true; }
+
+addresses() {
+  ip -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | sort -u
+}
+
+ensure_ca() {
+  [[ -f $D/ca.key && -f $D/ca.crt ]] && return 0
+  openssl ecparam -name prime256v1 -genkey -noout -out "$D/ca.key"
+  openssl req -x509 -new -key "$D/ca.key" -sha256 -days 3650 -out "$D/ca.crt" \
+    -subj "/O=VALOR/CN=VALOR CA ($HOST_NAME $(date +%Y-%m-%d))" \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash"
+  chmod 0600 "$D/ca.key"; chmod 0644 "$D/ca.crt"
+  echo "created VALOR CA"
+}
+
+needs_new() {
+  [[ -f $D/server.crt && -f $D/server.key ]] || return 0
+  openssl x509 -in "$D/server.crt" -noout -checkend $((30 * 86400)) >/dev/null || return 0
+  local san; san=$(openssl x509 -in "$D/server.crt" -noout -ext subjectAltName 2>/dev/null || true)
+  for a in $(addresses); do
+    grep -qF "IP Address:$a" <<<"$san" || grep -qiF "IP Address:$(python3 -c "import ipaddress,sys; print(ipaddress.ip_address(sys.argv[1]).exploded.upper())" "$a" 2>/dev/null)" <<<"$san" || return 0
+  done
+  grep -qF "DNS:$HOST_NAME" <<<"$san" || return 0
+  return 1
+}
+
+issue() {
+  local tmp; tmp=$(mktemp -d)
+  local sans="DNS:$HOST_NAME"
+  [[ -n ${DOMAIN:-} ]] && sans="$sans,DNS:$HOST_NAME.$DOMAIN"
+  for a in $(addresses); do sans="$sans,IP:$a"; done
+  openssl ecparam -name prime256v1 -genkey -noout -out "$tmp/server.key"
+  openssl req -new -key "$tmp/server.key" -subj "/O=VALOR/CN=$HOST_NAME" -out "$tmp/server.csr"
+  cat > "$tmp/ext" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth
+subjectAltName=$sans
+authorityKeyIdentifier=keyid
+subjectKeyIdentifier=hash
+EOF
+  openssl x509 -req -in "$tmp/server.csr" -CA "$D/ca.crt" -CAkey "$D/ca.key" -CAcreateserial \
+    -CAserial "$D/ca.srl" -days 397 -sha256 -extfile "$tmp/ext" -out "$tmp/server.crt" 2>/dev/null
+  cat "$tmp/server.crt" "$D/ca.crt" > "$tmp/fullchain.crt"
+  install -m 0600 "$tmp/server.key" "$D/server.key"
+  install -m 0644 "$tmp/fullchain.crt" "$D/server.crt"
+  rm -rf "$tmp"
+  echo "issued server certificate for $sans"
+}
+
+publish_ca() {
+  if [[ -f $D/ca.crt && -d $WEB ]]; then install -m 0644 "$D/ca.crt" "$WEB/ca.crt"; fi
+}
+
+reload_nginx() {
+  if systemctl is-active -q nginx; then nginx -t -q && systemctl reload nginx; fi
+}
+
+case "${1:-}" in
+  ensure)
+    MODE=$2; HOST_NAME=$3; DOMAIN=${4:-}
+    printf 'MODE=%s\nHOST_NAME=%s\nDOMAIN=%s\n' "$MODE" "$HOST_NAME" "$DOMAIN" > "$D/settings"
+    ;;
+  renew)
+    settings
+    ;;
+  *)
+    echo "usage: valor-tls ensure valor-ca|own HOSTNAME DOMAIN | renew" >&2; exit 2 ;;
+esac
+
+if [[ $MODE == valor-ca ]]; then
+  ensure_ca
+  publish_ca
+  if needs_new; then issue; reload_nginx; else echo "server certificate is current"; fi
+else
+  [[ -f $D/server.crt && -f $D/server.key ]] || { echo "TLS_MODE=own but no certificate installed" >&2; exit 1; }
+  rm -f "$WEB/ca.crt"
+  if ! openssl x509 -in "$D/server.crt" -noout -checkend $((14 * 86400)) >/dev/null; then
+    echo "WARN: your certificate expires within 14 days; install a new one and run the installer's --upgrade"
+  fi
+fi

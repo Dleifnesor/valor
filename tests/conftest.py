@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parent.parent
 def cfg(tmp_path):
     key = tmp_path / "id.pub"
     key.write_text("ssh-ed25519 AAAATEST valor-engine\n")
-    return Config(project_dir=str(ROOT), state_dir=str(tmp_path), ssh_public_key=str(key))
+    return Config(project_dir=str(ROOT), state_dir=str(tmp_path), ssh_public_key=str(key), node="pve1",
+                  pool="valor-ranges", template_pool="valor-templates", storage="local-lvm",
+                  segment_bridge="vmbr100", uplink_bridge="vmbr0", reserved_networks=("192.168.50.0/24",))
 
 
 @pytest.fixture
