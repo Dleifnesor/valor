@@ -4,6 +4,9 @@ A tool operated through **Claude Code** that turns a plain-language description 
 segmented, hardened and verified set of VMs on the Proxmox VE cluster *valor*, and rebuilds that same environment
 on demand. Implements the *V.A.L.O.R. Minimum Viable Product Specification v0.1* (Dan, Champlain College).
 
+**Where this is going**: an installer for any Proxmox VE cluster, a VALOR VM with a secure web UI, chat-driven
+builds and a live topology map. See [ROADMAP.md](ROADMAP.md).
+
 **Core principle: the agent plans, the engine executes.** Claude writes a declarative range spec (YAML); a
 deterministic Python engine is the only component that calls the Proxmox API.
 
