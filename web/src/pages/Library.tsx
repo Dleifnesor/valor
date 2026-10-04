@@ -1,6 +1,7 @@
 import { FormEvent, useRef, useState } from "react";
 import { ApiError, csrfToken, del, post } from "../api";
 import { useApi, when } from "../hooks";
+import { ChecksumDrop } from "../components/ChecksumDrop";
 import { Card, ErrorBox, Loading } from "../components/ui";
 
 interface Iso { volid: string; storage: string; name: string; size: number; ctime: number; writable: boolean }
@@ -107,6 +108,9 @@ export function Library({ canAdd, canDelete }: { canAdd: boolean; canDelete: boo
   );
 }
 
+const ALGORITHMS = ["sha256", "sha512", "sha384", "sha224", "sha1", "md5"];
+const safeName = (n: string) => n.replace(/[^A-Za-z0-9._+=-]/g, "_");
+
 function UrlDownload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError) => void }) {
   const [url, setUrl] = useState("");
   const [filename, setFilename] = useState("");
@@ -133,10 +137,11 @@ function UrlDownload({ onDone, onError }: { onDone: () => void; onError: (e: Api
           </label>
           <label className="field" style={{ width: 120 }}>Algorithm
             <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
-              <option>sha256</option><option>sha512</option><option>sha1</option>
+              {ALGORITHMS.map((a) => <option key={a}>{a}</option>)}
             </select>
           </label>
         </div>
+        <ChecksumDrop filename={filename} onChecksum={(h, a) => { setChecksum(h); setAlgorithm(a); }} />
         <div className="row end"><button className="btn primary" disabled={!url || !filename}>Download to the cluster</button></div>
       </form>
     </Card>
@@ -145,15 +150,17 @@ function UrlDownload({ onDone, onError }: { onDone: () => void; onError: (e: Api
 
 function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError | string) => void }) {
   const file = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState("");
   const [checksum, setChecksum] = useState("");
+  const [algorithm, setAlgorithm] = useState("");
   const [pct, setPct] = useState<number | null>(null);
   const [phase, setPhase] = useState("");
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const f = file.current?.files?.[0];
     if (!f) return;
-    const name = f.name.replace(/[^A-Za-z0-9._+=-]/g, "_");
-    const q = new URLSearchParams({ filename: name, ...(checksum ? { checksum, algorithm: checksum.length > 64 ? "sha512" : "sha256" } : {}) });
+    const name = safeName(f.name);
+    const q = new URLSearchParams({ filename: name, ...(checksum ? { checksum, ...(algorithm ? { algorithm } : {}) } : {}) });
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/isos/upload?${q}`);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
@@ -162,7 +169,7 @@ function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError
     xhr.upload.onload = () => setPhase("VALOR is copying the file to the cluster…");
     xhr.onload = () => {
       setPct(null); setPhase("");
-      if (xhr.status === 200) { onDone(); if (file.current) file.current.value = ""; }
+      if (xhr.status === 200) { onDone(); if (file.current) file.current.value = ""; setName(""); setChecksum(""); setAlgorithm(""); }
       else { try { onError(JSON.parse(xhr.responseText).message); } catch { onError(`Upload failed (HTTP ${xhr.status})`); } }
     };
     xhr.onerror = () => { setPct(null); setPhase(""); onError("Upload failed (network)."); };
@@ -172,10 +179,11 @@ function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError
   return (
     <Card title="Upload an ISO">
       <form className="stack" onSubmit={submit}>
-        <input type="file" accept=".iso" ref={file} required />
-        <label className="field">SHA-256 or SHA-512 <span className="hint">optional; VALOR refuses the file if it does not match</span>
-          <input value={checksum} onChange={(e) => setChecksum(e.target.value.trim())} className="mono" />
+        <input type="file" accept=".iso" ref={file} required onChange={(e) => setName(safeName(e.target.files?.[0]?.name ?? ""))} />
+        <label className="field">Checksum <span className="hint">optional; VALOR refuses the file if it does not match (algorithm from its length)</span>
+          <input value={checksum} onChange={(e) => { setChecksum(e.target.value.trim()); setAlgorithm(""); }} className="mono" />
         </label>
+        <ChecksumDrop filename={name} onChecksum={(h, a) => { setChecksum(h); setAlgorithm(a); }} />
         {pct !== null && <><div className="progress"><div style={{ width: `${pct}%` }} /></div><div className="small muted">{phase} {pct < 100 ? `${pct.toFixed(0)}%` : ""}</div></>}
         <div className="row end"><button className="btn primary" disabled={pct !== null}>Upload</button></div>
       </form>
