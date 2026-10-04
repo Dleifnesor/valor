@@ -123,13 +123,17 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .topbar .title { flex: 1; min-width: 0; }
 .topbar .title small { color: var(--muted); display: block; font-size: 12px; }
 .content { padding: 24px 28px 48px; display: flex; flex-direction: column; gap: 20px; max-width: 1400px; width: 100%; }
-.menu-btn { display: none; }
+.nav-backdrop { display: none; }
+@media (min-width: 861px) {
+  .shell.collapsed { grid-template-columns: 1fr; }
+  .shell.collapsed .nav { display: none; }
+}
 
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
   .nav { position: fixed; z-index: 50; left: 0; width: 240px; transform: translateX(-100%); transition: transform 0.2s; }
   .nav.open { transform: none; box-shadow: var(--shadow); }
-  .menu-btn { display: inline-flex; }
+  .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: rgba(2, 6, 23, 0.45); }
   .topbar { padding: 12px 16px; }
   .content { padding: 16px 16px 40px; }
 }
