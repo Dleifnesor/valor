@@ -102,7 +102,7 @@ One command in a Proxmox node shell gives a hardened VALOR VM with a secure web 
 | [#14](https://github.com/Dleifnesor/valor/issues/14) Upgrade and uninstall | Keep data on upgrade; clean removal |
 | [#15](https://github.com/Dleifnesor/valor/issues/15) Range internet uplink without LAN DHCP | NAT transit through the VALOR VM |
 | [#16](https://github.com/Dleifnesor/valor/issues/16) Engine: remove cluster-specific defaults | Everything from the installer-written config |
-| [#17](https://github.com/Dleifnesor/valor/issues/17) Portability test: fresh nested Proxmox VE | Unattended install on a Proxmox VE VALOR has never seen — 🚧 nested Proxmox VE 9 on an isolated 10.0.0.0/24 test range (in progress) |
+| [#17](https://github.com/Dleifnesor/valor/issues/17) Portability test: fresh nested Proxmox VE | Unattended install on a Proxmox VE VALOR has never seen — ✅ passed 4 Oct 2026: fresh nested Proxmox VE 9.2 on an isolated 10.0.0.0/24 test network; install + first range verified (5/5, 3/3, 29/29) |
 | [#18](https://github.com/Dleifnesor/valor/issues/18) Docs: install guide and answers-file reference | Someone new can install it |
 
 ### M2 · Chat builder and topology map 🚧 (due 18 Dec 2026)
