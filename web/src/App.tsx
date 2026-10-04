@@ -66,14 +66,38 @@ const NAV: { path: string; label: string; icon: Parameters<typeof Icon>[0]["name
   { path: "settings", label: "Settings", icon: "settings", role: "admin" },
 ];
 
+const NARROW = "(max-width: 860px)";
+
 function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
   const route = useRoute();
-  const [navOpen, setNavOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);                  // phones: the slide-in menu
+  const [collapsed, setCollapsed] = useState(() => {               // wide screens: sidebar hidden
+    try { return localStorage.getItem("valor-nav-collapsed") === "1"; } catch { return false; }
+  });
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW).matches);
   const isAdmin = me.user.role === "admin";
   const can = (role: "operator" | "admin") =>
     role === "admin" ? isAdmin : me.user.role === "admin" || me.user.role === "operator";
 
   useEffect(() => setNavOpen(false), [route.join("/")]);
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW);
+    const on = () => { setNarrow(mq.matches); setNavOpen(false); };
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
+  const toggleNav = () => {
+    if (narrow) { setNavOpen(!navOpen); return; }
+    const next = !collapsed;
+    setCollapsed(next);
+    try { localStorage.setItem("valor-nav-collapsed", next ? "1" : "0"); } catch { /* not kept */ }
+  };
 
   const signOut = async () => {
     try {
@@ -152,8 +176,9 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
   }
 
   return (
-    <div className="shell">
-      <nav className={`nav${navOpen ? " open" : ""}`} aria-label="Main">
+    <div className={`shell${collapsed ? " collapsed" : ""}`}>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+      <nav id="main-nav" className={`nav${navOpen ? " open" : ""}`} aria-label="Main">
         <div className="brand">
           <Logo />
           <div>
@@ -163,7 +188,7 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
         </div>
         {NAV.filter((n) => !n.role || isAdmin).map((n, i) => (
           <div key={n.path}>
-            {i === 4 && <div className="section">Administration</div>}
+            {i === NAV.findIndex((x) => x.role === "admin") && <div className="section">Administration</div>}
             <a href={`#/${n.path}`} className={p0 === n.path || (!p0 && n.path === "dashboard") ? "active" : ""}>
               <Icon name={n.icon} /> {n.label}
             </a>
@@ -179,7 +204,9 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
       </nav>
       <div className="main">
         <header className="topbar">
-          <button className="btn ghost menu-btn" onClick={() => setNavOpen(!navOpen)} aria-label="Menu">
+          <button className="btn ghost menu-btn" onClick={toggleNav} aria-controls="main-nav"
+            aria-expanded={narrow ? navOpen : !collapsed} aria-label={narrow ? "Menu" : collapsed ? "Show the sidebar" : "Hide the sidebar"}
+            title={narrow ? "Menu" : collapsed ? "Show the sidebar" : "Hide the sidebar"}>
             <Icon name="menu" />
           </button>
           <div className="title">
