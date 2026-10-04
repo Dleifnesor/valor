@@ -20,6 +20,10 @@ export function setCsrf(token: string) {
   csrf = token;
 }
 
+export function csrfToken(): string {
+  return csrf;
+}
+
 export function setUnauthenticatedHandler(fn: () => void) {
   onUnauthenticated = fn;
 }

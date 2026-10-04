@@ -25,4 +25,26 @@ def destroy(pve: PVE, range_name: str, emit=lambda *a, **k: None) -> dict:
         done.append(f"delete VM [{vm.name}]")
         removed.append({"vmid": vm.vmid, "name": vm.name})
         emit("step_done", step="delete VM", host=vm.name)
-    return {"range": range_name, "removed": removed, "seconds": round(time.time() - t0, 1)}
+    leftovers = _kickstart_cds(pve, range_name)
+    return {"range": range_name, "removed": removed, "kickstart_cds_removed": leftovers,
+            "seconds": round(time.time() - t0, 1)}
+
+
+def _kickstart_cds(pve: PVE, range_name: str) -> list[str]:
+    """Kickstart CDs an interrupted ISO install left in the ISO library (they hold no secrets)."""
+    storage = pve.cfg.iso_storage
+    out = []
+    if not storage:
+        return out
+    try:
+        items = pve.storage_content(storage, "iso")
+    except ValorError:
+        return out
+    for it in items:
+        if it["volid"].split("/", 1)[-1].startswith(f"valor-ks-{range_name}-"):
+            try:
+                pve.delete_volume(storage, it["volid"])
+                out.append(it["volid"])
+            except ValorError:
+                pass
+    return out

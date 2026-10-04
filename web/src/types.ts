@@ -29,7 +29,7 @@ export type Change = "create" | "update" | "replace" | "remove" | "keep";
 
 export interface TopoNode {
   id: string;
-  kind: "internet" | "router" | "segment" | "host";
+  kind: "internet" | "router" | "segment" | "host" | "vpn";
   label: string;
   parent?: string | null;
   // segment
@@ -50,13 +50,18 @@ export interface TopoNode {
   status?: string;
   change?: Change;
   reasons?: string[];
+  // vpn (WireGuard access on the router)
+  port?: number;
+  peers?: string[];
+  reach?: string[];
+  endpoint?: string;
 }
 
 export interface TopoEdge {
   id: string;
   source: string;
   target: string;
-  kind: "uplink" | "gateway" | "egress" | "policy";
+  kind: "uplink" | "gateway" | "egress" | "policy" | "vpn";
   label?: string;
   description?: string;
 }

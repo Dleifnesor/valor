@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from . import credentials, jobs, journal, lifecycle, state
+from . import credentials, jobs, journal, lifecycle, state, wireguard
 from .apply import apply as do_apply
 from .destroy import destroy as do_destroy
 from .errors import ValorError
@@ -53,6 +53,7 @@ def execute(cfg, job_id: str, echo=None) -> dict:
                 result.update(ok=True, job=job_id, started=started)
                 state.save(cfg, target["range"], "destroy", result)
                 credentials.forget(cfg, target["range"])      # a rebuilt range gets a new password
+                wireguard.forget(cfg, target["range"])        # ... and new WireGuard keys
             elif kind == "power":
                 result = lifecycle.power(pve, target["range"], target["action"], target.get("hosts"), events)
                 result.update(ok=True, job=job_id, started=started)
@@ -80,6 +81,14 @@ def execute(cfg, job_id: str, echo=None) -> dict:
                 credentials.rotate(cfg, spec.name)
                 result = do_apply(pve, spec, events)         # the new password version re-converges every VM
                 result.update(ok=True, job=job_id, started=started, rotated=True)
+                state.save(cfg, spec.name, "apply", result)
+            elif kind == "wg_rotate":
+                spec, path = load_spec(f"{target['range']}.yaml", cfg.ranges_dir, cfg.default_os)
+                if not (spec.access and spec.access.wireguard):
+                    raise ValorError("wireguard_not_configured", f"range '{spec.name}' has no WireGuard access")
+                wireguard.ensure(cfg, spec, rotate=tuple(target["peers"]))
+                result = do_apply(pve, spec, events)         # new keys: the router converges
+                result.update(ok=True, job=job_id, started=started, rotated=target["peers"])
                 state.save(cfg, spec.name, "apply", result)
             else:
                 raise ValorError("job_invalid", f"unknown job kind {kind}")

@@ -6,6 +6,8 @@ import ipaddress
 
 from .spec import RangeSpec
 
+WG_IFACE = "wg0"
+
 # Destinations that never count as "internet": private ranges, link-local, loopback, multicast and reserved
 # space. The cluster's own networks (reserved_networks in the config) are added, so a cluster whose LAN uses
 # public addresses is protected too.
@@ -57,7 +59,11 @@ def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress:
     w("    ct state established,related accept")
     w("    ct state invalid drop")
     w(f"    iifname {{ {', '.join(f'\"{i}\"' for i in seg_ifs)} }} icmp type echo-request accept comment \"segments may ping their gateway\"")
-    w("    # No services are exposed on the router; it is managed through the QEMU guest agent.")
+    wg = spec.access.wireguard if spec.access else None
+    if wg:
+        w(f'    iifname "{uplink}" udp dport {wg.port} accept comment "WireGuard access (access.wireguard)"')
+        w(f'    iifname "{WG_IFACE}" ip saddr {wg.network} icmp type echo-request accept comment "peers may ping the router"')
+    w("    # No other services are exposed on the router; it is managed through the QEMU guest agent.")
     w("  }")
     w("")
     w("  chain forward {")
@@ -76,6 +82,10 @@ def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress:
             w(f"    {match} meta l4proto icmp accept comment \"policy: {label}\"")
         else:
             w(f"    {match} accept comment \"policy: {label}\"")
+    if wg:
+        for name in wg.reach or [s.name for s in spec.segments]:
+            w(f'    iifname "{WG_IFACE}" oifname "{ifmap[name]}" ip saddr {wg.network} ip daddr {spec.segment(name).cidr} '
+              f'accept comment "WireGuard peers -> {name}"')
     for s in spec.segments:
         if s.internet or build_egress:
             why = "internet egress" if s.internet else "temporary build egress"
@@ -97,12 +107,17 @@ def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress:
     return "\n".join(lines) + "\n"
 
 
-def router_script(ruleset: str) -> str:
-    """Bash run inside the router: validate, install and load the ruleset; enable forwarding."""
-    return f"""set -euo pipefail
+REVERT_AFTER = "3h"
+
+
+def router_script(final: str, build: str | None = None) -> str:
+    """Bash run inside the router. The FINAL ruleset is always what is saved (and what a reboot loads). With
+    `build`, the temporary build-egress ruleset is loaded on top for this boot only, and a timer puts the final
+    policy back after REVERT_AFTER - so a build that dies half way (worker killed, VM lost) can't leave egress open."""
+    head = f"""set -euo pipefail
 command -v nft >/dev/null || {{ export DEBIAN_FRONTEND=noninteractive; apt-get -o DPkg::Lock::Timeout=600 -qq -y install nftables >/dev/null; }}
 cat > /etc/nftables.conf.valor-new <<'VALOR_NFT_EOF'
-{ruleset}VALOR_NFT_EOF
+{final}VALOR_NFT_EOF
 nft -c -f /etc/nftables.conf.valor-new
 mv /etc/nftables.conf.valor-new /etc/nftables.conf
 chmod 600 /etc/nftables.conf
@@ -114,6 +129,16 @@ net.ipv4.conf.all.rp_filter = 1
 EOF
 sysctl -q --system >/dev/null
 systemctl enable -q nftables
-nft -f /etc/nftables.conf
+systemctl stop valor-build-revert.timer valor-build-revert.service 2>/dev/null || true
+systemctl reset-failed valor-build-revert.timer valor-build-revert.service 2>/dev/null || true
+"""
+    if build is None:
+        return head + "rm -f /run/valor-build.nft\nnft -f /etc/nftables.conf\necho ok\n"
+    return head + f"""cat > /run/valor-build.nft <<'VALOR_NFT_EOF'
+{build}VALOR_NFT_EOF
+chmod 600 /run/valor-build.nft
+nft -c -f /run/valor-build.nft
+nft -f /run/valor-build.nft
+systemd-run --quiet --unit=valor-build-revert --on-active={REVERT_AFTER} /usr/sbin/nft -f /etc/nftables.conf
 echo ok
 """

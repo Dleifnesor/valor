@@ -38,6 +38,12 @@ def _api_error(e: Exception, what: str) -> ValorError:
         if e.status_code == 403:
             hint = ("The engine's API token is not allowed to do this. It may only act on VMs in its pool, "
                     "its storage and its bridges; check the spec targets those.")
+        elif "command" in what and (e.status_code == 596 or "Permission denied" in str(e.content or e.errors or "")):
+            # Proxmox cannot relay agent errors with non-ASCII text (HTTP 596); on RHEL-family guests that error is
+            # usually SELinux confining the agent, which templates built by VALOR 0.2+ take care of
+            hint = ("The guest agent refused to run the command (SELinux confines it on Rocky/Alma templates built "
+                    "by older VALOR versions). Rebuild the template on a Proxmox node: "
+                    "./install.sh --template <os> --rebuild")
         return ValorError("proxmox_api", msg, details=detail, hint=hint)
     return ValorError("proxmox_unreachable", f"{what}: {e.__class__.__name__}: {e}")
 
@@ -126,6 +132,18 @@ class PVE:
     def vm_status(self, vmid: int) -> dict:
         return self.call(f"read status of VM {vmid}", self.vm(vmid).status.current.get)
 
+    def create_vm(self, vmid: int, **params) -> None:
+        """A new, empty VM (hosts installed from an ISO); the pool comes from the config like clones."""
+        upid = self.call(f"create VM {vmid}", self.n.qemu.post, vmid=vmid, pool=self.cfg.pool, **params)
+        self.wait_task(upid, f"create VM {vmid}")
+
+    def cpu_type(self, minimum: str | None = None) -> str:
+        """CPU model for a new VM: the catalog minimum, else x86-64-v2 (+AES when the node has AES-NI)."""
+        if minimum:
+            return minimum
+        flags = set(str(self.node_status().get("cpuinfo", {}).get("flags", "")).split())
+        return "x86-64-v2-AES" if "aes" in flags else "x86-64-v2"
+
     def clone(self, template: int, newid: int, name: str, description: str) -> None:
         upid = self.call(f"clone template {template} to {newid}", self.vm(template).clone.post,
                          newid=newid, name=name, pool=self.cfg.pool, full=0, description=description)
@@ -170,6 +188,48 @@ class PVE:
         upid = self.call(f"delete VM {vmid}", self.vm(vmid).delete, purge=1,
                          **{"destroy-unreferenced-disks": 1})
         self.wait_task(upid, f"delete VM {vmid}")
+
+    # ------------------------------------------------------------------ storage content (ISO library)
+    def storage_content(self, storage: str, content: str) -> list[dict]:
+        return self.call(f"list {content} on {storage}", self.n.storage(storage).content.get, content=content)
+
+    def download_url(self, storage: str, url: str, filename: str, checksum: str | None = None,
+                     algorithm: str | None = None) -> str:
+        params = {"content": "iso", "url": url, "filename": filename, "verify-certificates": 1}
+        if checksum:
+            params.update({"checksum": checksum, "checksum-algorithm": algorithm})
+        return self.call(f"download {filename} to {storage}", self.n.storage(storage)("download-url").post, **params)
+
+    def delete_volume(self, storage: str, volid: str) -> None:
+        upid = self.call(f"delete {volid}", self.n.storage(storage).content(volid).delete)
+        if upid:
+            self.wait_task(upid, f"delete {volid}")
+
+    def task(self, upid: str) -> dict:
+        st = self.call("read task status", self.n.tasks(upid).status.get)
+        log = self.call("read task log", self.n.tasks(upid).log.get, limit=500)
+        st["log"] = [l.get("t", "") for l in log]
+        return st
+
+    def upload_iso(self, storage: str, path: str, filename: str, checksum: str | None = None,
+                   algorithm: str | None = None) -> str:
+        """Streams a local file to the storage (multi-GB safe); returns the UPID of Proxmox's import task."""
+        import requests
+        from .isos import MultipartFile
+        fields = {"content": "iso"}
+        if checksum:      # Proxmox's multipart parser expects exactly this order: content, checksum-algorithm, checksum
+            fields.update({"checksum-algorithm": algorithm, "checksum": checksum})
+        body = MultipartFile(fields, "filename", filename, path)
+        url = f"https://{self.cfg.api_host}:{self.cfg.api_port}/api2/json/nodes/{self.node}/storage/{storage}/upload"
+        try:
+            r = requests.post(url, data=body, timeout=(15, 3600), verify=self.cfg.verify_ssl,
+                              headers={"Authorization": self._auth, "Content-Type": body.content_type,
+                                       "Content-Length": str(len(body))})
+        finally:
+            body.close()
+        if r.status_code != 200:
+            raise ValorError("upload_failed", f"upload of {filename} failed: HTTP {r.status_code} {r.text[:300]}")
+        return r.json()["data"]
 
     # ------------------------------------------------------------------ consoles (relayed by the web service)
     def vncproxy(self, vmid: int) -> dict:
@@ -230,3 +290,23 @@ class PVE:
     def script(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
         """Run a bash script (passed on stdin) as root inside the guest."""
         return self.exec(vmid, ["/bin/bash", "-s"], input_data=body, timeout=timeout)
+
+    def write_file(self, vmid: int, path: str, content: str) -> None:
+        if len(content) > 60_000:
+            raise ValorError("script_too_large", f"file for VM {vmid} exceeds the guest agent's 60 KiB limit")
+        self.call(f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, file=path, content=content)
+
+    def ps(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
+        """Run a PowerShell script as SYSTEM inside a Windows guest. The script goes to a temporary file over the
+        agent (it may carry secrets: never on a command line), runs with -File and is deleted afterwards."""
+        import secrets as _s
+        path = f"C:\\Windows\\Temp\\valor-{_s.token_hex(8)}.ps1"
+        self.write_file(vmid, path, "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
+        try:
+            return self.exec(vmid, ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                    "-File", path], timeout=timeout)
+        finally:
+            try:
+                self.exec(vmid, ["cmd.exe", "/c", "del", "/f", "/q", path], timeout=60)
+            except ValorError:
+                pass
