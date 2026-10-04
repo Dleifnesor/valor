@@ -172,14 +172,13 @@ def _facts(cfg, pve: PVE | None) -> dict:
             "networks_in_use": nets, "reserved_networks": list(cfg.reserved_networks), "existing_ranges": names}
 
 
-@router.post("/builder/chat")
-def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
-    cfg = _cfg(request)
+def start_ai(request: Request, s: Session):
+    """Rate limit, provider and the user's daily budget, shared by every chat. Returns (provider, settings, pve)."""
     now = time.time()
     with _rate_lock:
         recent = [t for t in _rate.get(s.username, []) if now - t < RATE[1]]
         if len(recent) >= RATE[0]:
-            raise ApiError(429, "rate_limited", "Too many builder requests; wait a minute.")
+            raise ApiError(429, "rate_limited", "Too many AI requests; wait a minute.")
         _rate[s.username] = recent + [now]
     try:
         prov, st = _provider(request, s.conn)
@@ -192,23 +191,31 @@ def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"
         if spent >= limit:
             raise ApiError(429, "ai_budget", f"You used your daily AI budget ({limit} tokens).")
     try:
-        pve = PVE(cfg)
-        present = {k for k, v in templates(pve, load_catalog(cfg)).items() if v["present"]}
+        pve = PVE(_cfg(request))
     except ValorError:
-        pve, present = None, set(load_catalog(cfg))
-    system = ai.system_prompt(cfg, load_catalog(cfg), present, role_list(cfg), _facts(cfg, pve))
-    msgs = [m.model_dump() for m in body.messages]
-    if body.spec.strip() and msgs[-1]["role"] == "user":
-        msgs[-1] = {"role": "user", "content": msgs[-1]["content"] +
-                    f"\n\nThe current spec in the builder:\n```yaml\n{body.spec.strip()}\n```"}
+        pve = None
+    return prov, st, pve
 
+
+def reference_for(cfg, pve: PVE | None) -> str:
+    try:
+        present = {k for k, v in templates(pve, load_catalog(cfg)).items() if v["present"]} if pve else set(load_catalog(cfg))
+    except ValorError:
+        present = set(load_catalog(cfg))
+    return ai.reference(cfg, load_catalog(cfg), present, role_list(cfg), _facts(cfg, pve))
+
+
+def spec_check(cfg, pve: PVE | None, own_name: str = ""):
+    """The validation the model's specs must pass (schema, unique name, the cluster)."""
     def check(text: str) -> list[str]:
         try:
             spec = normalize(parse_spec(text), cfg.default_os)
         except ValorError as e:
             return [f"{d.get('location', '')}: {d.get('message', '')}" for d in (e.details or [])] or [e.message]
         problems = []
-        if spec.name != body.range and (cfg.ranges_dir / f"{spec.name}.yaml").exists():
+        if own_name and spec.name != own_name:
+            problems.append(f"the range is called '{own_name}'; keep that name")
+        if spec.name != own_name and (cfg.ranges_dir / f"{spec.name}.yaml").exists():
             problems.append(f"a range named '{spec.name}' already exists; choose another name")
         if pve is not None:
             try:
@@ -217,15 +224,32 @@ def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"
             except ValorError as e:
                 problems.append(e.message)
         return problems
+    return check
 
+
+def run_ai(s: Session, st: dict, fn):
+    """Call the model (fn), record the tokens either way, and turn AI errors into API errors."""
     try:
-        res = ai.build(prov, system, msgs, check)
+        res = fn()
     except ValorError as e:
         used = e.details if isinstance(e.details, dict) else {}
         _record(s, st, int(used.get("input_tokens", 0)), int(used.get("output_tokens", 0)), False)
         status = 422 if e.code == "ai_truncated" else 502 if e.code.startswith("ai_") else 400
         raise ApiError(status, e.code, e.message, hint=e.hint)
-    _record(s, st, res["input_tokens"], res["output_tokens"], not res["problems"])
+    _record(s, st, res["input_tokens"], res["output_tokens"], not res.get("problems"))
+    return res
+
+
+@router.post("/builder/chat")
+def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    cfg = _cfg(request)
+    prov, st, pve = start_ai(request, s)
+    system = ai.builder_prompt(reference_for(cfg, pve))
+    msgs = [m.model_dump() for m in body.messages]
+    if body.spec.strip() and msgs[-1]["role"] == "user":
+        msgs[-1] = {"role": "user", "content": msgs[-1]["content"] +
+                    f"\n\nThe current spec in the builder:\n```yaml\n{body.spec.strip()}\n```"}
+    res = run_ai(s, st, lambda: ai.build(prov, system, msgs, spec_check(cfg, pve, body.range)))
     topo = None
     if res["yaml"] and not res["problems"]:
         topo = topology.build(normalize(parse_spec(res["yaml"]), cfg.default_os))

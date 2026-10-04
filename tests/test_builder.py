@@ -65,29 +65,67 @@ def test_fix_loop():
     assert gave_up["problems"] and gave_up["attempts"] == ai.FIX_ROUNDS + 1
 
 
+class Stream:
+    """A streamed (server-sent events) HTTP response."""
+
+    def __init__(self, events=(), status=200, error=None, stall=None):
+        self.status_code, self._events, self._error, self._stall = status, list(events), error, stall
+
+    def json(self):
+        return {"error": self._error or "x"}
+
+    def iter_lines(self, decode_unicode=True):
+        for e in self._events:
+            yield "data: " + json.dumps(e)
+            yield ""
+        if self._stall:
+            raise self._stall
+        yield "data: [DONE]"
+
+    def close(self):
+        pass
+
+
 def test_wire_formats(monkeypatch):
     sent = {}
 
-    class R:
-        def __init__(self, body):
-            self.status_code, self._b = 200, body
-
-        def json(self):
-            return self._b
-
-    def post(url, headers, json, timeout):
-        sent.update(url=url, headers=headers, body=json)
+    def post(url, headers, json, timeout, stream):
+        sent.update(url=url, headers=headers, body=json, timeout=timeout, stream=stream)
         if "anthropic" in url:
-            return R({"content": [{"type": "text", "text": "OK"}], "usage": {"input_tokens": 12, "output_tokens": 3}})
-        return R({"choices": [{"message": {"content": "OK"}}], "usage": {"prompt_tokens": 9, "completion_tokens": 2}})
+            return Stream([{"type": "message_start", "message": {"usage": {"input_tokens": 12}}},
+                           {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "O"}},
+                           {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "K"}},
+                           {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}])
+        return Stream([{"choices": [{"delta": {"content": "O"}}]}, {"choices": [{"delta": {"content": "K"}, "finish_reason": "stop"}]},
+                       {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2}}])
     monkeypatch.setattr(ai.requests, "post", post)
     r = ai.Anthropic("claude-sonnet-5-5", api_key="k").complete("SYS", [{"role": "user", "content": "hi"}])
     assert sent["url"] == "https://api.anthropic.com/v1/messages" and sent["headers"]["x-api-key"] == "k"
     assert sent["headers"]["anthropic-version"] == "2023-06-01" and sent["body"]["system"] == "SYS"
+    assert sent["body"]["stream"] is True and sent["stream"] is True and sent["timeout"] == (10, 300)
     assert sent["body"]["model"] == "claude-sonnet-5-5" and (r.text, r.input_tokens, r.output_tokens) == ("OK", 12, 3)
     r = ai.OpenAICompatible("llama", api_key="t", base_url="http://10.0.0.5:8000/v1/").complete("SYS", [{"role": "user", "content": "hi"}])
     assert sent["url"] == "http://10.0.0.5:8000/v1/chat/completions" and sent["headers"]["authorization"] == "Bearer t"
-    assert sent["body"]["messages"][0] == {"role": "system", "content": "SYS"} and r.output_tokens == 2
+    assert sent["body"]["messages"][0] == {"role": "system", "content": "SYS"} and sent["body"]["stream_options"]
+    assert (r.text, r.input_tokens, r.output_tokens) == ("OK", 9, 2)
+
+
+def test_streaming_edge_cases(monkeypatch):
+    calls = []
+
+    def post(url, headers, json, timeout, stream):
+        calls.append(dict(json))
+        if "stream_options" in json:          # an older server
+            return Stream(status=400, error="unknown field stream_options")
+        return Stream([{"choices": [{"delta": {"content": "fine"}, "finish_reason": "stop"}]}])
+    monkeypatch.setattr(ai.requests, "post", post)
+    r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
+    assert r.text == "fine" and len(calls) == 2 and "stream_options" not in calls[1]
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([{"choices": [{"delta": {"content": "half"}}]}],
+                                                                     stall=ai.requests.ConnectionError("Read timed out.")))
+    with pytest.raises(ai.ValorError) as e:
+        ai.OpenAICompatible("m", base_url="https://x.example/v1", timeout=60).complete("S", [])
+    assert "sent nothing for 60 s" in e.value.message and "raise the timeout" in e.value.hint
 
 
 def test_settings_and_chat(env, tmp_path, monkeypatch):
@@ -180,17 +218,9 @@ def test_cut_off_answers_and_defaults(env, monkeypatch):
 
 
 def test_cut_off_detected_on_the_wire(monkeypatch):
-    class R:
-        status_code = 200
-
-        def __init__(self, body):
-            self._b = body
-
-        def json(self):
-            return self._b
-    monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout: R(
-        {"content": [{"type": "text", "text": "x"}], "stop_reason": "max_tokens", "usage": {}}
-        if "anthropic" in url else {"choices": [{"message": {"content": "x"}, "finish_reason": "length"}]}))
+    monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout, stream: Stream(
+        [{"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 5}}]
+        if "anthropic" in url else [{"choices": [{"delta": {"content": "x"}, "finish_reason": "length"}]}]))
     assert ai.Anthropic("m", api_key="k").complete("S", []).truncated
     assert ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", []).truncated
 
@@ -203,15 +233,13 @@ def test_connection_errors_say_what_to_check(monkeypatch):
     p = ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234/v1")
     for exc, words in ((ai.requests.ConnectTimeout(), "Serve on Local Network"),
                        (ai.requests.ConnectionError(), "listens on the network"),
-                       (ai.requests.ReadTimeout(), "Max tokens")):
+                       (ai.requests.ReadTimeout(), "raise the timeout")):
         monkeypatch.setattr(ai.requests, "post", boom(exc))
         with pytest.raises(ai.ValorError) as e:
             p.complete("S", [])
         assert "192.168.1.67:1234" in e.value.message and words in e.value.hint
 
-    class NotFound:
-        status_code = 404
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: NotFound())
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(status=404))
     with pytest.raises(ai.ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234").complete("S", [])
     assert "/v1" in e.value.hint

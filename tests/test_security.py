@@ -81,6 +81,13 @@ ACCESS = {
     "GET /api/settings/ai/usage": "role:admin",
     "GET /api/builder": "role:operator",
     "POST /api/builder/chat": "role:operator",
+    "GET /api/ranges/{name}/draft": "role:viewer",
+    "PUT /api/ranges/{name}/draft": "role:operator",
+    "POST /api/ranges/{name}/draft/ops": "role:operator",
+    "DELETE /api/ranges/{name}/draft": "role:operator",
+    "GET /api/ranges/{name}/chat": "role:viewer",
+    "DELETE /api/ranges/{name}/chat": "role:operator",
+    "POST /api/ranges/{name}/chat": "role:operator",
 }
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 SELF_SERVICE = {"POST /api/auth/login", "POST /api/auth/mfa", "POST /api/auth/enroll/start",

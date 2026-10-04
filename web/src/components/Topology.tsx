@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import {
   Background, Controls, Edge, Handle, MarkerType, Node, NodeProps, Position, ReactFlow,
 } from "@xyflow/react";
@@ -195,8 +195,10 @@ function colorMode(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function TopologyMap({ topology, tall, onConsole }: {
+export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions }: {
   topology: Topo; tall?: boolean; onConsole?: (host: string) => void;
+  overlay?: ReactNode;                                   // e.g. editing / chat buttons over the map
+  nodeActions?: (node: TopoNode, close: () => void) => ReactNode;   // buttons in the selected node's panel
 }) {
   const { nodes, edges } = useMemo(() => layout(topology), [topology]);
   const [selected, setSelected] = useState<TopoNode | null>(null);
@@ -212,6 +214,7 @@ export function TopologyMap({ topology, tall, onConsole }: {
           ))}
         </div>
       )}
+      {overlay}
       <ReactFlow
         key={key}
         nodes={nodes}
@@ -276,6 +279,7 @@ export function TopologyMap({ topology, tall, onConsole }: {
                 Open console
               </button>
             )}
+            {nodeActions?.(selected, () => setSelected(null))}
           </div>
         </div>
       )}

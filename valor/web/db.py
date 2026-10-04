@@ -93,6 +93,20 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX ai_usage_user_ts ON ai_usage(username, ts);
     """,
+    # 3: range chat (question / plan / code), kept per range
+    """
+    CREATE TABLE range_chat (
+        id INTEGER PRIMARY KEY,
+        range TEXT NOT NULL,
+        ts REAL NOT NULL,
+        username TEXT NOT NULL,
+        role TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        content TEXT NOT NULL,
+        meta TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX range_chat_range ON range_chat(range, id);
+    """,
 ]
 
 

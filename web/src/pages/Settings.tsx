@@ -271,6 +271,9 @@ function AiSettings() {
                 <label className="field">Max tokens per answer <span className="hint">a ceiling, not a cost: only the tokens the model writes count. Local servers with a small context window may need less.</span>
                   <input type="number" min={1024} max={64000} value={s.max_tokens} onChange={(e) => set("max_tokens", Number(e.target.value))} />
                 </label>
+                <label className="field">Silence timeout (seconds) <span className="hint">answers stream in; this is how long the model may send nothing (loading, long thinking) before VALOR gives up</span>
+                  <input type="number" min={30} max={900} value={s.timeout} onChange={(e) => set("timeout", Number(e.target.value))} />
+                </label>
               </>
             )}
           </div>
