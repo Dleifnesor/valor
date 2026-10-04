@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import ipaddress
 
-from .baseline import load_baseline
+from .baseline import baseline_for, load_baseline
 from .cluster import load_catalog, range_vms, templates, vlans_in_use
 from .errors import ValorError
 from .pve import PVE
 from .roles import load_role, role_env
 from .spec import RangeSpec
+
+HOST_FAMILIES = ("debian", "rhel", "windows")
 
 
 def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
@@ -29,8 +31,12 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
         elif not tpls[os_name]["present"]:
             err("os", f"no template built for '{os_name}' yet",
                 f"An administrator can build it on a Proxmox node: ./install.sh --template {os_name}")
-        elif catalog[os_name].get("family") != "debian":
-            err("os", f"'{os_name}' is not an apt-based OS; MVP roles and baselines support the debian family only")
+        elif catalog[os_name].get("family") not in HOST_FAMILIES:
+            err("os", f"'{os_name}' ({catalog[os_name].get('family')}) is not supported for range hosts yet")
+    router_family = catalog.get(spec.router.os or "", {}).get("family")
+    if router_family and router_family != "debian":
+        err("router.os", f"the range router runs {spec.router.os}; routers must be Ubuntu or Debian",
+            "Remove router.os to use the default")
 
     bridges = {i["iface"]: i for i in pve.network() if i.get("type") == "bridge"}
     if cfg.segment_bridge not in bridges:
@@ -55,6 +61,7 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
                 err(f"segments.{i}.cidr", f"{s.cidr} overlaps reserved network {net} (a network of the cluster itself)",
                     "Pick another private range, e.g. 10.1xx.0.0/24")
 
+    baseline = None
     try:
         baseline = load_baseline(cfg.baselines_dir, spec.baseline)
         if baseline is None:
@@ -63,12 +70,31 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
         err("baseline", e.message, e.hint)
 
     for hi, h in enumerate(spec.hosts):
+        family = catalog.get(h.os or "", {}).get("family")
         for ri, ref in enumerate(h.roles):
             try:
                 role = load_role(cfg.roles_dir, ref.name)
                 role_env(spec, h, role, ref.params)
+                if family and family not in role.families:
+                    err(f"hosts.{hi}.roles.{ri}", f"role {ref.name} does not support {h.os} ({family})",
+                        f"It supports: {', '.join(role.families)}")
+                for pname in role.meta.get("wait_for") or []:
+                    target = ref.params.get(pname)
+                    if target and not any(x.name == target for x in spec.hosts):
+                        err(f"hosts.{hi}.roles.{ri}.params.{pname}", f"'{target}' is not a host of this range")
             except ValorError as e:
                 err(f"hosts.{hi}.roles.{ri}", e.message, e.hint)
+    if baseline is not None:
+        bfam = getattr(baseline, "families", None) or ["debian"]
+        for os_name in sorted(used_os):
+            fam = catalog.get(os_name, {}).get("family")
+            if fam == "windows":
+                try:
+                    baseline_for(cfg.baselines_dir, spec.baseline, "windows")     # Windows hosts use windows-l1
+                except ValorError as e:
+                    err("baseline", e.message)
+            elif fam and fam not in bfam:
+                err("baseline", f"baseline {spec.baseline} does not support {os_name} ({fam})")
 
     others = {vm.name for vm in range_vms(pve, with_config=False) if f"valor-range-{spec.name}" not in vm.tags}
     for name in ["rtr", *(h.name for h in spec.hosts)]:

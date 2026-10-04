@@ -1,14 +1,18 @@
 #cloud-config
-# VALOR template preparation (used once by `valor-admin template build`, never by range VMs).
-# Installs the QEMU guest agent - the engine's only management channel into range VMs -
-# bakes in current updates, cleans cloud-init state and powers off so the VM can become a template.
+# VALOR template preparation (used once while a template is built, never by range VMs).
+# Installs and enables the QEMU guest agent - the engine's only management channel into range VMs - bakes in
+# current updates, cleans cloud-init state and powers off so the VM can become a template.
+# Works on apt (Ubuntu, Debian, Kali) and dnf (Rocky, Alma) systems.
 package_update: true
 package_upgrade: true
 packages:
   - qemu-guest-agent
 runcmd:
+  # RHEL-family agents ship with guest-exec blocked and confined by SELinux; VALOR manages VMs through it
+  - [sh, -c, "if [ -f /etc/sysconfig/qemu-ga ]; then sed -i -E 's/^(BLACKLIST_RPC|FILTER_RPC_ARGS)=.*/\\1=/' /etc/sysconfig/qemu-ga; fi"]
+  - [sh, -c, "if command -v setsebool >/dev/null 2>&1; then setsebool -P virt_qemu_ga_run_unconfined 1 || true; fi"]
   - [systemctl, enable, qemu-guest-agent]
-  - [sh, -c, "apt-get clean && rm -rf /var/lib/apt/lists/*"]
+  - [sh, -c, "if command -v apt-get >/dev/null 2>&1; then apt-get clean && rm -rf /var/lib/apt/lists/*; else dnf clean all; fi"]
   - [cloud-init, clean, --logs, --machine-id]
 power_state:
   mode: poweroff

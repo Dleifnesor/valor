@@ -1,5 +1,5 @@
 description: Developer workstation basics (git, build tools, Python virtual environments, tmux, vim)
-families: [debian]
+families: [debian, rhel]
 ports: []
 params:
   extra_packages:

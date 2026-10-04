@@ -1,8 +1,9 @@
 id: ubuntu-l1
-title: Ubuntu/Debian Linux hardening baseline (aligned with common CIS Level 1 themes)
+title: Linux hardening baseline - Ubuntu, Debian, Kali, Rocky, Alma (aligned with common CIS Level 1 themes)
 # Results are reported as "aligned with" these themes - never as a certified benchmark implementation.
+# Controls branch on $VALOR_FAMILY (debian | rhel) where the two families differ (packages, update tooling).
 claim: aligned-with
-families: [debian]
+families: [debian, rhel]
 # Each control: `check` reads the system's effective state (exit 0 = compliant);
 # `fix` changes the system idempotently. Fixes run during the build; checks run again during verification.
 # `reference` is recorded only from vendor/upstream documentation; `theme` names the CIS L1 theme.
@@ -117,22 +118,37 @@ controls:
     reference: "auditd(8) manual page"
     applies_to: all
     check: |
-      dpkg-query -W -f='${Status}' auditd 2>/dev/null | grep -q 'install ok installed' && systemctl is-enabled -q auditd && systemctl is-active -q auditd
+      pkg=auditd; [ $VALOR_FAMILY = rhel ] && pkg=audit
+      installed "$pkg" && systemctl is-enabled -q auditd && systemctl is-active -q auditd
     fix: |
-      dpkg-query -W -f='${Status}' auditd 2>/dev/null | grep -q 'install ok installed' || { $APT update && $APT install auditd; }
-      systemctl enable --now auditd
+      pkg=auditd; [ $VALOR_FAMILY = rhel ] && pkg=audit
+      installed "$pkg" || pkg_install "$pkg"
+      systemctl enable -q auditd
+      # auditd refuses 'systemctl start' when RefuseManualStart is set (RHEL); 'service' is the supported way
+      systemctl is-active -q auditd || systemctl start auditd 2>/dev/null || service auditd start
 
   - id: automatic-security-updates
     area: Patching
     title: Automatic security updates installed and enabled
     theme: CIS Level 1 - software updates
-    reference: "Debian/Ubuntu unattended-upgrades documentation (APT::Periodic::Unattended-Upgrade)"
+    reference: "Debian/Ubuntu unattended-upgrades (APT::Periodic::Unattended-Upgrade); dnf-automatic(8) (apply_updates, upgrade_type)"
     applies_to: all
     check: |
-      dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'install ok installed' && apt-config dump | grep -q '^APT::Periodic::Unattended-Upgrade "1";'
+      if [ $VALOR_FAMILY = rhel ]; then
+        installed dnf-automatic && grep -qE '^apply_updates\s*=\s*yes' /etc/dnf/automatic.conf \
+          && grep -qE '^upgrade_type\s*=\s*security' /etc/dnf/automatic.conf && systemctl is-enabled -q dnf-automatic.timer
+      else
+        installed unattended-upgrades && apt-config dump | grep -q '^APT::Periodic::Unattended-Upgrade "1";'
+      fi
     fix: |
-      dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'install ok installed' || { $APT update && $APT install unattended-upgrades; }
-      printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+      if [ $VALOR_FAMILY = rhel ]; then
+        installed dnf-automatic || pkg_install dnf-automatic
+        sed -i -E 's/^apply_updates\s*=.*/apply_updates = yes/; s/^upgrade_type\s*=.*/upgrade_type = security/' /etc/dnf/automatic.conf
+        systemctl enable -q --now dnf-automatic.timer
+      else
+        installed unattended-upgrades || pkg_install unattended-upgrades
+        printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+      fi
 
   - id: tmp-sticky-bit
     area: Filesystem

@@ -122,3 +122,24 @@ def test_pve8_privileges():
     from installer.identity import roles
     r = roles(facts())
     assert "VM.Monitor" in r["ValorEngine"] and not any("GuestAgent" in p for p in r["ValorEngine"])
+
+
+def test_record_merges_concurrent_runs(tmp_path, monkeypatch):
+    """Two installer runs (e.g. template builds in two shells) must not overwrite each other's record entries."""
+    import json
+    from installer import record as R
+    monkeypatch.setattr(R, "RECORD_DIR", tmp_path / "rec")
+    monkeypatch.setattr(R, "LOCK_DIR", tmp_path / "lock")
+    first = R.Record("valor")
+    first.set("vm", {"vmid": 5100, "ip": "dhcp"})
+    snapshot = json.loads(first.path.read_text())
+    a, b = R.Record("valor", json.loads(json.dumps(snapshot))), R.Record("valor", json.loads(json.dumps(snapshot)))
+    a.add_template({"os": "rocky-10", "vmid": 5900, "built": True})
+    b.set("vm", {"vmid": 5100, "ip": "192.168.1.87"})          # e.g. an upgrade, started before a's write
+    b.add_template({"os": "kali", "vmid": 5902, "built": True})
+    a.set("windows_password_5900", "x")                        # a still holds the old "vm": must not win
+    a.mark("templates")
+    disk = json.loads(a.path.read_text())
+    assert [t["vmid"] for t in disk["objects"]["templates"]] == [5900, 5902]
+    assert disk["objects"]["vm"]["ip"] == "192.168.1.87" and disk["objects"]["windows_password_5900"] == "x"
+    assert disk["steps"] == {"templates": "done"}

@@ -1,5 +1,5 @@
 description: Penetration-testing toolbox for an attacker host (nmap, netcat, tcpdump, curl, dig)
-families: [debian]
+families: [debian, rhel]
 ports: []
 params:
   extra_packages:

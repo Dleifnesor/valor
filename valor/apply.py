@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import credentials
-from .baseline import bundle, load_baseline, parse_results
+from . import credentials, windows
+from .baseline import baseline_for, bundle, load_baseline, parse_results
 from .cluster import range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
 from .netpolicy import render, router_script
@@ -21,6 +21,7 @@ from .spec import ROUTER, RangeSpec, spec_hash
 from .validate import validate_cluster
 
 TEMPLATE_DISK_GIB = 8
+WINDOWS_TEMPLATE_DISK_GIB = 64
 PARALLEL_HOSTS = 4
 
 
@@ -73,6 +74,14 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     taken.add(vmid)
     name = f"{spec.name}-{d.host}"
     pve.clone(d.template, vmid, name, render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
+    if d.family == "windows":
+        nic = d.nics[0]
+        pve.update_config(vmid, cores=d.cores, memory=d.memory, onboot=0, tags=vm_tags(spec, d), vga="std",
+                          net0=f"{nic.get('model', 'e1000e')},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""))
+        if d.disk > WINDOWS_TEMPLATE_DISK_GIB:
+            pve.resize(vmid, "sata0", d.disk)
+        pve.power(vmid, "start")
+        return vmid
     params: dict = {
         "cores": d.cores, "memory": d.memory, "onboot": 0, "tags": vm_tags(spec, d),
         "nameserver": " ".join(cfg.nameservers), "ciuser": cfg.guest_user, "ciupgrade": 0,
@@ -140,29 +149,91 @@ def set_login(pve: PVE, d: Desired, vmid: int, login: dict | None, steps: Steps)
                              details=res.err[-300:])
 
 
-def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps) -> list[dict]:
+WINDOWS_READY = ("$s = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Setup\\State' "
+                 "-ErrorAction SilentlyContinue).ImageState; if ($s -eq 'IMAGE_STATE_COMPLETE') { 'READY' } else { $s }")
+
+
+def windows_wait_ready(pve: PVE, vmid: int, timeout: int = 1500) -> None:
+    """After sysprep a clone runs specialize and OOBE (with a reboot) before it is usable; the agent answers
+    earlier than that, so wait for the setup state, not only the agent."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            pve.wait_agent(vmid, 600)
+            if "READY" in pve.ps(vmid, WINDOWS_READY, timeout=60).out:
+                return
+        except ValorError:
+            pass
+        time.sleep(10)
+    raise ValorError("windows_not_ready", f"Windows in VM {vmid} did not finish its first-boot setup",
+                     hint="Open the VM console in VALOR or Proxmox to see where setup stopped.")
+
+
+def windows_reboot(pve: PVE, vmid: int) -> None:
+    pve.power(vmid, "shutdown", wait=660, timeout=600, forceStop=1)
+    pve.power(vmid, "start")
+    windows_wait_ready(pve, vmid)
+
+
+def windows_prep(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, login: dict | None, steps: Steps) -> None:
+    """What cloud-init does for Linux: Administrator password (the range login), static IP, DNS, hostname."""
+    seg = spec.segment(d.segment)
+    script = windows.prep_script(d.host, d.address, seg.cidr.prefixlen, str(seg.gateway), list(pve.cfg.nameservers),
+                                 login["password"] if login else None)
+    with steps.step("windows: name, address, login", d.host):
+        for _ in range(3):
+            res = pve.ps(vmid, script, timeout=600)
+            if not res.ok or windows.PREP_OK not in res.out:
+                raise ValorError("windows_prep_failed", f"preparing Windows on {d.host} failed", host=d.host,
+                                 details=res.tail().replace(login["password"], "***") if login else res.tail())
+            if windows.REBOOT not in res.out:
+                return
+            windows_reboot(pve, vmid)
+        raise ValorError("windows_prep_failed", f"{d.host} still asks for a reboot after renaming", host=d.host)
+
+
+def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps, login: dict | None = None) -> list[dict]:
     cfg = pve.cfg
     host = spec.host(d.host)
     out = []
     for ref in host.roles:
         with steps.step(f"role {ref.name}", d.host):
             role = load_role(cfg.roles_dir, ref.name)
-            script = build_script(role, role_env(spec, host, role, ref.params))
-            res = pve.script(vmid, script, timeout=1800)
+            env = role_env(spec, host, role, ref.params)
+            changed = False
+            if d.family == "windows":
+                env.update(VALOR_LOGIN_PASSWORD=login["password"] if login else "",
+                           VALOR_NAMESERVERS=" ".join(cfg.nameservers))
+                script = windows.role_script(ref.name, role.ps_script, env)
+                for attempt in range(4):                     # e.g. AD promotion: run, reboot, run again
+                    res = pve.ps(vmid, script, timeout=3600)
+                    if not res.ok:
+                        break
+                    changed |= "VALOR-ROLE-CHANGED=1" in res.out
+                    if windows.REBOOT not in res.out:
+                        break
+                    windows_reboot(pve, vmid)
+            else:
+                res = pve.script(vmid, build_script(role, env), timeout=1800)
+                changed = "VALOR-ROLE-CHANGED=1" in res.out
             if not res.ok:
+                details = res.tail().replace(login["password"], "***") if login else res.tail()
                 raise ValorError("role_failed", f"role '{ref.name}' failed on {d.host} (exit {res.exitcode})",
-                                 host=d.host, step=f"role {ref.name}", details=res.tail(),
-                                 hint="Fix roles/{0}/role.sh or the role params in the spec, then re-apply.".format(ref.name))
-            out.append({"role": ref.name, "changed": "VALOR-ROLE-CHANGED=1" in res.out})
+                                 host=d.host, step=f"role {ref.name}", details=details,
+                                 hint=f"Fix roles/{ref.name}/ or the role params in the spec, then re-apply.")
+            out.append({"role": ref.name, "changed": changed})
     return out
 
 
 def run_baseline(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps) -> list[dict]:
-    baseline = load_baseline(pve.cfg.baselines_dir, spec.baseline)
+    baseline = baseline_for(pve.cfg.baselines_dir, spec.baseline, d.family)
     if baseline is None:
         return []
     with steps.step(f"baseline {baseline.id}", d.host):
-        res = pve.script(vmid, bundle(baseline, d.is_router, fix=True), timeout=1800)
+        if d.family == "windows":
+            res = pve.ps(vmid, windows.baseline_bundle(baseline, d.is_router, fix=True), timeout=1800)
+        else:
+            res = pve.script(vmid, bundle(baseline, d.is_router, fix=True), timeout=1800)
         results = parse_results(baseline, res.out)
         failed = [r["control"] for r in results if r["after"] != "pass"]
         if not res.ok or failed:
@@ -170,6 +241,28 @@ def run_baseline(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps)
                              host=d.host, step=f"baseline {baseline.id}", details=res.tail(),
                              hint=f"Fix the control in baselines/{baseline.id}.yaml (check and fix must agree), then re-apply.")
         return results
+
+
+def converge_waves(spec: RangeSpec, hosts: list[Desired], cfg) -> list[list[Desired]]:
+    """Order hosts so a host converges after the hosts its roles wait for (role.yaml `wait_for: [param]`)."""
+    names = {d.host for d in hosts}
+    deps: dict[str, set[str]] = {d.host: set() for d in hosts}
+    for d in hosts:
+        for ref in spec.host(d.host).roles:
+            for pname in load_role(cfg.roles_dir, ref.name).meta.get("wait_for") or []:
+                value = ref.params.get(pname)
+                for target in value if isinstance(value, list) else [value]:
+                    if target in names and target != d.host:
+                        deps[d.host].add(target)
+    waves, done = [], set()
+    while len(done) < len(hosts):
+        wave = [d for d in hosts if d.host not in done and deps[d.host] <= done]
+        if not wave:
+            raise ValorError("dependency_cycle", "hosts wait for each other: " +
+                             ", ".join(f"{h} -> {sorted(v)}" for h, v in deps.items() if v - done))
+        waves.append(wave)
+        done |= {d.host for d in wave}
+    return waves
 
 
 def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
@@ -226,10 +319,17 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                         pve.power(a["vmid"], "start")
         result["vmids"] = vmids
 
-        work = [d for d in desired if actions[d.host]["action"] not in ("keep",)]
+        work = [d for d in desired if actions[d.host]["action"] not in ("keep",) and d.family != "windows"]
         with steps.step("wait for guest agents"):
             for d in desired:
-                pve.wait_agent(vmids[d.host], 300)
+                if d.family != "windows":
+                    pve.wait_agent(vmids[d.host], 300)
+        win = [d for d in desired if d.family == "windows"]
+        if win:
+            with steps.step("wait for Windows setup"):
+                with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                    for f in as_completed([ex.submit(windows_wait_ready, pve, vmids[d.host]) for d in win]):
+                        f.result()
         with steps.step("wait for cloud-init"):
             def ci(d):
                 r = pve.exec(vmids[d.host], ["cloud-init", "status", "--wait"], timeout=900)
@@ -254,21 +354,27 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
 
             def converge(d: Desired):
                 vmid = vmids[d.host]
-                set_login(pve, d, vmid, login, steps)
-                roles = run_roles(pve, spec, d, vmid, steps)
+                if d.family == "windows":
+                    windows_prep(pve, spec, d, vmid, login, steps)
+                else:
+                    set_login(pve, d, vmid, login, steps)
+                roles = run_roles(pve, spec, d, vmid, steps, login)
                 base = run_baseline(pve, spec, d, vmid, steps)
                 stamp(pve, spec, d, vmid, d.conv_hash)
                 return d.host, {"roles": roles, "baseline": base}
 
             errors = []
-            with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
-                futs = [ex.submit(converge, d) for d in hosts]
-                for f in as_completed(futs):
-                    try:
-                        h, rep = f.result()
-                        report[h] = rep
-                    except Exception as e:
-                        errors.append(e)
+            for wave in converge_waves(spec, hosts, cfg):      # e.g. domain controllers before their members
+                with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                    futs = [ex.submit(converge, d) for d in wave]
+                    for f in as_completed(futs):
+                        try:
+                            h, rep = f.result()
+                            report[h] = rep
+                        except Exception as e:
+                            errors.append(e)
+                if errors:
+                    break
             if errors:
                 # restore the final policy before reporting, so a failed build never leaves egress open
                 try:

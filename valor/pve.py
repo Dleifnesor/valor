@@ -272,3 +272,23 @@ class PVE:
     def script(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
         """Run a bash script (passed on stdin) as root inside the guest."""
         return self.exec(vmid, ["/bin/bash", "-s"], input_data=body, timeout=timeout)
+
+    def write_file(self, vmid: int, path: str, content: str) -> None:
+        if len(content) > 60_000:
+            raise ValorError("script_too_large", f"file for VM {vmid} exceeds the guest agent's 60 KiB limit")
+        self.call(f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, file=path, content=content)
+
+    def ps(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
+        """Run a PowerShell script as SYSTEM inside a Windows guest. The script goes to a temporary file over the
+        agent (it may carry secrets: never on a command line), runs with -File and is deleted afterwards."""
+        import secrets as _s
+        path = f"C:\\Windows\\Temp\\valor-{_s.token_hex(8)}.ps1"
+        self.write_file(vmid, path, "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
+        try:
+            return self.exec(vmid, ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                    "-File", path], timeout=timeout)
+        finally:
+            try:
+                self.exec(vmid, ["cmd.exe", "/c", "del", "/f", "/q", path], timeout=60)
+            except ValorError:
+                pass

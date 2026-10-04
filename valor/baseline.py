@@ -53,6 +53,16 @@ def load_baseline(baselines_dir: Path, name: str) -> Baseline | None:
                     controls, hashlib.sha256(text.encode()).hexdigest()[:16])
 
 
+WINDOWS_BASELINE = "windows-l1"
+
+
+def baseline_for(baselines_dir: Path, spec_baseline: str, family: str) -> Baseline | None:
+    """The baseline a host gets: the spec's (Linux) baseline, or windows-l1 for Windows hosts; none means none."""
+    if spec_baseline == "none":
+        return None
+    return load_baseline(baselines_dir, WINDOWS_BASELINE if family == "windows" else spec_baseline)
+
+
 def _fn(cid: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", cid)
 
@@ -62,6 +72,12 @@ def bundle(baseline: Baseline, is_router: bool, *, fix: bool) -> str:
     # no pipefail: checks like `sshd -T | grep -q` would fail on SIGPIPE when grep exits early
     parts = ["set -u", "export DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8",
              "APT='apt-get -o DPkg::Lock::Timeout=900 -qq -y'",
+             # family + one package helper for Debian/Ubuntu/Kali (apt) and Rocky/Alma/RHEL (dnf)
+             "VALOR_FAMILY=debian; [ -f /etc/redhat-release ] && VALOR_FAMILY=rhel",
+             "installed() { if [ $VALOR_FAMILY = rhel ]; then rpm -q \"$1\" >/dev/null 2>&1; "
+             "else dpkg-query -W -f='${Status}' \"$1\" 2>/dev/null | grep -q 'install ok installed'; fi; }",
+             "pkg_install() { if [ $VALOR_FAMILY = rhel ]; then dnf -q -y install \"$@\" >/dev/null; "
+             "else $APT update >/dev/null && $APT install \"$@\" >/dev/null; fi; }",
              # sshd -T / -t need /run/sshd, which only exists while sshd runs; Ubuntu 24.04 socket-activates ssh.
              "[ -d /run/sshd ] || install -d -m 0755 /run/sshd 2>/dev/null || true"]
     for c in baseline.controls:

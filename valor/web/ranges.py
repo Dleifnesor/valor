@@ -291,8 +291,13 @@ def get_credentials(name: str, request: Request, s: Session = Depends(require("o
     if not login:
         raise ApiError(404, "no_login", "This range has no login yet: it is created at the first build.")
     s.audit("range.credentials.view", target=name)
+    try:
+        spec, _ = _load(cfg, name)
+        accts = credentials.accounts(spec, load_catalog(cfg), login["username"])
+    except (ApiError, ValorError, OSError):
+        accts = [{"username": login["username"], "hosts": [], "kind": "linux"}]
     return {"username": login["username"], "password": login["password"], "version": login["version"],
-            "created": login["created"]}
+            "created": login["created"], "accounts": accts}
 
 
 @router.post("/ranges/{name}/credentials/rotate")

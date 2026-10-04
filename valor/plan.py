@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import credentials
-from .baseline import load_baseline
+from .baseline import baseline_for, load_baseline
 from .cluster import VMState, load_catalog, range_vms, template_ids
 from .netpolicy import render
 from .pve import PVE
 from .roles import load_role
 from .spec import ROUTER, RangeSpec, spec_hash
+from .windows import PREP_VERSION as WINDOWS_PREP
 
 CONVERGE_PROTOCOL = 1     # bump when the engine's in-guest converge logic changes
 DISPLAY = "std"           # Proxmox vga type for range VMs (a serial console is always attached as well)
@@ -36,6 +37,7 @@ class Desired:
     roles: list[dict] = field(default_factory=list)
     segment: str | None = None
     address: str | None = None
+    family: str = "debian"    # debian | rhel | windows (from the OS catalog)
     hw: dict = field(default_factory=dict)
     hw_hash: str = ""
     conv_hash: str = ""
@@ -56,6 +58,9 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
     pub = Path(cfg.ssh_public_key).read_text().strip() if Path(cfg.ssh_public_key).exists() else ""
     baseline = load_baseline(cfg.baselines_dir, spec.baseline)
     base_digest = baseline.digest if baseline else None
+    catalog = load_catalog(cfg)
+    win_base = baseline_for(cfg.baselines_dir, spec.baseline, "windows") if any(
+        catalog.get(h.os or "", {}).get("family") == "windows" for h in spec.hosts) else None
     # display: a normal screen (Proxmox noVNC console) plus the serial console on every VM
     common = {"nameservers": list(cfg.nameservers), "user": cfg.guest_user, "sshkey": _h(pub), "display": DISPLAY}
     login = credentials.version(cfg, spec.name)        # a new password version re-converges every VM
@@ -77,8 +82,13 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
 
     for h in spec.hosts:
         seg = spec.segment(h.segment)
+        entry = catalog.get(h.os or "", {})
+        family = entry.get("family", "debian")
+        windows = family == "windows"
         nics = [{"bridge": cfg.segment_bridge, "vlan": seg.vlan, "ip": f"{h.address}/{seg.cidr.prefixlen}",
                  "gw": str(seg.gateway)}]
+        if windows:
+            nics[0]["model"] = "e1000e"               # Windows ships this driver; Linux NICs stay virtio
         roles = []
         for ref in h.roles:
             try:
@@ -86,12 +96,18 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
             except Exception:
                 digest = "missing"
             roles.append({"name": ref.name, "params": ref.params, "digest": digest})
-        d = Desired(h.name, False, h.os, tpl(h.os), h.cores, h.memory, h.disk, nics, roles, h.segment,
-                    str(h.address))
-        d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics, **common}
+        # Windows needs more than the Linux defaults; the catalog sets the floor (a template's disk can't shrink)
+        memory = max(h.memory, int(entry.get("default_memory", 0))) if windows else h.memory
+        disk = max(h.disk, int(entry.get("default_disk", 0))) if windows else h.disk
+        d = Desired(h.name, False, h.os, tpl(h.os), h.cores, memory, disk, nics, roles, h.segment,
+                    str(h.address), family=family)
+        d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics,
+                **common, **({"family": family} if windows else {})}
         d.hw_hash = _h(d.hw)
-        d.conv_hash = _h({"hw": d.hw_hash, "roles": roles, "baseline": base_digest, "proto": CONVERGE_PROTOCOL,
-                          **({"login": login} if login else {})})
+        d.conv_hash = _h({"hw": d.hw_hash, "roles": roles,
+                          "baseline": (win_base.digest if win_base else None) if windows else base_digest,
+                          "proto": CONVERGE_PROTOCOL, **({"login": login} if login else {}),
+                          **({"prep": WINDOWS_PREP} if windows else {})})
         out.append(d)
     return out
 
