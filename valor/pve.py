@@ -59,6 +59,7 @@ class PVE:
         user, name = tok["token_id"].split("!", 1)
         self.api = ProxmoxAPI(cfg.api_host, port=cfg.api_port, user=user, token_name=name,
                               token_value=tok["secret"], verify_ssl=cfg.verify_ssl, timeout=90)
+        self._auth = f"PVEAPIToken={tok['token_id']}={tok['secret']}"
 
     # ------------------------------------------------------------------ helpers
     def call(self, what: str, fn, *a, **kw):
@@ -138,10 +139,29 @@ class PVE:
     def resize(self, vmid: int, disk: str, size_gib: int) -> None:
         self.call(f"resize disk of VM {vmid}", self.vm(vmid).resize.put, disk=disk, size=f"{size_gib}G")
 
-    def power(self, vmid: int, action: str, timeout: int = 300) -> None:
+    def power(self, vmid: int, action: str, wait: int = 300, **params) -> None:
+        """params go to the API (e.g. shutdown: timeout=180, forceStop=1); wait bounds the task wait."""
         fn = getattr(self.vm(vmid).status, action).post
-        upid = self.call(f"{action} VM {vmid}", fn)
-        self.wait_task(upid, f"{action} VM {vmid}", timeout)
+        upid = self.call(f"{action} VM {vmid}", fn, **params)
+        self.wait_task(upid, f"{action} VM {vmid}", wait)
+
+    # ------------------------------------------------------------------ snapshots (disk only, no RAM state)
+    def snapshots(self, vmid: int) -> list[dict]:
+        return [s for s in self.call(f"list snapshots of VM {vmid}", self.vm(vmid).snapshot.get)
+                if s.get("name") != "current"]
+
+    def snapshot(self, vmid: int, name: str, description: str = "") -> None:
+        upid = self.call(f"snapshot VM {vmid}", self.vm(vmid).snapshot.post, snapname=name,
+                         description=description, vmstate=0)
+        self.wait_task(upid, f"snapshot {name} of VM {vmid}", 900)
+
+    def rollback(self, vmid: int, name: str, start: bool = True) -> None:
+        upid = self.call(f"roll back VM {vmid}", self.vm(vmid).snapshot(name).rollback.post, start=int(start))
+        self.wait_task(upid, f"roll back VM {vmid} to {name}", 900)
+
+    def delete_snapshot(self, vmid: int, name: str) -> None:
+        upid = self.call(f"delete snapshot of VM {vmid}", self.vm(vmid).snapshot(name).delete)
+        self.wait_task(upid, f"delete snapshot {name} of VM {vmid}", 900)
 
     def destroy(self, vmid: int) -> None:
         st = self.vm_status(vmid).get("status")
@@ -150,6 +170,29 @@ class PVE:
         upid = self.call(f"delete VM {vmid}", self.vm(vmid).delete, purge=1,
                          **{"destroy-unreferenced-disks": 1})
         self.wait_task(upid, f"delete VM {vmid}")
+
+    # ------------------------------------------------------------------ consoles (relayed by the web service)
+    def vncproxy(self, vmid: int) -> dict:
+        """A VNC console session: {port, ticket, user, ...}. The ticket doubles as the VNC password."""
+        return self.call(f"open VNC console of VM {vmid}", self.vm(vmid).vncproxy.post, websocket=1)
+
+    def termproxy(self, vmid: int, serial: str = "serial0") -> dict:
+        return self.call(f"open serial console of VM {vmid}", self.vm(vmid).termproxy.post, serial=serial)
+
+    def console_websocket(self, vmid: int, port: int | str, ticket: str) -> tuple[str, dict, object]:
+        """(URL, headers, SSL context) for connecting to a console session's websocket with the API token."""
+        import ssl
+        url = (f"wss://{self.cfg.api_host}:{self.cfg.api_port}/api2/json/nodes/{self.node}/qemu/{vmid}/vncwebsocket"
+               f"?port={port}&vncticket={urllib.parse.quote(ticket, safe='')}")
+        if isinstance(self.cfg.verify_ssl, str):
+            ctx = ssl.create_default_context(cafile=self.cfg.verify_ssl)
+        elif self.cfg.verify_ssl:
+            ctx = ssl.create_default_context()
+        else:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        return url, {"Authorization": self._auth}, ctx
 
     # ------------------------------------------------------------------ guest agent
     def agent_ping(self, vmid: int) -> bool:

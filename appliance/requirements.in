@@ -10,3 +10,4 @@ proxmoxer==2.3.0
 requests==2.34.2
 pydantic==2.13.5
 PyYAML==6.0.3
+websockets==17.2

@@ -58,7 +58,20 @@ def _describe(job: dict, result: dict) -> tuple[str, str, str]:
             return "success", f"Range {name} verified", \
                 f"Tests {sm.get('tests_passed')}/{sm.get('tests_total')}, baseline {sm.get('baseline_passed')}/{sm.get('baseline_total')}."
         return "success", f"Range {name} destroyed", f"{len(result.get('removed', []))} VMs deleted."
-    what = {"apply": "Build", "verify": "Verification", "destroy": "Teardown"}.get(kind, kind)
+    if result.get("ok") is not False and kind in ("power", "snapshot", "rollback", "snapshot_delete", "rotate"):
+        done = {"power": f"Range {name}: {target.get('action')} done",
+                "snapshot": f"Range {name}: snapshot {target.get('name')} taken",
+                "rollback": f"Range {name} reset to {target.get('name')}",
+                "snapshot_delete": f"Range {name}: snapshot {target.get('name')} deleted",
+                "rotate": f"Range {name}: new login password set"}[kind]
+        extra = ""
+        if kind == "rollback" and result.get("verify"):
+            v = result["verify"]["summary"]
+            extra = f"Verified after the reset: tests {v.get('tests_passed')}/{v.get('tests_total')}."
+        return "success", done, extra
+    what = {"apply": "Build", "verify": "Verification", "destroy": "Teardown", "power": "Power action",
+            "snapshot": "Snapshot", "rollback": "Reset", "snapshot_delete": "Snapshot deletion",
+            "rotate": "Password rotation"}.get(kind, kind)
     return "error", f"{what} of range {name} failed", \
         f"{result.get('error', 'error')}: {result.get('message', '')}" + (f"\nHint: {result['hint']}" if result.get("hint") else "")
 

@@ -42,6 +42,7 @@ class Config:
     data_dir: str = ""                          # ranges/, journals/ (default: project_dir)
     state_dir: str = "/var/lib/valor"
     ssh_public_key: str = "/etc/valor/ssh/id_ed25519.pub"
+    secret_key_file: str = "/etc/valor/secret.key"   # encrypts range login passwords at rest
     job_runner: str = "spawn"                   # "spawn": detached process; "worker": the valor-worker service
     # Guest defaults
     default_os: str = "ubuntu-24.04"

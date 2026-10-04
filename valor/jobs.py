@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .errors import LockBusy, ValorError
 
-KINDS = ("apply", "verify", "destroy")
+KINDS = ("apply", "verify", "destroy", "power", "snapshot", "rollback", "snapshot_delete", "rotate")
 
 
 def _dir(cfg, job_id: str) -> Path:

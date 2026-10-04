@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import jobs, ops, state
+from .. import credentials, jobs, lifecycle, ops, state
 from ..cluster import load_catalog, range_vms, ranges_overview, templates
 from ..errors import ValorError
 from ..baseline import load_baseline
@@ -43,6 +43,21 @@ class DestroyIn(_In):
     confirm: str = Field(max_length=64)
 
 
+class PowerIn(_In):
+    action: str = Field(pattern="^(start|shutdown|stop|reboot)$")
+    hosts: list[str] | None = Field(default=None, max_length=50)
+
+
+class SnapshotIn(_In):
+    name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{1,39}$")
+    description: str = Field(default="", max_length=200)
+
+
+class RollbackIn(_In):
+    confirm: str = Field(max_length=64)
+    delete_newer: bool = False
+
+
 def _cfg(request: Request):
     return request.app.state.cfg
 
@@ -66,9 +81,18 @@ def _load(cfg, name: str):
 
 
 def _vm_states(pve: PVE, name: str) -> dict[str, dict]:
-    return {vm.host: {"vmid": vm.vmid, "status": vm.status, "name": vm.name, "converged": bool(vm.meta.get("conv")),
-                      "spec": (vm.meta.get("spec") or "")[:12]}
-            for vm in range_vms(pve, name) if vm.host}
+    """Live status per VM (the cluster-wide resource list can lag behind power changes by several seconds)."""
+    out = {}
+    for vm in range_vms(pve, name):
+        if not vm.host:
+            continue
+        try:
+            status = pve.vm_status(vm.vmid).get("status", vm.status)
+        except ValorError:
+            status = vm.status
+        out[vm.host] = {"vmid": vm.vmid, "status": status, "name": vm.name, "converged": bool(vm.meta.get("conv")),
+                        "spec": (vm.meta.get("spec") or "")[:12]}
+    return out
 
 
 def _plan_hash(spec, plan: dict) -> str:
@@ -152,7 +176,8 @@ def get_range(name: str, request: Request, s: Session = Depends(require("viewer"
             "version": spec_hash(spec)[:12], "vms": vms, "cluster_error": cluster_error,
             "topology": topology.build(spec, vms), "tests": effective_tests(spec, cfg.probe),
             "history": state.history(cfg, name)[-50:], "journal": journal.read_text() if journal.is_file() else None,
-            "verify": state.load(cfg, name, "verify"), **_summary(cfg, name)}
+            "verify": state.load(cfg, name, "verify"), "logins": credentials.enabled(cfg),
+            **_summary(cfg, name)}
 
 
 @router.post("/specs/check")
@@ -248,6 +273,75 @@ def destroy(name: str, body: DestroyIn, request: Request, s: Session = Depends(r
     job = ops.start(cfg, "destroy", {"range": name}, f"web:{s.username}", background=True)
     s.audit("range.destroy", target=name, detail={"job": job["job"]})
     return job
+
+
+# ---------------------------------------------------------------------- logins, power, snapshots
+def _job(s: Session, cfg, kind: str, target: dict, action: str, detail: dict | None = None) -> dict:
+    job = ops.start(cfg, kind, target, f"web:{s.username}", background=True)
+    s.audit(action, target=target.get("range", ""), detail={"job": job["job"], **(detail or {})})
+    return job
+
+
+@router.get("/ranges/{name}/credentials")
+def get_credentials(name: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    cfg = _cfg(request)
+    if not credentials.enabled(cfg):
+        raise ApiError(501, "logins_disabled", "Range logins need VALOR's secret key; this engine has none.")
+    login = credentials.load(cfg, _name(name))
+    if not login:
+        raise ApiError(404, "no_login", "This range has no login yet: it is created at the first build.")
+    s.audit("range.credentials.view", target=name)
+    return {"username": login["username"], "password": login["password"], "version": login["version"],
+            "created": login["created"]}
+
+
+@router.post("/ranges/{name}/credentials/rotate")
+def rotate_credentials(name: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    cfg = _cfg(request)
+    _load(cfg, name)
+    if not credentials.load(cfg, name):
+        raise ApiError(404, "no_login", "Build the range first.")
+    return _job(s, cfg, "rotate", {"range": name, "spec": f"{name}.yaml"}, "range.credentials.rotate")
+
+
+@router.post("/ranges/{name}/power")
+def power(name: str, body: PowerIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    cfg = _cfg(request)
+    _name(name)
+    return _job(s, cfg, "power", {"range": name, "action": body.action, "hosts": body.hosts}, "range.power",
+                {"action": body.action, "hosts": body.hosts or "all"})
+
+
+@router.get("/ranges/{name}/snapshots")
+def snapshots(name: str, request: Request, s: Session = Depends(require("viewer"))) -> dict:
+    try:
+        return {"snapshots": lifecycle.list_snapshots(PVE(_cfg(request)), _name(name))}
+    except ValorError as e:
+        if e.code == "range_not_built":
+            return {"snapshots": []}
+        raise
+
+
+@router.post("/ranges/{name}/snapshots")
+def take_snapshot(name: str, body: SnapshotIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    if body.name == lifecycle.CLEAN:
+        raise ApiError(400, "reserved", f"'{lifecycle.CLEAN}' is taken automatically after every verified build.")
+    return _job(s, _cfg(request), "snapshot", {"range": _name(name), "name": body.name,
+                                               "description": body.description}, "range.snapshot", {"name": body.name})
+
+
+@router.post("/ranges/{name}/snapshots/{snap}/rollback")
+def rollback(name: str, snap: str, body: RollbackIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    if body.confirm != _name(name):
+        raise ApiError(400, "confirm", "Type the range name to confirm the reset.")
+    return _job(s, _cfg(request), "rollback", {"range": name, "name": snap, "delete_newer": body.delete_newer},
+                "range.reset", {"snapshot": snap, "delete_newer": body.delete_newer})
+
+
+@router.delete("/ranges/{name}/snapshots/{snap}")
+def delete_snapshot(name: str, snap: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    return _job(s, _cfg(request), "snapshot_delete", {"range": _name(name), "name": snap}, "range.snapshot.delete",
+                {"name": snap})
 
 
 # ---------------------------------------------------------------------- jobs

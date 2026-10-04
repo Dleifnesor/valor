@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from . import jobs, journal, state
+from . import credentials, jobs, journal, lifecycle, state
 from .apply import apply as do_apply
 from .destroy import destroy as do_destroy
 from .errors import ValorError
@@ -42,6 +42,8 @@ def execute(cfg, job_id: str, echo=None) -> dict:
                     state.save(cfg, spec.name, "verify", v)
                     result["verify"] = {"ok": v["ok"], "summary": v["summary"]}
                     result["ok"] = v["ok"]
+                    if v["ok"] and (result.get("changed") or not _has_clean(pve, spec.name)):
+                        result["snapshot"] = _clean_snapshot(pve, spec.name, events)
             elif kind == "verify":
                 result = do_verify(pve, spec, events)
                 result.update(job=job_id, started=started, finished=_stamp())
@@ -50,6 +52,35 @@ def execute(cfg, job_id: str, echo=None) -> dict:
                 result = do_destroy(pve, target["range"], events)
                 result.update(ok=True, job=job_id, started=started)
                 state.save(cfg, target["range"], "destroy", result)
+                credentials.forget(cfg, target["range"])      # a rebuilt range gets a new password
+            elif kind == "power":
+                result = lifecycle.power(pve, target["range"], target["action"], target.get("hosts"), events)
+                result.update(ok=True, job=job_id, started=started)
+            elif kind == "snapshot":
+                result = lifecycle.snapshot(pve, target["range"], target["name"], target.get("description", ""),
+                                            emit=events)
+                result.update(ok=True, job=job_id, started=started)
+            elif kind == "rollback":
+                result = lifecycle.rollback(pve, target["range"], target["name"], target.get("delete_newer", False),
+                                            emit=events)
+                result.update(ok=True, job=job_id, started=started)
+                spec, path = load_spec(f"{target['range']}.yaml", cfg.ranges_dir, cfg.default_os)
+                for vm in lifecycle._vms(pve, spec.name):
+                    pve.wait_agent(vm.vmid, 300)
+                v = do_verify(pve, spec, events)
+                v.update(job=job_id, started=started, finished=_stamp())
+                state.save(cfg, spec.name, "verify", v)
+                result["verify"] = {"ok": v["ok"], "summary": v["summary"]}
+                result["ok"] = v["ok"]
+            elif kind == "snapshot_delete":
+                result = lifecycle.delete_snapshot(pve, target["range"], target["name"], emit=events)
+                result.update(ok=True, job=job_id, started=started)
+            elif kind == "rotate":
+                spec, path = load_spec(f"{target['range']}.yaml", cfg.ranges_dir, cfg.default_os)
+                credentials.rotate(cfg, spec.name)
+                result = do_apply(pve, spec, events)         # the new password version re-converges every VM
+                result.update(ok=True, job=job_id, started=started, rotated=True)
+                state.save(cfg, spec.name, "apply", result)
             else:
                 raise ValorError("job_invalid", f"unknown job kind {kind}")
             if spec is not None:
@@ -70,6 +101,23 @@ def execute(cfg, job_id: str, echo=None) -> dict:
     jobs.finish(cfg, job_id, result)
     jobs.update(cfg, job_id, state="succeeded" if result.get("ok") else "failed", finished=_stamp())
     return result
+
+
+def _has_clean(pve: PVE, name: str) -> bool:
+    try:
+        return any(s["name"] == lifecycle.CLEAN for s in lifecycle.list_snapshots(pve, name))
+    except ValorError:
+        return False
+
+
+def _clean_snapshot(pve: PVE, name: str, events) -> dict:
+    """The automatic 'clean' snapshot after a verified build. A failure here never fails the build."""
+    try:
+        lifecycle.snapshot(pve, name, lifecycle.CLEAN, f"verified build {_stamp()}", replace=True, emit=events)
+        return {"ok": True, "name": lifecycle.CLEAN}
+    except ValorError as e:
+        events("snapshot_failed", error=e.code, message=e.message)
+        return {"ok": False, "name": lifecycle.CLEAN, "error": e.code, "message": e.message}
 
 
 def start(cfg, kind: str, target: dict, origin: str, background: bool, echo=None) -> dict:

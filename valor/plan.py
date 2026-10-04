@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import credentials
 from .baseline import load_baseline
 from .cluster import VMState, load_catalog, range_vms, template_ids
 from .netpolicy import render
@@ -15,6 +16,7 @@ from .roles import load_role
 from .spec import ROUTER, RangeSpec, spec_hash
 
 CONVERGE_PROTOCOL = 1     # bump when the engine's in-guest converge logic changes
+DISPLAY = "std"           # Proxmox vga type for range VMs (a serial console is always attached as well)
 
 
 def _h(obj) -> str:
@@ -54,7 +56,9 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
     pub = Path(cfg.ssh_public_key).read_text().strip() if Path(cfg.ssh_public_key).exists() else ""
     baseline = load_baseline(cfg.baselines_dir, spec.baseline)
     base_digest = baseline.digest if baseline else None
-    common = {"nameservers": list(cfg.nameservers), "user": cfg.guest_user, "sshkey": _h(pub)}
+    # display: a normal screen (Proxmox noVNC console) plus the serial console on every VM
+    common = {"nameservers": list(cfg.nameservers), "user": cfg.guest_user, "sshkey": _h(pub), "display": DISPLAY}
+    login = credentials.version(cfg, spec.name)        # a new password version re-converges every VM
     out: list[Desired] = []
 
     # Router: uplink first (eth0), then one NIC per segment in spec order.
@@ -67,7 +71,8 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
     final_rules = render(spec, ifmap, "eth0", build_egress=False, spec_id="", reserved=cfg.reserved_networks)
     d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics, **common}
     d.hw_hash = _h(d.hw)
-    d.conv_hash = _h({"hw": d.hw_hash, "policy": _h(final_rules), "baseline": base_digest, "proto": CONVERGE_PROTOCOL})
+    d.conv_hash = _h({"hw": d.hw_hash, "policy": _h(final_rules), "baseline": base_digest, "proto": CONVERGE_PROTOCOL,
+                      **({"login": login} if login else {})})
     out.append(d)
 
     for h in spec.hosts:
@@ -85,7 +90,8 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
                     str(h.address))
         d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics, **common}
         d.hw_hash = _h(d.hw)
-        d.conv_hash = _h({"hw": d.hw_hash, "roles": roles, "baseline": base_digest, "proto": CONVERGE_PROTOCOL})
+        d.conv_hash = _h({"hw": d.hw_hash, "roles": roles, "baseline": base_digest, "proto": CONVERGE_PROTOCOL,
+                          **({"login": login} if login else {})})
         out.append(d)
     return out
 
@@ -104,7 +110,7 @@ def _classify(d: Desired, vm: VMState | None, current_spec: str = "") -> tuple[s
         reasons.append("disk cannot shrink")
     if reasons:
         return "replace", reasons
-    for key in ("cores", "memory", "disk"):
+    for key in ("cores", "memory", "disk", "display"):
         if old.get(key) != d.hw.get(key):
             reasons.append(f"{key} {old.get(key)} -> {d.hw.get(key)}")
     if reasons:
