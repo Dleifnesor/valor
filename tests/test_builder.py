@@ -151,3 +151,67 @@ def test_settings_and_chat(env, tmp_path, monkeypatch):
         assert codes[-1] == 429 and codes[0] == 200
         audit = db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='settings.ai'").fetchone()[0]
         assert audit == 4
+
+
+def test_cut_off_answers_and_defaults(env, monkeypatch):
+    assert ai.DEFAULTS["max_tokens"] >= 16384 and ai.Provider("m").max_tokens == ai.DEFAULTS["max_tokens"]
+
+    class Cut(Fake):
+        def complete(self, system, messages):
+            self.calls.append(1)
+            return ai.Reply("```yaml\nname: half", 900, 16384, truncated=True)
+    cut = Cut([])
+    with pytest.raises(ai.ValorError) as e:
+        ai.build(cut, "S", [{"role": "user", "content": "x"}], lambda t: [])
+    assert e.value.code == "ai_truncated" and len(cut.calls) == 1          # no pointless retries
+    app, wcfg = env
+    builder._rate.clear()
+    with client(app) as adm, client(app) as op:
+        ame, _ = enroll(adm, "admin")
+        assert adm.get("/api/settings/ai").json()["max_tokens"] == ai.DEFAULTS["max_tokens"]
+        adm.put("/api/settings/ai", json={"provider": "anthropic", "api_key": "k"}, headers={"X-CSRF-Token": ame["csrf"]})
+        ome, _ = enroll(op, "olivia")
+        monkeypatch.setattr(ai, "provider_from", lambda st, key: Cut([]))
+        r = op.post("/api/builder/chat", json={"messages": [{"role": "user", "content": "big lab"}]},
+                    headers={"X-CSRF-Token": ome["csrf"]})
+        assert r.status_code == 422 and r.json()["error"] == "ai_truncated" and "Max tokens" in r.json()["hint"]
+        spent = db.connect(wcfg.db).execute("SELECT SUM(output_tokens) FROM ai_usage").fetchone()[0]
+        assert spent == 16384                                                 # cut-off answers still count
+
+
+def test_cut_off_detected_on_the_wire(monkeypatch):
+    class R:
+        status_code = 200
+
+        def __init__(self, body):
+            self._b = body
+
+        def json(self):
+            return self._b
+    monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout: R(
+        {"content": [{"type": "text", "text": "x"}], "stop_reason": "max_tokens", "usage": {}}
+        if "anthropic" in url else {"choices": [{"message": {"content": "x"}, "finish_reason": "length"}]}))
+    assert ai.Anthropic("m", api_key="k").complete("S", []).truncated
+    assert ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", []).truncated
+
+
+def test_connection_errors_say_what_to_check(monkeypatch):
+    def boom(exc):
+        def post(*a, **k):
+            raise exc
+        return post
+    p = ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234/v1")
+    for exc, words in ((ai.requests.ConnectTimeout(), "Serve on Local Network"),
+                       (ai.requests.ConnectionError(), "listens on the network"),
+                       (ai.requests.ReadTimeout(), "Max tokens")):
+        monkeypatch.setattr(ai.requests, "post", boom(exc))
+        with pytest.raises(ai.ValorError) as e:
+            p.complete("S", [])
+        assert "192.168.1.67:1234" in e.value.message and words in e.value.hint
+
+    class NotFound:
+        status_code = 404
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: NotFound())
+    with pytest.raises(ai.ValorError) as e:
+        ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234").complete("S", [])
+    assert "/v1" in e.value.hint

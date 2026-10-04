@@ -268,8 +268,8 @@ function AiSettings() {
                 <label className="field">Daily token budget per user <span className="hint">0 = unlimited</span>
                   <input type="number" min={0} value={s.daily_tokens_per_user} onChange={(e) => set("daily_tokens_per_user", Number(e.target.value))} />
                 </label>
-                <label className="field">Max tokens per answer
-                  <input type="number" min={256} max={32000} value={s.max_tokens} onChange={(e) => set("max_tokens", Number(e.target.value))} />
+                <label className="field">Max tokens per answer <span className="hint">a ceiling, not a cost: only the tokens the model writes count. Local servers with a small context window may need less.</span>
+                  <input type="number" min={1024} max={64000} value={s.max_tokens} onChange={(e) => set("max_tokens", Number(e.target.value))} />
                 </label>
               </>
             )}
