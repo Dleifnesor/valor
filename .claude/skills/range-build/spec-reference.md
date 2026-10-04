@@ -30,6 +30,11 @@ hosts:                          # 1-40
     memory: 1024                # MiB, 512-65536
     disk: 10                    # GiB, 8-500 (can grow later, never shrink)
     iso: tails-7.0-amd64.iso    # optional: an ISO from the ISO library attached as a CD-ROM (changing it: no reboot)
+    install: template           # template (default: clone the cloud image, ~1 min) or iso: install from the OS's
+                                # installer ISO with a generated kickstart (rocky-10, alma-10; ~10 min; the ISO
+                                # must be in the ISO library)
+    nested: false               # true: pass hardware virtualization through (CPU type host) to run a hypervisor
+                                # (e.g. Proxmox VE) inside the host; needs VT-x/AMD-V + nested KVM on the node
     roles:                      # applied in order; see roles/<name>/role.yaml for params
       - name: nginx
       - name: postgresql

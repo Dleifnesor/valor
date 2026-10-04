@@ -97,3 +97,48 @@ hosts:
     assert action == "update" and reasons == ["ISO none -> tails-7.0.iso"]          # no "reboot required"
     with pytest.raises(Exception):
         parse_spec(base.replace("address: 10.66.0.10}", "address: 10.66.0.10, iso: ../../etc/passwd}"))
+
+
+def test_install_from_iso_plan_and_kickstart(cfg, tmp_path):
+    from valor import kickstart
+    from valor.plan import desired_state
+    from valor.spec import canonical, normalize, parse_spec
+    text = """
+name: kslab
+segments: [{name: lan, vlan: 660, cidr: 10.67.0.0/24}]
+hosts:
+  - {name: rk, segment: lan, address: 10.67.0.10, os: rocky-10, install: iso}
+  - {name: rc, segment: lan, address: 10.67.0.11, os: rocky-10}
+"""
+    spec = normalize(parse_spec(text), "ubuntu-24.04")
+    assert '"install"' in canonical(spec) and canonical(spec).count('"install"') == 1       # default omitted
+    rk, rc = desired_state(cfg, spec)[1:]
+    assert rk.hw["install"] == "iso" and rk.hw["template"] == "iso" and "install" not in rc.hw
+    ks = kickstart.kickstart("rk", "10.67.0.10", 24, "10.67.0.1", ["1.1.1.1", "9.9.9.9"], "valor",
+                             'ssh-ed25519 AAAA valor-engine')
+    assert "--ip=10.67.0.10 --netmask=255.255.255.0 --gateway=10.67.0.1 --nameserver=1.1.1.1,9.9.9.9" in ks
+    assert "rootpw --lock" in ks and "qemu-guest-agent" in ks and kickstart.MARKER in ks and "typepermissive" in ks
+    assert "password" not in ks.lower().replace("--lock", "")                  # no secrets in the kickstart
+    out = tmp_path / "ks.iso"
+    kickstart.build_iso(ks, out)
+    assert out.stat().st_size > 10_000 and b"OEMDRV" in out.read_bytes()[:40_000]
+
+
+def test_nested_virtualization_option(cfg):
+    from valor.cluster import VMState
+    from valor.plan import _classify, desired_state
+    from valor.spec import canonical, normalize, parse_spec
+    base = """
+name: nestlab
+segments: [{name: lab, vlan: 670, cidr: 10.0.0.0/24, internet: true}]
+hosts:
+  - {name: pve, segment: lab, address: 10.0.0.10, os: debian-13}
+"""
+    plain = normalize(parse_spec(base), "ubuntu-24.04")
+    nested = normalize(parse_spec(base.replace("os: debian-13}", "os: debian-13, nested: true}")), "ubuntu-24.04")
+    assert '"nested"' not in canonical(plain) and '"nested":true' in canonical(nested)
+    a, b = desired_state(cfg, plain)[1], desired_state(cfg, nested)[1]
+    assert "nested" not in a.hw and b.hw["nested"] is True
+    vm = VMState(vmid=5200, name="nestlab-pve", status="running", tags=[], meta={"hw_spec": a.hw, "conv": a.conv_hash})
+    action, reasons = _classify(b, vm)
+    assert action == "update" and "reboot required" in reasons

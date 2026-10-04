@@ -132,6 +132,18 @@ class PVE:
     def vm_status(self, vmid: int) -> dict:
         return self.call(f"read status of VM {vmid}", self.vm(vmid).status.current.get)
 
+    def create_vm(self, vmid: int, **params) -> None:
+        """A new, empty VM (hosts installed from an ISO); the pool comes from the config like clones."""
+        upid = self.call(f"create VM {vmid}", self.n.qemu.post, vmid=vmid, pool=self.cfg.pool, **params)
+        self.wait_task(upid, f"create VM {vmid}")
+
+    def cpu_type(self, minimum: str | None = None) -> str:
+        """CPU model for a new VM: the catalog minimum, else x86-64-v2 (+AES when the node has AES-NI)."""
+        if minimum:
+            return minimum
+        flags = set(str(self.node_status().get("cpuinfo", {}).get("flags", "")).split())
+        return "x86-64-v2-AES" if "aes" in flags else "x86-64-v2"
+
     def clone(self, template: int, newid: int, name: str, description: str) -> None:
         upid = self.call(f"clone template {template} to {newid}", self.vm(template).clone.post,
                          newid=newid, name=name, pool=self.cfg.pool, full=0, description=description)

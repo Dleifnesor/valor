@@ -94,6 +94,16 @@ def resolve(cfg, entry_id: str) -> dict:
             "algorithm": e.get("algorithm", "sha256"), "verified": verified}
 
 
+def installer_iso(pve, iso_id: str) -> dict | None:
+    """The newest library ISO for an ISO catalog entry (versioned names: matched by its pattern)."""
+    entry = load_catalog(pve.cfg).get(iso_id)
+    if not entry:
+        return None
+    hits = [i for i in list_isos(pve)
+            if (re.fullmatch(entry["pattern"], i["name"]) if entry.get("pattern") else i["name"] == entry.get("filename"))]
+    return max(hits, key=lambda i: _natural(i["name"])) if hits else None
+
+
 def find(pve, name: str) -> str | None:
     """volid of the library ISO with this file name (first ISO storage that has it)."""
     return next((i["volid"] for i in list_isos(pve) if i["name"] == name), None)

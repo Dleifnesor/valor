@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import credentials, isos, windows, wireguard
+from . import credentials, isos, kickstart, windows, wireguard
 from .baseline import baseline_for, bundle, load_baseline, parse_results
-from .cluster import range_tag, range_vms, render_description, template_ids
+from .cluster import load_catalog, range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
 from .netpolicy import render, router_script
 from .plan import Desired, desired_state, make_plan
@@ -68,10 +69,66 @@ def vm_meta(spec: RangeSpec, d: Desired, conv: str | None) -> dict:
             "spec": spec_hash(spec), "hw": d.hw_hash, "hw_spec": d.hw, "conv": conv, "applied": now()}
 
 
+def ks_iso_name(spec: RangeSpec, d: Desired) -> str:
+    return f"valor-ks-{spec.name}-{d.host}.iso"
+
+
+def create_vm_from_iso(pve: PVE, spec: RangeSpec, d: Desired, vmid: int) -> int:
+    """Empty VM + installer ISO + OEMDRV kickstart ISO (see kickstart.py); the install runs on first boot."""
+    cfg = pve.cfg
+    entry = load_catalog(cfg)[d.os]
+    inst = isos.installer_iso(pve, entry["install_iso"])
+    if inst is None:
+        raise ValorError("iso_missing", f"the installer ISO for {d.os} is not in the ISO library", host=d.host)
+    seg = spec.segment(d.segment)
+    pub = Path(cfg.ssh_public_key).read_text().strip() if Path(cfg.ssh_public_key).exists() else ""
+    ks = kickstart.kickstart(d.host, d.address, seg.cidr.prefixlen, str(seg.gateway), list(cfg.nameservers),
+                             cfg.guest_user, pub)
+    name = ks_iso_name(spec, d)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        kickstart.build_iso(ks, path)
+        pve.wait_task(pve.upload_iso(cfg.iso_storage, str(path), name), f"upload {name}")
+    nic = d.nics[0]
+    pve.create_vm(vmid, name=f"{spec.name}-{d.host}", ostype="l26", cores=d.cores, memory=d.memory,
+                  cpu="host" if d.hw.get("nested") else pve.cpu_type(entry.get("cpu_min")), scsihw="virtio-scsi-single",
+                  scsi0=f"{cfg.storage}:{d.disk},discard=on,ssd=1,iothread=1",
+                  ide2=f"{inst['volid']},media=cdrom", ide3=f"{cfg.iso_storage}:iso/{name},media=cdrom",
+                  net0=f"virtio,bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""),
+                  boot="order=scsi0;ide2", agent="enabled=1", serial0="socket", vga=d.hw.get("display", "std"),
+                  onboot=0, tags=vm_tags(spec, d),
+                  description=render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
+    pve.power(vmid, "start")
+    return vmid
+
+
+def wait_iso_install(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, timeout: int = 3600) -> None:
+    """Until the installed system (not the installer) answers, then remove the install media."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if pve.agent_ping(vmid):
+            try:
+                if pve.exec(vmid, ["test", "-f", kickstart.MARKER], timeout=30).ok:
+                    break
+            except ValorError:
+                pass
+        time.sleep(15)
+    else:
+        raise ValorError("iso_install_timeout", f"installing {d.os} on {d.host} did not finish within "
+                         f"{timeout // 60} minutes", host=d.host, hint="Open the VM's console to see where it stopped.")
+    pve.update_config(vmid, ide2="none,media=cdrom", ide3="none,media=cdrom")
+    try:
+        pve.delete_volume(pve.cfg.iso_storage, f"{pve.cfg.iso_storage}:iso/{ks_iso_name(spec, d)}")
+    except ValorError:
+        pass                                    # a leftover kickstart ISO holds no secrets
+
+
 def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     cfg = pve.cfg
     vmid = pve.allocate_vmid(taken)
     taken.add(vmid)
+    if d.hw.get("install") == "iso":
+        return create_vm_from_iso(pve, spec, d, vmid)
     name = f"{spec.name}-{d.host}"
     pve.clone(d.template, vmid, name, render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
     if d.family == "windows":
@@ -80,6 +137,8 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
         # time, which with Windows' UTC zone puts the clock hours off)
         pve.update_config(vmid, cores=d.cores, memory=d.memory, onboot=0, tags=vm_tags(spec, d), vga="std", localtime=0,
                           net0=f"{nic.get('model', 'e1000e')},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""))
+        if d.hw.get("nested"):
+            pve.update_config(vmid, cpu="host")
         if d.disk > WINDOWS_TEMPLATE_DISK_GIB:
             pve.resize(vmid, "sata0", d.disk)
         if d.hw.get("iso"):
@@ -90,6 +149,7 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
         "cores": d.cores, "memory": d.memory, "onboot": 0, "tags": vm_tags(spec, d),
         "nameserver": " ".join(cfg.nameservers), "ciuser": cfg.guest_user, "ciupgrade": 0,
         "vga": d.hw.get("display", "std"), "serial0": "socket",
+        **({"cpu": "host"} if d.hw.get("nested") else {}),
     }
     pub = Path(cfg.ssh_public_key)
     if pub.exists():
@@ -360,8 +420,10 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                             pve.power(a["vmid"], "start")
                 elif a["action"] == "update":
                     with steps.step("resize CPU/memory/disk and reboot", d.host):
+                        cpu = "host" if d.hw.get("nested") else pve.cpu_type(
+                            load_catalog(cfg).get(d.os, {}).get("cpu_min"))
                         pve.update_config(a["vmid"], cores=d.cores, memory=d.memory, vga=d.hw.get("display", "std"),
-                                          serial0="socket")
+                                          serial0="socket", cpu=cpu)
                         disk = "sata0" if d.family == "windows" else "scsi0"
                         cur = int(str(pve.vm_config(a["vmid"]).get(disk, "size=0G")).split("size=")[-1].rstrip("G") or 0)
                         if d.disk > cur:
@@ -376,11 +438,18 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                         pve.power(a["vmid"], "start")
         result["vmids"] = vmids
 
-        work = [d for d in desired if actions[d.host]["action"] not in ("keep",) and d.family != "windows"]
+        from_iso = [d for d in desired if d.hw.get("install") == "iso" and actions[d.host]["action"] in ("create", "replace")]
+        work = [d for d in desired if actions[d.host]["action"] not in ("keep",) and d.family != "windows"
+                and d.hw.get("install") != "iso"]
         with steps.step("wait for guest agents"):
             for d in desired:
-                if d.family != "windows":
+                if d.family != "windows" and d not in from_iso:
                     pve.wait_agent(vmids[d.host], 300)
+        if from_iso:
+            with steps.step("wait for ISO installs"):
+                with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                    for f in as_completed([ex.submit(wait_iso_install, pve, spec, d, vmids[d.host]) for d in from_iso]):
+                        f.result()
         win = [d for d in desired if d.family == "windows"]
         if win:
             with steps.step("wait for Windows setup"):

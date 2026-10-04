@@ -23,7 +23,7 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 log "VALOR ${VALOR_VERSION} - ${MODE}"
 log "operating system packages"
 apt-get update -q >/dev/null
-apt-get install -y -q --no-install-recommends nginx python3-venv sqlite3 nftables ca-certificates curl openssl \
+apt-get install -y -q --no-install-recommends nginx python3-venv sqlite3 nftables ca-certificates curl openssl genisoimage \
   unattended-upgrades qemu-guest-agent >/dev/null
 apt-get -y -q -o Dpkg::Options::=--force-confold upgrade >/dev/null
 

@@ -33,14 +33,14 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 | Login | one generated password per range for the VM consoles (Linux `valor`, Windows `Administrator` / `DOMAIN\Administrator`), encrypted at rest, shown to operators, audited, rotatable |
 | Power, snapshots | start / shut down / reboot a range or one VM; snapshots, automatic `valor-clean` after each verified build, reset to a snapshot |
 | Access | WireGuard per range on the range router: peer configs with QR codes, live connection status, new keys per peer |
-| ISO library | download from a verified catalog (signed checksums), by URL, upload from the browser, delete |
+| ISO library | download from a verified catalog (signed checksums), by URL, upload from the browser, delete; attach an ISO to a host (`iso:`) or install a Rocky/Alma host from its ISO (`install: iso`) |
+| Blueprints | keep a spec as a blueprint and deploy copies - numbered or one per student - each with its own VLANs, networks and WireGuard peer |
+| Chat builder | describe an environment; an AI model (Anthropic Claude or any OpenAI-compatible endpoint, set up by an admin) writes the spec, VALOR validates it and shows it on the map; building stays plan → approve |
 | Spec editor | write or paste a range spec, check it against the cluster, see it on the map |
 | Plan → approve | the plan is shown on the map in color (added / changed / rebuilt / removed). Approving runs exactly that plan. |
 | Jobs | builds, verifications and teardowns with their live step log |
 | Users, audit log | roles admin / operator / viewer; every change is audited |
 | Settings | notification channels (email, Discord, Slack, Teams, in-app), LDAP / Active Directory, certificate |
-
-The chat builder (describe an environment, the AI writes the spec) is milestone 2.
 
 ## How a build works
 
@@ -79,7 +79,13 @@ The chat builder (describe an environment, the AI writes the spec) is milestone 
   codes. `__Host-` cookies (HttpOnly, Secure, SameSite=Strict) with idle/absolute timeouts; CSRF tokens + Origin
   checks; rate limits and lockout; an audit log of every change. Stored secrets are encrypted with AES-256-GCM.
 - **Ranges**: segments sit on a bridge with no physical port. Routers deny everything not in the spec, and
-  "internet" egress never reaches private addresses or the cluster's own networks.
+  "internet" egress never reaches private addresses or the cluster's own networks. WireGuard peers reach only
+  the segments listed in `reach` - never the internet or the LAN - and their keys are generated and encrypted by
+  VALOR; viewing a peer config or a range login is audited.
+- **AI**: the chat builder's model only writes text. Its spec is validated, and building it still needs a person
+  to plan and approve. The provider key is encrypted, never shown again, and budgets limit tokens per user.
+- **Tests**: `tests/test_security.py` checks that every API route has a reviewed access level, that sign-in is
+  required everywhere, and that every state change needs the CSRF token, the same origin and a JSON body.
 - **Compliance claims**: results are "aligned with common CIS Level 1 themes", never "compliant" or "certified".
 
 ## Range specs, roles and baselines

@@ -74,6 +74,10 @@ class Host(_Strict):
     description: str = ""
     iso: str | None = Field(None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.iso$",
                             description="an ISO from the ISO library attached as a CD-ROM")
+    install: Literal["template", "iso"] = Field("template", description="clone the OS template (fast) or install "
+                                                "from the OS's installer ISO (Rocky/Alma, kickstart)")
+    nested: bool = Field(False, description="pass hardware virtualization through (CPU type host), e.g. to run "
+                                             "a hypervisor such as Proxmox VE inside the host")
 
 
 class Router(_Strict):
@@ -273,6 +277,10 @@ def canonical(spec: RangeSpec) -> str:
     for h in data["hosts"]:
         if h.get("iso") is None:
             h.pop("iso", None)
+        if h.get("install") == "template":
+            h.pop("install", None)
+        if h.get("nested") is False:
+            h.pop("nested", None)
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 

@@ -100,10 +100,13 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
         # Windows needs more than the Linux defaults; the catalog sets the floor (a template's disk can't shrink)
         memory = max(h.memory, int(entry.get("default_memory", 0))) if windows else h.memory
         disk = max(h.disk, int(entry.get("default_disk", 0))) if windows else h.disk
-        d = Desired(h.name, False, h.os, tpl(h.os), h.cores, memory, disk, nics, roles, h.segment,
+        from_iso = h.install == "iso"
+        d = Desired(h.name, False, h.os, 0 if from_iso else tpl(h.os), h.cores, memory, disk, nics, roles, h.segment,
                     str(h.address), family=family)
-        d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics,
-                **common, **({"family": family} if windows else {}), **({"iso": h.iso} if h.iso else {})}
+        d.hw = {"os": d.os, "template": "iso" if from_iso else d.template, "cores": d.cores, "memory": d.memory,
+                "disk": d.disk, "nics": nics, **common, **({"family": family} if windows else {}),
+                **({"iso": h.iso} if h.iso else {}), **({"install": "iso"} if from_iso else {}),
+                **({"nested": True} if h.nested else {})}
         d.hw_hash = _h(d.hw)
         d.conv_hash = _h({"hw": d.hw_hash, "roles": roles,
                           "baseline": (win_base.digest if win_base else None) if windows else base_digest,
@@ -127,7 +130,7 @@ def _classify(d: Desired, vm: VMState | None, current_spec: str = "") -> tuple[s
         reasons.append("disk cannot shrink")
     if reasons:
         return "replace", reasons
-    for key in ("cores", "memory", "disk", "display"):
+    for key in ("cores", "memory", "disk", "display", "nested"):
         if old.get(key) != d.hw.get(key):
             reasons.append(f"{key} {old.get(key)} -> {d.hw.get(key)}")
     if reasons:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 
 from .baseline import baseline_for, load_baseline
-from .isos import list_isos
+from .isos import installer_iso, list_isos
 from .cluster import load_catalog, range_vms, templates, vlans_in_use
 from .errors import ValorError
 from .pve import PVE
@@ -25,7 +25,18 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
 
     catalog = load_catalog(cfg)
     tpls = templates(pve, catalog)
-    used_os = {spec.router.os, *(h.os for h in spec.hosts)}
+    used_os = {spec.router.os, *(h.os for h in spec.hosts if h.install == "template")}
+    for hi, h in enumerate(spec.hosts):
+        if h.install != "iso":
+            continue
+        entry = catalog.get(h.os or "", {})
+        if not entry.get("install_iso"):
+            err(f"hosts.{hi}.install", f"install: iso is not available for {h.os}",
+                "Supported: " + ", ".join(k for k, v in catalog.items() if v.get("install_iso")) +
+                " (Windows always installs from its ISO when the template is built)")
+        elif installer_iso(pve, entry["install_iso"]) is None:
+            err(f"hosts.{hi}.install", f"the installer ISO for {h.os} is not in the ISO library",
+                f"Download '{entry['install_iso']}' from the catalog in the ISO library first.")
     for os_name in sorted(used_os):
         if os_name not in catalog:
             err("os", f"unknown OS '{os_name}'", f"Known: {', '.join(catalog)}")
@@ -70,6 +81,11 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
     except ValorError as e:
         err("baseline", e.message, e.hint)
 
+    if any(h.nested for h in spec.hosts):
+        flags = set(str(pve.node_status().get("cpuinfo", {}).get("flags", "")).split())
+        if not flags & {"vmx", "svm"}:
+            err("hosts", f"node {cfg.node} does not offer hardware virtualization (vmx/svm), so 'nested: true' "
+                         "cannot work", "Enable VT-x/AMD-V in the firmware and nested KVM on the node.")
     library = None
     for hi, h in enumerate(spec.hosts):
         family = catalog.get(h.os or "", {}).get("family")
