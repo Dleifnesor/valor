@@ -169,7 +169,9 @@ function colorMode(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function TopologyMap({ topology, tall }: { topology: Topo; tall?: boolean }) {
+export function TopologyMap({ topology, tall, onConsole }: {
+  topology: Topo; tall?: boolean; onConsole?: (host: string) => void;
+}) {
   const { nodes, edges } = useMemo(() => layout(topology), [topology]);
   const [selected, setSelected] = useState<TopoNode | null>(null);
   const key = useMemo(() => topology.nodes.map((n) => n.id + (n.change ?? "")).join("|"), [topology]);
@@ -234,6 +236,12 @@ export function TopologyMap({ topology, tall }: { topology: Topo; tall?: boolean
                 </>
               )}
             </dl>
+            {onConsole && selected.kind !== "segment" && selected.status === "running" && (
+              <button className="btn primary small" style={{ marginTop: 10 }}
+                onClick={() => onConsole(selected.id === "rtr" ? "rtr" : selected.id.replace(/^host:/, ""))}>
+                Open console
+              </button>
+            )}
           </div>
         </div>
       )}

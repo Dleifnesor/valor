@@ -296,3 +296,8 @@ tr.clickable { cursor: pointer; }
   border-radius: 6px; font: inherit; color: var(--text); cursor: pointer; }
 .menu-item:hover { background: var(--surface-2); }
 .menu-item.danger { color: var(--bad); }
+
+/* ---------------------------------------------------------------- consoles */
+.console-screen { flex: 1; min-height: 360px; background: #000; border-radius: 8px; overflow: hidden; position: relative; }
+.console-screen > div { width: 100%; height: 100%; }
+.console-screen .xterm { padding: 6px; height: 100%; }

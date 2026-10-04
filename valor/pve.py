@@ -59,6 +59,7 @@ class PVE:
         user, name = tok["token_id"].split("!", 1)
         self.api = ProxmoxAPI(cfg.api_host, port=cfg.api_port, user=user, token_name=name,
                               token_value=tok["secret"], verify_ssl=cfg.verify_ssl, timeout=90)
+        self._auth = f"PVEAPIToken={tok['token_id']}={tok['secret']}"
 
     # ------------------------------------------------------------------ helpers
     def call(self, what: str, fn, *a, **kw):
@@ -169,6 +170,29 @@ class PVE:
         upid = self.call(f"delete VM {vmid}", self.vm(vmid).delete, purge=1,
                          **{"destroy-unreferenced-disks": 1})
         self.wait_task(upid, f"delete VM {vmid}")
+
+    # ------------------------------------------------------------------ consoles (relayed by the web service)
+    def vncproxy(self, vmid: int) -> dict:
+        """A VNC console session: {port, ticket, user, ...}. The ticket doubles as the VNC password."""
+        return self.call(f"open VNC console of VM {vmid}", self.vm(vmid).vncproxy.post, websocket=1)
+
+    def termproxy(self, vmid: int, serial: str = "serial0") -> dict:
+        return self.call(f"open serial console of VM {vmid}", self.vm(vmid).termproxy.post, serial=serial)
+
+    def console_websocket(self, vmid: int, port: int | str, ticket: str) -> tuple[str, dict, object]:
+        """(URL, headers, SSL context) for connecting to a console session's websocket with the API token."""
+        import ssl
+        url = (f"wss://{self.cfg.api_host}:{self.cfg.api_port}/api2/json/nodes/{self.node}/qemu/{vmid}/vncwebsocket"
+               f"?port={port}&vncticket={urllib.parse.quote(ticket, safe='')}")
+        if isinstance(self.cfg.verify_ssl, str):
+            ctx = ssl.create_default_context(cafile=self.cfg.verify_ssl)
+        elif self.cfg.verify_ssl:
+            ctx = ssl.create_default_context()
+        else:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        return url, {"Authorization": self._auth}, ctx
 
     # ------------------------------------------------------------------ guest agent
     def agent_ping(self, vmid: int) -> bool:

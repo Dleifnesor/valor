@@ -110,7 +110,8 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
           ))}
         </div>
-        {tab === "Map" && <TopologyMap topology={data.topology} tall />}
+        {tab === "Map" && <TopologyMap topology={data.topology} tall
+          onConsole={canOperate ? (h) => go(`ranges/${name}/console/${h}/vnc`) : undefined} />}
         {tab === "Hosts" && <Hosts data={data} canOperate={canOperate} onError={setActionError} />}
         {tab === "Snapshots" && <SnapshotsTab range={name} canOperate={canOperate} />}
         {tab === "Tests" && <Tests data={data} />}

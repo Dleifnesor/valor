@@ -105,6 +105,7 @@ export function HostPower({ range, host, status, onError }: {
   const act = (action: string) => runJob(post(`/api/ranges/${range}/power`, { action, hosts: [host] }), onError);
   return (
     <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+      {status === "running" && <button className="btn small primary" onClick={() => go(`ranges/${range}/console/${host}/vnc`)}>Console</button>}
       {status !== "running" && <button className="btn small" onClick={() => act("start")}>Start</button>}
       {status === "running" && <button className="btn small" onClick={() => act("reboot")}>Reboot</button>}
       {status === "running" && <button className="btn small" onClick={() => act("shutdown")}>Shut down</button>}
