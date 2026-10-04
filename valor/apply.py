@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import tempfile
 import threading
 import time
@@ -82,8 +83,10 @@ def create_vm_from_iso(pve: PVE, spec: RangeSpec, d: Desired, vmid: int) -> int:
         raise ValorError("iso_missing", f"the installer ISO for {d.os} is not in the ISO library", host=d.host)
     seg = spec.segment(d.segment)
     pub = Path(cfg.ssh_public_key).read_text().strip() if Path(cfg.ssh_public_key).exists() else ""
+    mac = "BC:24:11:" + ":".join(f"{b:02X}" for b in secrets.token_bytes(3))     # Proxmox's prefix
     ks = kickstart.kickstart(d.host, d.address, seg.cidr.prefixlen, str(seg.gateway), list(cfg.nameservers),
-                             cfg.guest_user, pub)
+                             cfg.guest_user, pub, device=mac,
+                             repos=isos.load_catalog(cfg).get(entry["install_iso"], {}).get("kickstart_repos"))
     name = ks_iso_name(spec, d)
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / name
@@ -94,18 +97,23 @@ def create_vm_from_iso(pve: PVE, spec: RangeSpec, d: Desired, vmid: int) -> int:
                   cpu="host" if d.hw.get("nested") else pve.cpu_type(entry.get("cpu_min")), scsihw="virtio-scsi-single",
                   scsi0=f"{cfg.storage}:{d.disk},discard=on,ssd=1,iothread=1",
                   ide2=f"{inst['volid']},media=cdrom", ide3=f"{cfg.iso_storage}:iso/{name},media=cdrom",
-                  net0=f"virtio,bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""),
+                  net0=f"virtio={mac},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""),
                   boot="order=scsi0;ide2", agent="enabled=1", serial0="socket", vga=d.hw.get("display", "std"),
-                  onboot=0, tags=vm_tags(spec, d),
-                  description=render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
-    pve.power(vmid, "start")
-    return vmid
+                  onboot=0)
+    # tags and notes only once the VM is in the pool: on create Proxmox checks tag rights on /vms/<id> alone
+    pve.update_config(vmid, tags=vm_tags(spec, d),
+                      description=render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
+    return vmid                         # started once the router's build egress is open (the install downloads)
 
 
 def wait_iso_install(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, timeout: int = 3600) -> None:
     """Until the installed system (not the installer) answers, then remove the install media."""
     end = time.time() + timeout
+    pve.power(vmid, "start")
     while time.time() < end:
+        if pve.vm_status(vmid).get("status") != "running":      # e.g. the installer stopped on an error
+            raise ValorError("iso_install_failed", f"the {d.os} installer on {d.host} stopped before finishing",
+                             host=d.host, hint="Open the VM's console to see the installer's message.")
         if pve.agent_ping(vmid):
             try:
                 if pve.exec(vmid, ["test", "-f", kickstart.MARKER], timeout=30).ok:
@@ -240,9 +248,10 @@ def configure_wireguard(pve: PVE, spec: RangeSpec, vmid: int, uplink: str, steps
 
 
 def load_router_policy(pve: PVE, spec: RangeSpec, vmid: int, ifmap, uplink, build_egress: bool) -> None:
-    rules = render(spec, ifmap, uplink, build_egress=build_egress, spec_id=spec_hash(spec)[:12],
-                   reserved=pve.cfg.reserved_networks)
-    res = pve.script(vmid, router_script(rules), timeout=600)
+    def rules(build: bool) -> str:
+        return render(spec, ifmap, uplink, build_egress=build, spec_id=spec_hash(spec)[:12],
+                      reserved=pve.cfg.reserved_networks)
+    res = pve.script(vmid, router_script(rules(False), rules(True) if build_egress else None), timeout=600)
     if not res.ok:
         raise ValorError("router_policy_failed", "loading the router's nftables policy failed", host=ROUTER,
                          details=res.tail(), hint="Check the generated ruleset (valor plan --show-policy).")
@@ -445,11 +454,6 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
             for d in desired:
                 if d.family != "windows" and d not in from_iso:
                     pve.wait_agent(vmids[d.host], 300)
-        if from_iso:
-            with steps.step("wait for ISO installs"):
-                with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
-                    for f in as_completed([ex.submit(wait_iso_install, pve, spec, d, vmids[d.host]) for d in from_iso]):
-                        f.result()
         win = [d for d in desired if d.family == "windows"]
         if win:
             with steps.step("wait for Windows setup"):
@@ -477,6 +481,16 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         if hosts:
             with steps.step("router: temporary build egress", ROUTER):
                 load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=True)
+        if from_iso:
+            with steps.step("install from ISO (kickstart)"):
+                try:
+                    with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                        for f in as_completed([ex.submit(wait_iso_install, pve, spec, d, vmids[d.host])
+                                               for d in from_iso]):
+                            f.result()
+                except Exception:
+                    load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
+                    raise
 
             def converge(d: Desired):
                 vmid = vmids[d.host]

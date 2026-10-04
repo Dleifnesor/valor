@@ -9,29 +9,30 @@ images); it sets the static address, the guest agent and VALOR's SSH key, then r
 from __future__ import annotations
 
 import ipaddress
-import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
-from .errors import ValorError
+from . import iso9660
 
 MARKER = "/etc/valor-installed"          # written by %post: the installed system (not the installer) is up
 LABEL = "OEMDRV"
 
 
 def kickstart(host: str, address: str, prefix: int, gateway: str, nameservers: list[str], user: str,
-              ssh_key: str) -> str:
+              ssh_key: str, device: str = "link", repos: dict[str, str] | None = None) -> str:
+    """device: the NIC's MAC address (VALOR sets it when creating the VM), or 'link' for the first connected NIC.
+    repos: extra online repositories (name -> base URL), e.g. AppStream for packages the minimal ISO lacks; the
+    router's temporary build egress is open while the host installs."""
+    repo_lines = "".join(f"repo --name={n} --baseurl={u}\n" for n, u in (repos or {}).items())
     mask = str(ipaddress.IPv4Network(f"0.0.0.0/{prefix}").netmask)
     ns = ",".join(nameservers)
     key = ssh_key.strip().replace('"', "")
     return f"""# VALOR kickstart for {host} (generated; no secrets)
 text
 cdrom
-lang en_US.UTF-8
+{repo_lines}lang en_US.UTF-8
 keyboard us
 timezone UTC --utc
-network --device=link --bootproto=static --ip={address} --netmask={mask} --gateway={gateway} --nameserver={ns} --hostname={host} --activate --onboot=yes
+network --device={device} --bootproto=static --ip={address} --netmask={mask} --gateway={gateway} --nameserver={ns} --hostname={host} --activate --onboot=yes
 rootpw --lock
 user --name={user} --groups=wheel --lock
 sshkey --username={user} "{key}"
@@ -61,12 +62,5 @@ date -u +%FT%TZ > {MARKER}
 
 
 def build_iso(ks_text: str, out: Path) -> None:
-    tool = shutil.which("genisoimage") or shutil.which("mkisofs") or shutil.which("xorrisofs")
-    if not tool:
-        raise ValorError("iso_tool_missing", "genisoimage is not installed on the VALOR VM",
-                         hint="Upgrade VALOR (the installer adds it) or install genisoimage.")
-    with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "ks.cfg").write_text(ks_text)
-        r = subprocess.run([tool, "-quiet", "-J", "-r", "-V", LABEL, "-o", str(out), d], capture_output=True, text=True)
-        if r.returncode:
-            raise ValorError("iso_build_failed", f"could not build the kickstart ISO: {r.stderr.strip()[-300:]}")
+    """The OEMDRV CD with ks.cfg, written in pure Python (the worker's sandbox rightly blocks ISO tools)."""
+    out.write_bytes(iso9660.build({"ks.cfg": ks_text.encode()}, LABEL))

@@ -40,6 +40,7 @@ checksums_url = "https://download.rockylinux.org/pub/rocky/10/isos/x86_64/CHECKS
 base_url = "https://download.rockylinux.org/pub/rocky/10/isos/x86_64/"
 pattern = 'Rocky-10\.\d+-x86_64-minimal\.iso'
 algorithm = "sha256"
+kickstart_repos = { AppStream = "https://dl.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/" }   # qemu-guest-agent
 
 ["alma-10-minimal"]
 title = "AlmaLinux 10 (minimal)"
@@ -50,6 +51,7 @@ checksums_url = "https://repo.almalinux.org/almalinux/10/isos/x86_64/CHECKSUM"
 base_url = "https://repo.almalinux.org/almalinux/10/isos/x86_64/"
 pattern = 'AlmaLinux-10\.\d+-x86_64-minimal\.iso'
 algorithm = "sha256"
+kickstart_repos = { AppStream = "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/" }
 
 ["kali-installer"]
 title = "Kali Linux installer"

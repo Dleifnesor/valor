@@ -116,8 +116,12 @@ hosts:
     assert rk.hw["install"] == "iso" and rk.hw["template"] == "iso" and "install" not in rc.hw
     ks = kickstart.kickstart("rk", "10.67.0.10", 24, "10.67.0.1", ["1.1.1.1", "9.9.9.9"], "valor",
                              'ssh-ed25519 AAAA valor-engine')
-    assert "--ip=10.67.0.10 --netmask=255.255.255.0 --gateway=10.67.0.1 --nameserver=1.1.1.1,9.9.9.9" in ks
+    assert "--device=link --bootproto=static --ip=10.67.0.10 --netmask=255.255.255.0 --gateway=10.67.0.1 --nameserver=1.1.1.1,9.9.9.9" in ks
     assert "rootpw --lock" in ks and "qemu-guest-agent" in ks and kickstart.MARKER in ks and "typepermissive" in ks
+    ks2 = kickstart.kickstart("rk", "10.67.0.10", 24, "10.67.0.1", ["1.1.1.1"], "valor", "k", device="BC:24:11:00:00:01",
+                              repos={"AppStream": "https://dl.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/"})
+    assert "--device=BC:24:11:00:00:01" in ks2
+    assert "repo --name=AppStream --baseurl=https://dl.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/" in ks2
     assert "password" not in ks.lower().replace("--lock", "")                  # no secrets in the kickstart
     out = tmp_path / "ks.iso"
     kickstart.build_iso(ks, out)
@@ -142,3 +146,20 @@ hosts:
     vm = VMState(vmid=5200, name="nestlab-pve", status="running", tags=[], meta={"hw_spec": a.hw, "conv": a.conv_hash})
     action, reasons = _classify(b, vm)
     assert action == "update" and "reboot required" in reasons
+
+
+def test_iso9660_writer(tmp_path):
+    import shutil
+    import subprocess
+    from valor import iso9660
+    img = iso9660.build({"ks.cfg": b"a" * 5000, "readme.txt": b"hi"}, "OEMDRV")
+    assert len(img) % 2048 == 0 and img[32769:32774] == b"CD001" and img[32808:32814] == b"OEMDRV"
+    with pytest.raises(ValueError):
+        iso9660.build({"much-too-long-name.cfg": b""}, "OEMDRV")
+    if shutil.which("isoinfo"):
+        p = tmp_path / "x.iso"
+        p.write_bytes(img)
+        listing = subprocess.run(["isoinfo", "-l", "-i", str(p)], capture_output=True, text=True).stdout
+        assert "KS.CFG;1" in listing and "README.TXT;1" in listing
+        data = subprocess.run(["isoinfo", "-x", "/KS.CFG;1", "-i", str(p)], capture_output=True).stdout
+        assert data == b"a" * 5000

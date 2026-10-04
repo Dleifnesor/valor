@@ -17,9 +17,19 @@ from .sh import CommandError, pvesh, run
 ROLLBACK_SECONDS = 300
 
 
+def _norm(text: str) -> list[str]:
+    """Meaningful lines, compared without indentation, spacing or case (Proxmox rewrites hand-edited files with tabs
+    and drops free comments; neither is a change to the network)."""
+    out = []
+    for line in text.splitlines():
+        line = " ".join(line.split())
+        if line and not line.startswith("#"):
+            out.append(line.lower())
+    return out
+
+
 def _new_lines(before: str, after: str) -> tuple[list[str], list[str]]:
-    b = [l.rstrip() for l in before.splitlines() if l.strip()]
-    a = [l.rstrip() for l in after.splitlines() if l.strip()]
+    b, a = _norm(before), _norm(after)
     removed = [l for l in b if l not in a]
     added = [l for l in a if l not in b]
     return removed, added
