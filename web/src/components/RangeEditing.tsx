@@ -5,6 +5,7 @@ import { Topology, TopoNode } from "../types";
 import { ErrorBox, Loading, Modal } from "./ui";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
+import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
 
 // Editing a built range on its map. Map controls and the chat panel both change the range's draft; the draft is
 // drawn in the plan colors and built only through "Review plan" -> approve.
@@ -20,7 +21,8 @@ const SOURCE: Record<string, string> = { map: "map", yaml: "YAML", "chat:plan": 
 export function RangeMapTab({ name, canOperate, onConsole }: { name: string; canOperate: boolean; onConsole?: (host: string) => void }) {
   const [view, setView] = useState<View | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [modal, setModal] = useState<null | { kind: "addvm"; segment?: string } | { kind: "service" | "edit"; host: TopoNode } | { kind: "yaml" }>(null);
+  const [modal, setModal] = useState<null | { kind: "addvm"; segment?: string } | { kind: "service" | "edit"; host: TopoNode }
+    | { kind: "yaml" } | { kind: "addseg" } | { kind: "editseg"; seg: TopoNode } | { kind: "rule"; from?: string }>(null);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [planning, setPlanning] = useState(false);
   const [chatOpen, setChatOpen] = useState(() => { try { return localStorage.getItem("valor-range-chat") === "1"; } catch { return false; } });
@@ -48,10 +50,22 @@ export function RangeMapTab({ name, canOperate, onConsole }: { name: string; can
   if (!view) return err ? <div className="card-body"><ErrorBox error={err} /></div> : <Loading />;
   const segments = view.topology.nodes.filter((n) => n.kind === "segment").map((n) => n.label);
   const d = view.draft;
+  const vpn = view.topology.nodes.find((n) => n.kind === "vpn");
+  const vpnReaches = (seg: string) => !!vpn?.reach?.includes(seg);
+  const removeSegment = (seg: TopoNode, close: () => void) => {
+    const inside = view.topology.nodes.filter((n) => n.parent === seg.id && n.change !== "remove").map((n) => n.label);
+    if (inside.length) {
+      if (!window.confirm(`${seg.label} has ${inside.length} VM(s): ${inside.join(", ")}. Remove the segment AND these VMs? They are deleted when the plan is approved.`)) return;
+    } else if (!window.confirm(`Remove segment ${seg.label}? The router is rebuilt when the plan is approved.`)) return;
+    edit([{ op: "remove_segment", name: seg.label, with_hosts: inside.length > 0 }]);
+    close();
+  };
 
   const overlay = canOperate ? (
     <div className="map-tools">
       <button className="btn small" onClick={() => setModal({ kind: "addvm" })}>+ Add VM</button>
+      <button className="btn small" onClick={() => setModal({ kind: "addseg" })}>+ Add segment</button>
+      <button className="btn small" onClick={() => setModal({ kind: "rule" })}>+ Allow traffic</button>
       <button className={`btn small${chatOpen ? " primary" : ""}`} onClick={() => setChatOpen(!chatOpen)} aria-pressed={chatOpen}>Chat</button>
     </div>
   ) : null;
@@ -59,7 +73,26 @@ export function RangeMapTab({ name, canOperate, onConsole }: { name: string; can
   const nodeActions = (n: TopoNode, close: () => void) => {
     if (!canOperate) return null;
     if (n.kind === "segment") {
-      return <div className="node-actions"><button className="btn small" onClick={() => { setModal({ kind: "addvm", segment: n.label }); close(); }}>+ Add VM here</button></div>;
+      const rules = rulesOf(view.topology, n.label);
+      return (
+        <div className="node-actions">
+          <div className="small muted" style={{ marginBottom: 4 }}>Traffic rules</div>
+          {rules.length === 0 && <div className="small muted">None: blocked except inside the segment{n.internet ? " and to the internet" : ""}.</div>}
+          {rules.map((r) => (
+            <div className="rule-row" key={r.edge.id}>
+              <span className="mono small">{r.from} → {r.to}</span><span className="badge">{r.edge.label}</span><span className="grow" />
+              <button className="chip-x" aria-label="Remove rule" title="Remove rule"
+                onClick={() => edit([{ op: "remove_rule", index: r.index, from: r.from, to: r.to }])}>×</button>
+            </div>
+          ))}
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            <button className="btn small" onClick={() => { setModal({ kind: "addvm", segment: n.label }); close(); }}>+ Add VM here</button>
+            <button className="btn small" onClick={() => { setModal({ kind: "rule", from: n.label }); close(); }}>+ Allow traffic</button>
+            <button className="btn small" onClick={() => { setModal({ kind: "editseg", seg: n }); close(); }}>Edit segment</button>
+            <button className="btn small danger" onClick={() => removeSegment(n, close)}>Remove</button>
+          </div>
+        </div>
+      );
     }
     if (n.kind !== "host" || n.change === "remove") return null;
     const host = n.id.slice(5);
@@ -104,7 +137,13 @@ export function RangeMapTab({ name, canOperate, onConsole }: { name: string; can
       <ErrorBox error={err} />
       <div className={`map-layout${chatOpen ? " with-chat" : ""}`}>
         <div className="map-main">
-          <TopologyMap topology={view.topology} tall onConsole={onConsole} overlay={overlay} nodeActions={nodeActions} />
+          <TopologyMap topology={view.topology} tall onConsole={onConsole} overlay={overlay} nodeActions={nodeActions}
+            edgeActions={canOperate ? (e, close) => {
+              const index = Number(e.id.split(":")[1]);
+              const from = e.source.replace(/^(host|seg):/, ""), to = e.target.replace(/^(host|seg):/, "");
+              return <div className="node-actions"><button className="btn small danger"
+                onClick={() => { edit([{ op: "remove_rule", index, from, to }]); close(); }}>Remove this rule</button></div>;
+            } : undefined} />
         </div>
         {chatOpen && canOperate && (
           <RangeChat name={name} onView={(v) => setView(v)} onReview={reviewPlan} onClose={() => setChatOpen(false)} />
@@ -122,6 +161,12 @@ export function RangeMapTab({ name, canOperate, onConsole }: { name: string; can
         <EditVmModal host={modal.host} catalog={catalog.data} onClose={() => setModal(null)}
           onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />
       )}
+      {modal?.kind === "addseg" && <AddSegmentModal name={name} topo={view.topology} hasVpn={!!vpn} onClose={() => setModal(null)}
+        onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />}
+      {modal?.kind === "editseg" && <EditSegmentModal seg={modal.seg} hasVpn={!!vpn} vpnReaches={vpnReaches(modal.seg.label)}
+        onClose={() => setModal(null)} onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />}
+      {modal?.kind === "rule" && <RuleModal topo={view.topology} from={modal.from} onClose={() => setModal(null)}
+        onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />}
       {modal?.kind === "yaml" && d && <YamlModal name={name} yaml={d.yaml} onClose={() => setModal(null)} onSaved={(v) => { setView(v); setModal(null); }} />}
       {plan && <PlanModal name={name} res={plan} draft onClose={() => { setPlan(null); load(); }} />}
     </>
