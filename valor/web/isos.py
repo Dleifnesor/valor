@@ -124,28 +124,35 @@ def tasks(request: Request, s: Session = Depends(require("viewer"))) -> dict:
 @router.post("/upload")
 async def upload(request: Request, filename: str = Query(max_length=200),
                  checksum: str | None = Query(default=None, max_length=128, pattern="^[0-9a-fA-F]+$"),
-                 algorithm: str | None = Query(default=None, pattern="^(sha256|sha512)$"),
+                 algorithm: str | None = Query(default=None, pattern="^(md5|sha1|sha224|sha256|sha384|sha512)$"),
                  s: Session = Depends(require("operator"))) -> dict:
     """The request body is the raw ISO (streamed to disk, hashed on the way, then streamed to Proxmox)."""
     cfg = _cfg(request)
     isos.check_filename(filename)
     if not cfg.iso_storage:
         raise ApiError(400, "no_iso_storage", "No ISO storage is configured.")
+    if checksum:                            # before receiving gigabytes: does the checksum fit its algorithm?
+        try:
+            algorithm = isos.check_checksum(checksum, algorithm)
+        except ValorError as e:
+            raise ApiError(400, e.code, e.message)
     size = int(request.headers.get("content-length") or 0)
     tmpdir = Path(cfg.state_dir) / UPLOAD_DIR
     tmpdir.mkdir(parents=True, exist_ok=True)
     if size and shutil.disk_usage(tmpdir).free < size + 2 * 2**30:
         raise ApiError(507, "no_space", "Not enough free space in the VALOR VM for this upload.")
-    h256, h512 = hashlib.sha256(), hashlib.sha512()
+    h256 = hashlib.sha256()                  # Proxmox gets the SHA-256; the checksum may use another algorithm
+    hx = hashlib.new(algorithm) if checksum and algorithm != "sha256" else None
     fd, path = tempfile.mkstemp(dir=tmpdir, suffix=".iso")
     try:
         with os.fdopen(fd, "wb") as fh:
             async for chunk in request.stream():
                 fh.write(chunk)
                 h256.update(chunk)
-                h512.update(chunk)
+                if hx is not None:
+                    hx.update(chunk)
         if checksum:
-            got = (h256 if algorithm == "sha256" else h512).hexdigest()
+            got = (hx or h256).hexdigest()
             if got.lower() != checksum.lower():
                 raise ApiError(400, "checksum_mismatch", "The uploaded file does not match the checksum you gave.")
         pve = PVE(cfg)
@@ -154,7 +161,7 @@ async def upload(request: Request, filename: str = Query(max_length=200),
     finally:
         Path(path).unlink(missing_ok=True)
     _remember(s, {"upid": upid, "kind": "upload", "filename": filename, "user": s.username, "started": time.time(),
-                  "verified": "checksum" if checksum else "uploaded", "sha256": h256.hexdigest()})
+                  "verified": f"checksum ({algorithm})" if checksum else "uploaded", "sha256": h256.hexdigest()})
     s.audit("iso.upload", target=filename, detail={"sha256": h256.hexdigest(), "bytes": size})
     return {"ok": True, "filename": filename, "sha256": h256.hexdigest()}
 

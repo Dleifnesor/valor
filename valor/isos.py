@@ -16,6 +16,18 @@ from .errors import ValorError
 
 FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+=-]{0,200}\.iso$")
 ALGORITHMS = ("md5", "sha1", "sha224", "sha256", "sha384", "sha512")
+HEX_LENGTH = {"md5": 32, "sha1": 40, "sha224": 56, "sha256": 64, "sha384": 96, "sha512": 128}
+
+
+def check_checksum(checksum: str, algorithm: str | None) -> str:
+    """The algorithm for a hex checksum (given, or guessed from its length); raises if they don't fit together."""
+    algorithm = algorithm or next((a for a, n in HEX_LENGTH.items() if n == len(checksum)), None)
+    if algorithm not in HEX_LENGTH:
+        raise ValorError("invalid_checksum", f"a {len(checksum)}-character checksum matches no supported algorithm")
+    if len(checksum) != HEX_LENGTH[algorithm] or not re.fullmatch(r"[0-9a-fA-F]+", checksum):
+        raise ValorError("invalid_checksum", f"a {algorithm} checksum has {HEX_LENGTH[algorithm]} hex characters, "
+                                             f"this one has {len(checksum)}")
+    return algorithm
 
 
 def catalog_file(cfg) -> Path:
@@ -134,8 +146,8 @@ def download(pve, url: str, filename: str, checksum: str | None = None, algorith
         raise ValorError("no_iso_storage", "no ISO storage configured", hint="Re-run the installer (--upgrade).")
     if not url.startswith("https://"):
         raise ValorError("insecure_url", "downloads must use https://")
-    if checksum and algorithm not in ALGORITHMS:
-        raise ValorError("invalid_checksum", f"checksum algorithm must be one of {ALGORITHMS}")
+    if checksum:
+        algorithm = check_checksum(checksum, algorithm)
     return pve.download_url(pve.cfg.iso_storage, url, check_filename(filename), checksum, algorithm)
 
 
