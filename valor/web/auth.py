@@ -5,13 +5,13 @@ from __future__ import annotations
 import sqlite3
 import time
 
-import segno
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import __version__
 from . import db, ldapauth, notify
-from .core import ApiError, Session, any_session, client_ip, create_session, end_session, get_conn, require, stage, user_out
+from .core import (ApiError, Session, any_session, client_ip, create_session, end_session, get_conn, qr_svg, require,
+                   stage, user_out)
 from .security import (b32, hash_password, hash_token, new_recovery_codes, new_totp_secret, normalize_recovery_code,
                        otpauth_uri, password_problem, verify_password, verify_totp)
 
@@ -169,7 +169,7 @@ def enroll_start(request: Request, s: Session = Depends(stage("enroll"))) -> dic
     s.conn.execute("UPDATE sessions SET pending_totp = ? WHERE id_hash = ?",
                    (box.seal(secret, f"pending:{s.id_hash}"), s.id_hash))
     uri = otpauth_uri(secret, s.username, _issuer(request))
-    svg = segno.make(uri, error="m").svg_inline(scale=5, border=2, dark="#111111", light="#ffffff")
+    svg = qr_svg(uri)
     return {"secret": b32(secret), "uri": uri, "qr_svg": svg, "issuer": _issuer(request)}
 
 
