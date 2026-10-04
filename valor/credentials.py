@@ -18,8 +18,12 @@ ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"       # no 0/o, 1/l/i: easy to type
 
 
 def generate() -> str:
-    raw = "".join(secrets.choice(ALPHABET) for _ in range(20))
-    return "-".join(raw[i:i + 5] for i in range(0, 20, 5))
+    """20 random characters in groups of five. Always contains a letter and a digit, so with the dashes it meets
+    Windows' complexity rule (three of: lower, upper, digit, symbol) for the Administrator account too."""
+    while True:
+        raw = "".join(secrets.choice(ALPHABET) for _ in range(20))
+        if any(c.isdigit() for c in raw) and any(c.isalpha() for c in raw):
+            return "-".join(raw[i:i + 5] for i in range(0, 20, 5))
 
 
 def _box(cfg) -> Box | None:
@@ -78,3 +82,36 @@ def rotate(cfg, name: str) -> dict | None:
 
 def forget(cfg, name: str) -> None:
     _path(cfg, name).unlink(missing_ok=True)
+
+
+DOMAIN_ROLES = ("ad-dc", "ad-dc-replica", "ad-member")
+
+
+def accounts(spec, catalog: dict, guest_user: str) -> list[dict]:
+    """Where the range password signs in: Linux hosts as the guest user, Windows hosts as the local Administrator
+    and, once in a domain, as DOMAIN\\Administrator (the domain's Administrator gets the same password)."""
+    from .spec import ROUTER
+
+    linux, local, domains = [ROUTER], [], {}
+    netbios = {}
+    for h in spec.hosts:
+        for ref in h.roles:
+            if ref.name == "ad-dc" and ref.params.get("domain"):
+                d = str(ref.params["domain"]).lower()
+                netbios[d] = str(ref.params.get("netbios") or d.split(".")[0]).upper()
+    for h in spec.hosts:
+        if catalog.get(h.os, {}).get("family") != "windows":
+            linux.append(h.name)
+            continue
+        refs = [r for r in h.roles if r.name in DOMAIN_ROLES and r.params.get("domain")]
+        if not any(r.name in ("ad-dc", "ad-dc-replica") for r in refs):
+            local.append(h.name)                    # domain controllers have no local accounts
+        for r in refs:
+            domains.setdefault(str(r.params["domain"]).lower(), []).append(h.name)
+    out = [{"username": guest_user, "hosts": linux, "kind": "linux"}]
+    if local:
+        out.append({"username": "Administrator", "hosts": local, "kind": "windows"})
+    for d, hosts in sorted(domains.items()):
+        out.append({"username": f"{netbios.get(d, d.split('.')[0].upper())}\\Administrator", "hosts": hosts,
+                    "kind": "domain", "domain": d})
+    return out

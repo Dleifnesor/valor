@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ApiError, del, get, post } from "../api";
 import { go, useApi, when } from "../hooks";
 import { ErrorBox, Loading, Modal } from "./ui";
@@ -14,7 +14,10 @@ export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError)
   }
 }
 
-interface Login { username: string; password: string; version: number; created: string }
+interface Account { username: string; hosts: string[]; kind: "linux" | "windows" | "domain"; domain?: string }
+interface Login { username: string; password: string; version: number; created: string; accounts?: Account[] }
+
+const KIND: Record<Account["kind"], string> = { linux: "Linux", windows: "Windows, local account", domain: "Active Directory" };
 
 export function LoginModal({ range, onClose }: { range: string; onClose: () => void }) {
   const [login, setLogin] = useState<Login | null>(null);
@@ -36,14 +39,22 @@ export function LoginModal({ range, onClose }: { range: string; onClose: () => v
       {login && (
         <>
           <div className="muted">
-            Sign in on any VM console of this range (Proxmox console or VALOR's browser console). SSH accepts keys
-            only. Viewing this login is recorded in the audit log.
+            One password for every VM console of this range (Proxmox console or VALOR's browser console). SSH accepts
+            keys only. Viewing this login is recorded in the audit log.
           </div>
           <dl className="kv">
-            <dt>Username</dt><dd className="mono">{login.username}</dd>
+            {(login.accounts ?? [{ username: login.username, hosts: [], kind: "linux" as const }]).map((a) => (
+              <Fragment key={a.username}>
+                <dt>{a.kind === "linux" ? "Username" : KIND[a.kind]}</dt>
+                <dd>
+                  <span className="mono">{a.username}</span>
+                  {a.hosts.length > 0 && <span className="muted"> on {a.hosts.join(", ")}</span>}
+                </dd>
+              </Fragment>
+            ))}
             <dt>Password</dt>
             <dd className="row" style={{ gap: 8 }}>
-              <span className="mono" style={{ fontSize: 15, letterSpacing: "0.04em" }}>{shown ? login.password : "•".repeat(login.password.length)}</span>
+              <span className="mono" style={{ fontSize: 15, letterSpacing: "0.04em" }}>{shown ? login.password : "•".repeat(12)}</span>
               <button className="btn small" onClick={() => setShown(!shown)}>{shown ? "Hide" : "Show"}</button>
               <button className="btn small" onClick={() => navigator.clipboard?.writeText(login.password)}>Copy</button>
             </dd>

@@ -3,7 +3,7 @@ import { ApiError } from "../api";
 
 type IconName =
   | "dashboard" | "ranges" | "jobs" | "users" | "audit" | "settings" | "bell" | "logout" | "menu" | "plus"
-  | "refresh" | "shield" | "account" | "theme";
+  | "refresh" | "shield" | "account" | "theme" | "disc" | "copy" | "chat";
 
 const PATHS: Record<IconName, string> = {
   dashboard: "M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z",
@@ -20,6 +20,9 @@ const PATHS: Record<IconName, string> = {
   shield: "M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z",
   account: "M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-5 0-9 2.5-9 6v2h18v-2c0-3.5-4-6-9-6z",
   theme: "M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z",
+  disc: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  copy: "M8 8h12v12H8zM4 16V4h12",
+  chat: "M4 5h16v11H9l-5 4z",
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

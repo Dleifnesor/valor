@@ -1,0 +1,102 @@
+# VALOR ISO catalog: official installer media VALOR can download into the cluster's ISO storage in one click.
+#
+# A catalog entry either names a checksum list (the newest file matching `pattern` is picked, so point releases
+# are followed automatically) or a fixed `url`. Where the publisher signs its checksum list, the signature is
+# checked against the key shipped in templates/keys/ (fingerprint pinned) before anything is downloaded.
+# Proxmox itself verifies the downloaded file against the checksum.
+#
+# kind: linux | windows | drivers. install: what VALOR can install unattended from it (see the range spec).
+
+["ubuntu-24.04-server"]
+title = "Ubuntu Server 24.04 LTS"
+kind = "linux"
+family = "debian"
+checksums_url = "https://releases.ubuntu.com/24.04/SHA256SUMS"
+checksums_sig_url = "https://releases.ubuntu.com/24.04/SHA256SUMS.gpg"
+signing_key_file = "keys/ubuntu-cdimage.asc"
+signing_key_fingerprint = "843938DF228D22F7B3742BC0D94AA3F0EFE21092"
+base_url = "https://releases.ubuntu.com/24.04/"
+pattern = 'ubuntu-24\.04(\.\d+)?-live-server-amd64\.iso'
+algorithm = "sha256"
+
+["debian-13-netinst"]
+title = "Debian 13 (trixie) netinst"
+kind = "linux"
+family = "debian"
+checksums_url = "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/SHA512SUMS"
+checksums_sig_url = "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/SHA512SUMS.sign"
+signing_key_file = "keys/debian-cdimage.asc"
+signing_key_fingerprint = "DF9B9C49EAA9298432589D76DA87E80D6294BE9B"
+base_url = "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/"
+pattern = 'debian-13\.\d+\.\d+-amd64-netinst\.iso'
+algorithm = "sha512"
+
+["rocky-10-minimal"]
+title = "Rocky Linux 10 (minimal)"
+kind = "linux"
+family = "rhel"
+install = "kickstart"
+checksums_url = "https://download.rockylinux.org/pub/rocky/10/isos/x86_64/CHECKSUM"
+base_url = "https://download.rockylinux.org/pub/rocky/10/isos/x86_64/"
+pattern = 'Rocky-10\.\d+-x86_64-minimal\.iso'
+algorithm = "sha256"
+kickstart_repos = { AppStream = "https://dl.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/" }   # qemu-guest-agent
+
+["alma-10-minimal"]
+title = "AlmaLinux 10 (minimal)"
+kind = "linux"
+family = "rhel"
+install = "kickstart"
+checksums_url = "https://repo.almalinux.org/almalinux/10/isos/x86_64/CHECKSUM"
+base_url = "https://repo.almalinux.org/almalinux/10/isos/x86_64/"
+pattern = 'AlmaLinux-10\.\d+-x86_64-minimal\.iso'
+algorithm = "sha256"
+kickstart_repos = { AppStream = "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/" }
+
+["kali-installer"]
+title = "Kali Linux installer"
+kind = "linux"
+family = "debian"
+checksums_url = "https://cdimage.kali.org/current/SHA256SUMS"
+checksums_sig_url = "https://cdimage.kali.org/current/SHA256SUMS.gpg"
+signing_key_file = "keys/kali-archive.asc"
+signing_key_fingerprint = "827C8569F2518CC677FECA1AED65462EC8D5E4C5"
+base_url = "https://cdimage.kali.org/current/"
+pattern = 'kali-linux-\d+\.\d+[a-z]?-installer-amd64\.iso'
+algorithm = "sha256"
+
+["virtio-win"]
+title = "VirtIO drivers + QEMU guest agent for Windows"
+kind = "drivers"
+url = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso"
+filename = "virtio-win-0.1.302.iso"
+sha256 = "303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d"   # pinned: the project publishes no ISO checksum
+
+["windows-server-2025-eval"]
+title = "Windows Server 2025 (180-day evaluation; Core and Desktop Experience)"
+kind = "windows"
+family = "windows"
+install = "unattend"
+url = "https://go.microsoft.com/fwlink/?linkid=2293312&clcid=0x409&culture=en-us&country=us"
+filename = "windows-server-2025-eval-en-us.iso"
+note = "Microsoft publishes no checksum for evaluation media; VALOR records the SHA-256 after the download."
+
+["windows-server-2022-eval"]
+title = "Windows Server 2022 (180-day evaluation; Core and Desktop Experience)"
+kind = "windows"
+family = "windows"
+install = "unattend"
+url = "https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US"
+filename = "windows-server-2022-eval-en-us.iso"
+note = "Microsoft publishes no checksum for evaluation media; VALOR records the SHA-256 after the download."
+
+["windows-11-enterprise-eval"]
+# Microsoft's Evaluation Center link for the current release (26H2 in Oct 2026). Older links serve builds whose
+# evaluation has already expired (such a PC shuts down every hour), so keep this link current.
+title = "Windows 11 Enterprise, current release (90-day evaluation)"
+kind = "windows"
+family = "windows"
+install = "unattend"
+url = "https://go.microsoft.com/fwlink/?linkid=2382600&clcid=0x409&culture=en-us&country=us"
+filename = "windows-11-enterprise-eval-x64-en-us.iso"
+note = "Microsoft publishes no checksum for evaluation media; VALOR records the SHA-256 after the download."

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import secrets
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import credentials
-from .baseline import bundle, load_baseline, parse_results
-from .cluster import range_tag, range_vms, render_description, template_ids
+from . import credentials, isos, kickstart, windows, wireguard
+from .baseline import baseline_for, bundle, load_baseline, parse_results
+from .cluster import load_catalog, range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
 from .netpolicy import render, router_script
 from .plan import Desired, desired_state, make_plan
@@ -21,6 +23,7 @@ from .spec import ROUTER, RangeSpec, spec_hash
 from .validate import validate_cluster
 
 TEMPLATE_DISK_GIB = 8
+WINDOWS_TEMPLATE_DISK_GIB = 64
 PARALLEL_HOSTS = 4
 
 
@@ -67,16 +70,98 @@ def vm_meta(spec: RangeSpec, d: Desired, conv: str | None) -> dict:
             "spec": spec_hash(spec), "hw": d.hw_hash, "hw_spec": d.hw, "conv": conv, "applied": now()}
 
 
+def ks_iso_name(spec: RangeSpec, d: Desired) -> str:
+    return f"valor-ks-{spec.name}-{d.host}.iso"
+
+
+def create_vm_from_iso(pve: PVE, spec: RangeSpec, d: Desired, vmid: int) -> int:
+    """Empty VM + installer ISO + OEMDRV kickstart ISO (see kickstart.py); the install runs on first boot."""
+    cfg = pve.cfg
+    entry = load_catalog(cfg)[d.os]
+    inst = isos.installer_iso(pve, entry["install_iso"])
+    if inst is None:
+        raise ValorError("iso_missing", f"the installer ISO for {d.os} is not in the ISO library", host=d.host)
+    seg = spec.segment(d.segment)
+    pub = Path(cfg.ssh_public_key).read_text().strip() if Path(cfg.ssh_public_key).exists() else ""
+    mac = "BC:24:11:" + ":".join(f"{b:02X}" for b in secrets.token_bytes(3))     # Proxmox's prefix
+    ks = kickstart.kickstart(d.host, d.address, seg.cidr.prefixlen, str(seg.gateway), list(cfg.nameservers),
+                             cfg.guest_user, pub, device=mac,
+                             repos=isos.load_catalog(cfg).get(entry["install_iso"], {}).get("kickstart_repos"))
+    name = ks_iso_name(spec, d)
+    try:                                    # a CD left by an interrupted install of this host
+        pve.delete_volume(cfg.iso_storage, f"{cfg.iso_storage}:iso/{name}")
+    except ValorError:
+        pass
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        kickstart.build_iso(ks, path)
+        pve.wait_task(pve.upload_iso(cfg.iso_storage, str(path), name), f"upload {name}")
+    nic = d.nics[0]
+    pve.create_vm(vmid, name=f"{spec.name}-{d.host}", ostype="l26", cores=d.cores, memory=d.memory,
+                  cpu="host" if d.hw.get("nested") else pve.cpu_type(entry.get("cpu_min")), scsihw="virtio-scsi-single",
+                  scsi0=f"{cfg.storage}:{d.disk},discard=on,ssd=1,iothread=1",
+                  ide2=f"{inst['volid']},media=cdrom", ide3=f"{cfg.iso_storage}:iso/{name},media=cdrom",
+                  net0=f"virtio={mac},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""),
+                  boot="order=scsi0;ide2", agent="enabled=1", serial0="socket", vga=d.hw.get("display", "std"),
+                  onboot=0)
+    # tags and notes only once the VM is in the pool: on create Proxmox checks tag rights on /vms/<id> alone
+    pve.update_config(vmid, tags=vm_tags(spec, d),
+                      description=render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
+    return vmid                         # started once the router's build egress is open (the install downloads)
+
+
+def wait_iso_install(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, timeout: int = 3600) -> None:
+    """Until the installed system (not the installer) answers, then remove the install media."""
+    end = time.time() + timeout
+    pve.power(vmid, "start")
+    while time.time() < end:
+        if pve.vm_status(vmid).get("status") != "running":      # e.g. the installer stopped on an error
+            raise ValorError("iso_install_failed", f"the {d.os} installer on {d.host} stopped before finishing",
+                             host=d.host, hint="Open the VM's console to see the installer's message.")
+        if pve.agent_ping(vmid):
+            try:
+                if pve.exec(vmid, ["test", "-f", kickstart.MARKER], timeout=30).ok:
+                    break
+            except ValorError:
+                pass
+        time.sleep(15)
+    else:
+        raise ValorError("iso_install_timeout", f"installing {d.os} on {d.host} did not finish within "
+                         f"{timeout // 60} minutes", host=d.host, hint="Open the VM's console to see where it stopped.")
+    pve.update_config(vmid, ide2="none,media=cdrom", ide3="none,media=cdrom")
+    try:
+        pve.delete_volume(pve.cfg.iso_storage, f"{pve.cfg.iso_storage}:iso/{ks_iso_name(spec, d)}")
+    except ValorError:
+        pass                                    # a leftover kickstart ISO holds no secrets
+
+
 def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     cfg = pve.cfg
     vmid = pve.allocate_vmid(taken)
     taken.add(vmid)
+    if d.hw.get("install") == "iso":
+        return create_vm_from_iso(pve, spec, d, vmid)
     name = f"{spec.name}-{d.host}"
     pve.clone(d.template, vmid, name, render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
+    if d.family == "windows":
+        nic = d.nics[0]
+        # localtime=0: the hardware clock runs in UTC like Linux VMs (Proxmox defaults Windows to the host's local
+        # time, which with Windows' UTC zone puts the clock hours off)
+        pve.update_config(vmid, cores=d.cores, memory=d.memory, onboot=0, tags=vm_tags(spec, d), vga="std", localtime=0,
+                          net0=f"{nic.get('model', 'e1000e')},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""))
+        if d.hw.get("nested"):
+            pve.update_config(vmid, cpu="host")
+        if d.disk > WINDOWS_TEMPLATE_DISK_GIB:
+            pve.resize(vmid, "sata0", d.disk)
+        if d.hw.get("iso"):
+            attach_iso(pve, vmid, d.hw["iso"])
+        pve.power(vmid, "start")
+        return vmid
     params: dict = {
         "cores": d.cores, "memory": d.memory, "onboot": 0, "tags": vm_tags(spec, d),
         "nameserver": " ".join(cfg.nameservers), "ciuser": cfg.guest_user, "ciupgrade": 0,
         "vga": d.hw.get("display", "std"), "serial0": "socket",
+        **({"cpu": "host"} if d.hw.get("nested") else {}),
     }
     pub = Path(cfg.ssh_public_key)
     if pub.exists():
@@ -88,8 +173,25 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     pve.update_config(vmid, **params)
     if d.disk > TEMPLATE_DISK_GIB:
         pve.resize(vmid, "scsi0", d.disk)
+    if d.hw.get("iso"):
+        attach_iso(pve, vmid, d.hw["iso"])
     pve.power(vmid, "start")
     return vmid
+
+
+ISO_SLOT = "ide3"                   # ide2 is the cloud-init drive on Linux clones
+
+
+def attach_iso(pve: PVE, vmid: int, name: str | None) -> None:
+    if not name:
+        if ISO_SLOT in pve.vm_config(vmid):                   # eject (removing the drive would need a reboot)
+            pve.update_config(vmid, **{ISO_SLOT: "none,media=cdrom"})
+        return
+    volid = isos.find(pve, name)
+    if volid is None:
+        raise ValorError("iso_missing", f"ISO {name} is not in the ISO library",
+                         hint="Download or upload it in the ISO library first.")
+    pve.update_config(vmid, **{ISO_SLOT: f"{volid},media=cdrom"})
 
 
 def stamp(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, conv: str | None) -> None:
@@ -120,10 +222,40 @@ def router_interfaces(pve: PVE, vmid: int, n_segments: int, spec: RangeSpec) -> 
     return ifmap, names[0]
 
 
+def configure_wireguard(pve: PVE, spec: RangeSpec, vmid: int, uplink: str, steps: Steps) -> dict | None:
+    """Set up (or remove) the range's WireGuard access on the router; keys stay encrypted in VALOR's state."""
+    cfg = pve.cfg
+    if not (spec.access and spec.access.wireguard):
+        if wireguard.load(cfg, spec.name) is None:
+            return None
+        with steps.step("router: remove WireGuard access", ROUTER):
+            res = pve.script(vmid, wireguard.router_script(None), timeout=120)
+            if not res.ok or "VALOR-WG-REMOVED" not in res.out:
+                raise ValorError("wireguard_failed", "removing WireGuard from the router failed", host=ROUTER,
+                                 details=res.tail())
+            wireguard.forget(cfg, spec.name)
+        return None
+    with steps.step("router: WireGuard access", ROUTER):
+        data = wireguard.ensure(cfg, spec)
+        res = pve.script(vmid, wireguard.router_script(wireguard.server_conf(data, spec)), timeout=900)
+        if not res.ok or "VALOR-WG-PORT" not in res.out:
+            raise ValorError("wireguard_failed", "setting up WireGuard on the router failed", host=ROUTER,
+                             details=res.tail())
+        addr = pve.exec(vmid, ["ip", "-j", "-4", "addr", "show", "dev", uplink], timeout=30)
+        try:
+            local = json.loads(addr.out)[0]["addr_info"][0]["local"]
+            wireguard.set_router_address(cfg, spec.name, local)
+        except (ValueError, LookupError):
+            local = None
+    return {"port": spec.access.wireguard.port, "peers": len(data["peers"]),
+            "endpoint": wireguard.endpoint(spec, {**data, "router_address": local})}
+
+
 def load_router_policy(pve: PVE, spec: RangeSpec, vmid: int, ifmap, uplink, build_egress: bool) -> None:
-    rules = render(spec, ifmap, uplink, build_egress=build_egress, spec_id=spec_hash(spec)[:12],
-                   reserved=pve.cfg.reserved_networks)
-    res = pve.script(vmid, router_script(rules), timeout=600)
+    def rules(build: bool) -> str:
+        return render(spec, ifmap, uplink, build_egress=build, spec_id=spec_hash(spec)[:12],
+                      reserved=pve.cfg.reserved_networks)
+    res = pve.script(vmid, router_script(rules(False), rules(True) if build_egress else None), timeout=600)
     if not res.ok:
         raise ValorError("router_policy_failed", "loading the router's nftables policy failed", host=ROUTER,
                          details=res.tail(), hint="Check the generated ruleset (valor plan --show-policy).")
@@ -140,29 +272,91 @@ def set_login(pve: PVE, d: Desired, vmid: int, login: dict | None, steps: Steps)
                              details=res.err[-300:])
 
 
-def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps) -> list[dict]:
+WINDOWS_READY = ("$s = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Setup\\State' "
+                 "-ErrorAction SilentlyContinue).ImageState; if ($s -eq 'IMAGE_STATE_COMPLETE') { 'READY' } else { $s }")
+
+
+def windows_wait_ready(pve: PVE, vmid: int, timeout: int = 1500) -> None:
+    """After sysprep a clone runs specialize and OOBE (with a reboot) before it is usable; the agent answers
+    earlier than that, so wait for the setup state, not only the agent."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            pve.wait_agent(vmid, 600)
+            if "READY" in pve.ps(vmid, WINDOWS_READY, timeout=60).out:
+                return
+        except ValorError:
+            pass
+        time.sleep(10)
+    raise ValorError("windows_not_ready", f"Windows in VM {vmid} did not finish its first-boot setup",
+                     hint="Open the VM console in VALOR or Proxmox to see where setup stopped.")
+
+
+def windows_reboot(pve: PVE, vmid: int) -> None:
+    pve.power(vmid, "shutdown", wait=660, timeout=600, forceStop=1)
+    pve.power(vmid, "start")
+    windows_wait_ready(pve, vmid)
+
+
+def windows_prep(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, login: dict | None, steps: Steps) -> None:
+    """What cloud-init does for Linux: Administrator password (the range login), static IP, DNS, hostname."""
+    seg = spec.segment(d.segment)
+    script = windows.prep_script(d.host, d.address, seg.cidr.prefixlen, str(seg.gateway), list(pve.cfg.nameservers),
+                                 login["password"] if login else None)
+    with steps.step("windows: name, address, login", d.host):
+        for _ in range(3):
+            res = pve.ps(vmid, script, timeout=600)
+            if not res.ok or windows.PREP_OK not in res.out:
+                raise ValorError("windows_prep_failed", f"preparing Windows on {d.host} failed", host=d.host,
+                                 details=res.tail().replace(login["password"], "***") if login else res.tail())
+            if windows.REBOOT not in res.out:
+                return
+            windows_reboot(pve, vmid)
+        raise ValorError("windows_prep_failed", f"{d.host} still asks for a reboot after renaming", host=d.host)
+
+
+def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps, login: dict | None = None) -> list[dict]:
     cfg = pve.cfg
     host = spec.host(d.host)
     out = []
     for ref in host.roles:
         with steps.step(f"role {ref.name}", d.host):
             role = load_role(cfg.roles_dir, ref.name)
-            script = build_script(role, role_env(spec, host, role, ref.params))
-            res = pve.script(vmid, script, timeout=1800)
+            env = role_env(spec, host, role, ref.params)
+            changed = False
+            if d.family == "windows":
+                env.update(VALOR_LOGIN_PASSWORD=login["password"] if login else "",
+                           VALOR_NAMESERVERS=" ".join(cfg.nameservers))
+                script = windows.role_script(ref.name, role.ps_script, env)
+                for attempt in range(4):                     # e.g. AD promotion: run, reboot, run again
+                    res = pve.ps(vmid, script, timeout=3600)
+                    if not res.ok:
+                        break
+                    changed |= "VALOR-ROLE-CHANGED=1" in res.out
+                    if windows.REBOOT not in res.out:
+                        break
+                    windows_reboot(pve, vmid)
+            else:
+                res = pve.script(vmid, build_script(role, env), timeout=1800)
+                changed = "VALOR-ROLE-CHANGED=1" in res.out
             if not res.ok:
+                details = res.tail().replace(login["password"], "***") if login else res.tail()
                 raise ValorError("role_failed", f"role '{ref.name}' failed on {d.host} (exit {res.exitcode})",
-                                 host=d.host, step=f"role {ref.name}", details=res.tail(),
-                                 hint="Fix roles/{0}/role.sh or the role params in the spec, then re-apply.".format(ref.name))
-            out.append({"role": ref.name, "changed": "VALOR-ROLE-CHANGED=1" in res.out})
+                                 host=d.host, step=f"role {ref.name}", details=details,
+                                 hint=f"Fix roles/{ref.name}/ or the role params in the spec, then re-apply.")
+            out.append({"role": ref.name, "changed": changed})
     return out
 
 
 def run_baseline(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps) -> list[dict]:
-    baseline = load_baseline(pve.cfg.baselines_dir, spec.baseline)
+    baseline = baseline_for(pve.cfg.baselines_dir, spec.baseline, d.family)
     if baseline is None:
         return []
     with steps.step(f"baseline {baseline.id}", d.host):
-        res = pve.script(vmid, bundle(baseline, d.is_router, fix=True), timeout=1800)
+        if d.family == "windows":
+            res = pve.ps(vmid, windows.baseline_bundle(baseline, d.is_router, fix=True), timeout=1800)
+        else:
+            res = pve.script(vmid, bundle(baseline, d.is_router, fix=True), timeout=1800)
         results = parse_results(baseline, res.out)
         failed = [r["control"] for r in results if r["after"] != "pass"]
         if not res.ok or failed:
@@ -170,6 +364,28 @@ def run_baseline(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps)
                              host=d.host, step=f"baseline {baseline.id}", details=res.tail(),
                              hint=f"Fix the control in baselines/{baseline.id}.yaml (check and fix must agree), then re-apply.")
         return results
+
+
+def converge_waves(spec: RangeSpec, hosts: list[Desired], cfg) -> list[list[Desired]]:
+    """Order hosts so a host converges after the hosts its roles wait for (role.yaml `wait_for: [param]`)."""
+    names = {d.host for d in hosts}
+    deps: dict[str, set[str]] = {d.host: set() for d in hosts}
+    for d in hosts:
+        for ref in spec.host(d.host).roles:
+            for pname in load_role(cfg.roles_dir, ref.name).meta.get("wait_for") or []:
+                value = ref.params.get(pname)
+                for target in value if isinstance(value, list) else [value]:
+                    if target in names and target != d.host:
+                        deps[d.host].add(target)
+    waves, done = [], set()
+    while len(done) < len(hosts):
+        wave = [d for d in hosts if d.host not in done and deps[d.host] <= done]
+        if not wave:
+            raise ValorError("dependency_cycle", "hosts wait for each other: " +
+                             ", ".join(f"{h} -> {sorted(v)}" for h, v in deps.items() if v - done))
+        waves.append(wave)
+        done |= {d.host for d in wave}
+    return waves
 
 
 def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
@@ -210,13 +426,22 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                     vmids[d.host] = create_vm(pve, spec, d, taken)
             else:
                 vmids[d.host] = a["vmid"]
-                if a["action"] == "update":
+                if a["action"] == "update" and "reboot required" not in a.get("reasons", []):
+                    with steps.step("change ISO media", d.host):         # only the CD-ROM changed
+                        attach_iso(pve, a["vmid"], d.hw.get("iso"))
+                        if pve.vm_status(a["vmid"]).get("status") != "running":
+                            pve.power(a["vmid"], "start")
+                elif a["action"] == "update":
                     with steps.step("resize CPU/memory/disk and reboot", d.host):
+                        cpu = "host" if d.hw.get("nested") else pve.cpu_type(
+                            load_catalog(cfg).get(d.os, {}).get("cpu_min"))
                         pve.update_config(a["vmid"], cores=d.cores, memory=d.memory, vga=d.hw.get("display", "std"),
-                                          serial0="socket")
-                        cur = int(str(pve.vm_config(a["vmid"]).get("scsi0", "size=0G")).split("size=")[-1].rstrip("G") or 0)
+                                          serial0="socket", cpu=cpu)
+                        disk = "sata0" if d.family == "windows" else "scsi0"
+                        cur = int(str(pve.vm_config(a["vmid"]).get(disk, "size=0G")).split("size=")[-1].rstrip("G") or 0)
                         if d.disk > cur:
-                            pve.resize(a["vmid"], "scsi0", d.disk)
+                            pve.resize(a["vmid"], disk, d.disk)
+                        attach_iso(pve, a["vmid"], d.hw.get("iso"))
                         if pve.vm_status(a["vmid"]).get("status") == "running":
                             pve.power(a["vmid"], "reboot")
                         else:
@@ -226,10 +451,19 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                         pve.power(a["vmid"], "start")
         result["vmids"] = vmids
 
-        work = [d for d in desired if actions[d.host]["action"] not in ("keep",)]
+        from_iso = [d for d in desired if d.hw.get("install") == "iso" and actions[d.host]["action"] in ("create", "replace")]
+        work = [d for d in desired if actions[d.host]["action"] not in ("keep",) and d.family != "windows"
+                and d.hw.get("install") != "iso"]
         with steps.step("wait for guest agents"):
             for d in desired:
-                pve.wait_agent(vmids[d.host], 300)
+                if d.family != "windows" and d not in from_iso:
+                    pve.wait_agent(vmids[d.host], 300)
+        win = [d for d in desired if d.family == "windows"]
+        if win:
+            with steps.step("wait for Windows setup"):
+                with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                    for f in as_completed([ex.submit(windows_wait_ready, pve, vmids[d.host]) for d in win]):
+                        f.result()
         with steps.step("wait for cloud-init"):
             def ci(d):
                 r = pve.exec(vmids[d.host], ["cloud-init", "status", "--wait"], timeout=900)
@@ -251,24 +485,40 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         if hosts:
             with steps.step("router: temporary build egress", ROUTER):
                 load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=True)
+        if from_iso:
+            with steps.step("install from ISO (kickstart)"):
+                try:
+                    with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                        for f in as_completed([ex.submit(wait_iso_install, pve, spec, d, vmids[d.host])
+                                               for d in from_iso]):
+                            f.result()
+                except Exception:
+                    load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
+                    raise
 
             def converge(d: Desired):
                 vmid = vmids[d.host]
-                set_login(pve, d, vmid, login, steps)
-                roles = run_roles(pve, spec, d, vmid, steps)
+                if d.family == "windows":
+                    windows_prep(pve, spec, d, vmid, login, steps)
+                else:
+                    set_login(pve, d, vmid, login, steps)
+                roles = run_roles(pve, spec, d, vmid, steps, login)
                 base = run_baseline(pve, spec, d, vmid, steps)
                 stamp(pve, spec, d, vmid, d.conv_hash)
                 return d.host, {"roles": roles, "baseline": base}
 
             errors = []
-            with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
-                futs = [ex.submit(converge, d) for d in hosts]
-                for f in as_completed(futs):
-                    try:
-                        h, rep = f.result()
-                        report[h] = rep
-                    except Exception as e:
-                        errors.append(e)
+            for wave in converge_waves(spec, hosts, cfg):      # e.g. domain controllers before their members
+                with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                    futs = [ex.submit(converge, d) for d in wave]
+                    for f in as_completed(futs):
+                        try:
+                            h, rep = f.result()
+                            report[h] = rep
+                        except Exception as e:
+                            errors.append(e)
+                if errors:
+                    break
             if errors:
                 # restore the final policy before reporting, so a failed build never leaves egress open
                 try:
@@ -283,6 +533,10 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                 report[ROUTER] = {"baseline": run_baseline(pve, spec, router, rvmid, steps)}
             with steps.step("router: final policy", ROUTER):
                 load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
+            if router_conv:
+                access = configure_wireguard(pve, spec, rvmid, uplink, steps)
+                if access:
+                    result["wireguard"] = access
             stamp(pve, spec, router, rvmid, router.conv_hash)
 
         with steps.step("record spec version on all VMs"):

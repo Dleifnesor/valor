@@ -1,5 +1,5 @@
 description: PostgreSQL server on the host's segment address, reachable only from the listed clients
-families: [debian]
+families: [debian, rhel]
 ports: [5432]
 params:
   allow_from:

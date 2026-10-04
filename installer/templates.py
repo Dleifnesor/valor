@@ -30,8 +30,17 @@ def os_tag(os_name: str) -> str:
     return "os-" + os_name.replace(".", "-")
 
 
-def cpu_type(facts: Facts) -> str:
-    # x86-64-v2-AES needs AES-NI on the host; some older servers lack it.
+V3_FLAGS = {"avx", "avx2", "bmi1", "bmi2", "f16c", "fma", "movbe", "xsave"}
+
+
+def cpu_type(facts: Facts, entry: dict | None = None) -> str:
+    """CPU model for VMs: x86-64-v2(-AES) by default (AES-NI is missing on some older servers); OSes that need
+    x86-64-v3 (e.g. the RHEL 10 family) get it when the host supports it."""
+    if (entry or {}).get("cpu_min") == "x86-64-v3":
+        missing = V3_FLAGS - facts.cpu_flags
+        if missing:
+            raise SystemExit(f"this OS needs an x86-64-v3 CPU; the host lacks {sorted(missing)}")
+        return "x86-64-v3"
     return "x86-64-v2-AES" if facts.has_aes else "x86-64-v2"
 
 
@@ -44,6 +53,17 @@ def existing(facts: Facts, a: Answers, os_name: str) -> dict | None:
 
 def _fetch(url: str, dest: Path) -> None:
     run(["curl", "-fsSL", "--retry", "3", "--max-time", "3600", "-o", str(dest), url])
+
+
+def _image_url(entry: dict, sums_text: str) -> str:
+    """Fixed image_url, or the newest file matching image_pattern in the checksum list (versioned names)."""
+    if entry.get("image_url"):
+        return entry["image_url"]
+    from valor.isos import _natural, parse_checksums
+    names = sorted((n for n in parse_checksums(sums_text) if re.fullmatch(entry["image_pattern"], n)), key=_natural)
+    if not names:
+        raise SystemExit(f"no image matching {entry['image_pattern']} in {entry['checksums_url']}")
+    return entry["image_base"] + names[-1]
 
 
 def _verify(entry: dict, image: Path, sums: Path, work: Path) -> None:
@@ -63,9 +83,9 @@ def _verify(entry: dict, image: Path, sums: Path, work: Path) -> None:
         if f"VALIDSIG {fpr}" not in res.stdout:
             raise SystemExit("the checksum list's signature is NOT valid - refusing this image")
         ui.ok(f"checksum list signed by {fpr[-16:]}")
+    from valor.isos import parse_checksums
     name = entry["image_url"].rsplit("/", 1)[1]
-    want = next((l.split()[0].lower() for l in sums.read_text().splitlines()
-                 if len(l.split()) >= 2 and l.split()[-1].lstrip("*") == name), None)
+    want = parse_checksums(sums.read_text()).get(name)          # GNU and BSD style lists
     if not want:
         raise SystemExit(f"{name} is not in the checksum list")
     h = hashlib.new(entry.get("checksum_type", "sha256"))
@@ -77,13 +97,28 @@ def _verify(entry: dict, image: Path, sums: Path, work: Path) -> None:
     ui.ok(f"{entry.get('checksum_type', 'sha256')} checksum matches")
 
 
-def _free_vmid(a: Answers, facts: Facts) -> int:
+def _free_vmid(a: Answers, facts: Facts, skip: set[int] = frozenset()) -> int:
     lo, hi = a.vmid_templates
-    used = facts.used_vmids | set(int(x["vmid"]) for x in pvesh("get", "/cluster/resources", type="vm"))
+    used = facts.used_vmids | set(int(x["vmid"]) for x in pvesh("get", "/cluster/resources", type="vm")) | skip
     for v in range(lo, hi + 1):
         if v not in used:
             return v
     raise SystemExit(f"no free VMID left for templates in {lo}-{hi}")
+
+
+def _create(a: Answers, facts: Facts, command) -> int:
+    """Create a template VM on a free VMID. `qm create` claims the id atomically; if another installer run took the
+    same id a moment earlier, take the next one."""
+    skip: set[int] = set()
+    for _ in range(10):
+        vmid = _free_vmid(a, facts, skip)
+        res = run(command(vmid), check=False)
+        if res.returncode == 0:
+            return vmid
+        if "already exists" not in res.stderr:
+            raise CommandError(command(vmid)[:3], res.returncode, res.stdout, res.stderr)
+        skip.add(vmid)
+    raise SystemExit("could not claim a free template VMID (another installer run keeps taking them)")
 
 
 def ensure_snippets(a: Answers, facts: Facts, rec: Record) -> str:
@@ -103,19 +138,28 @@ def ensure_snippets(a: Answers, facts: Facts, rec: Record) -> str:
 
 def build(a: Answers, facts: Facts, rec: Record, os_name: str, snippet: str) -> int:
     entry = catalog()[os_name]
-    vmid = _free_vmid(a, facts)
     st = facts.storage(a.snippets_storage)
     scratch = Path(st.path) / "valor-tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=scratch) as tmp:
         work = Path(tmp)
-        ui.info(f"downloading {entry['image_url']}")
-        sums, image = work / "sums", work / "image.qcow2"
+        sums, image = work / "sums", work / "image.download"
         _fetch(entry["checksums_url"], sums)
+        entry = {**entry, "image_url": _image_url(entry, sums.read_text())}
+        ui.info(f"downloading {entry['image_url']}")
         _fetch(entry["image_url"], image)
         _verify(entry, image, sums, work)
+        if entry.get("archive") == "tar.xz":                        # e.g. Kali: a raw disk inside a tarball
+            out = work / "unpacked"
+            out.mkdir()
+            run(["tar", "-xJf", str(image), "-C", str(out)])
+            disks = sorted(p for p in out.rglob("*") if p.is_file() and p.suffix in (".raw", ".qcow2", ".img"))
+            if not disks:
+                raise SystemExit("the image archive contains no disk image")
+            image.unlink()
+            image = disks[0]
         fmt = json.loads(run(["qemu-img", "info", "--output=json", str(image)]).stdout)["format"]
-        if fmt != "qcow2":
+        if fmt not in ("qcow2", "raw"):
             raise SystemExit(f"unexpected image format {fmt}")
         rs = facts.storage(a.range_storage)
         disk = f"{rs.id}:0,import-from={image},discard=on,ssd=1,iothread=1" + (",format=qcow2" if rs.file_based else "")
@@ -125,17 +169,15 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, snippet: str) -> 
                 f"{time.strftime('%Y-%m-%d %H:%M %Z')} from {entry['image_url']} (verified). Managed by the VALOR "
                 "installer; do not edit.")
         name = "tpl-" + os_name.replace(".", "")
-        ui.info(f"creating template VM {vmid} ({name}) on {rs.id}")
-        run(["qm", "create", str(vmid), "--name", name, "--pool", a.pool_templates, "--ostype", "l26",
-             "--memory", "2048", "--cores", "2", "--cpu", cpu_type(facts), "--scsihw", "virtio-scsi-single",
+        vmid = _create(a, facts, lambda vmid: ["qm", "create", str(vmid), "--name", name, "--pool", a.pool_templates, "--ostype", "l26",
+             "--memory", "2048", "--cores", "2", "--cpu", cpu_type(facts, entry), "--scsihw", "virtio-scsi-single",
              "--scsi0", disk, "--ide2", f"{rs.id}:cloudinit", "--boot", "order=scsi0", "--serial0", "socket",
              "--vga", "serial0", "--agent", "enabled=1,fstrim_cloned_disks=1", "--net0", net, "--ipconfig0", ipcfg,
              *(["--nameserver", " ".join(a.vm_dns)] if a.vm_ip != "dhcp" and a.vm_dns else []),
              "--ciuser", "valor", "--ciupgrade", "0", "--cicustom", f"vendor={snippet}",
              "--tags", f"valor-template;{os_tag(os_name)}", "--description", desc])
-    templates = rec.objects.get("templates", [])
-    templates.append({"os": os_name, "vmid": vmid, "built": True})
-    rec.set("templates", templates)
+        ui.info(f"created template VM {vmid} ({name}) on {rs.id}")
+    rec.add_template({"os": os_name, "vmid": vmid, "built": True})
     run(["qm", "disk", "resize", str(vmid), "scsi0", "8G"])
     ui.info("first boot: installing the guest agent and updates; the VM powers itself off when done (a few minutes)")
     run(["qm", "start", str(vmid)])
@@ -152,19 +194,55 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, snippet: str) -> 
     return vmid
 
 
-def ensure(a: Answers, facts: Facts, rec: Record, wanted: list[str]) -> dict[str, int]:
+def iso_catalog() -> dict:
+    with open(SOURCE / "templates" / "isos.toml", "rb") as fh:
+        return tomllib.load(fh)
+
+
+def ensure(a: Answers, facts: Facts, rec: Record, wanted: list[str], rebuild: bool = False) -> dict[str, int]:
+    """rebuild: build a fresh template even if one exists (new point release, current updates, fixed preparation)
+    and then retire the old ones. Ranges always clone the newest template of an OS."""
+    from . import windows
     out: dict[str, int] = {}
     snippet = None
+    cat = catalog()
     for os_name in wanted:
         have = existing(facts, a, os_name)
-        if have:
+        if have and not rebuild:
             out[os_name] = int(have["vmid"])
             ui.ok(f"{os_name}: reusing template {have['vmid']}")
             continue
-        if snippet is None:
-            snippet = ensure_snippets(a, facts, rec)
-        out[os_name] = build(a, facts, rec, os_name, snippet)
+        entry = cat[os_name]
+        if entry.get("family") == "windows":
+            out[os_name] = windows.build(a, facts, rec, os_name, entry, iso_catalog(), cpu_type(facts, entry))
+        else:
+            if snippet is None:
+                snippet = ensure_snippets(a, facts, rec)
+            out[os_name] = build(a, facts, rec, os_name, snippet)
+        if rebuild:
+            for old in _same_os(facts, a, os_name):
+                if int(old["vmid"]) != out[os_name]:
+                    retire(rec, int(old["vmid"]), os_name)
     return out
+
+
+def _same_os(facts: Facts, a: Answers, os_name: str) -> list[dict]:
+    return [t for t in facts.valor_templates
+            if t.get("node") == facts.node and t.get("pool") == a.pool_templates
+            and os_tag(os_name) in re.split(r"[;, ]", t.get("tags") or "")]
+
+
+def retire(rec: Record, vmid: int, os_name: str) -> None:
+    """Remove an old template this installer built. Proxmox refuses while linked clones still use its disks."""
+    if not any(t["vmid"] == vmid and t.get("built") for t in rec.objects.get("templates", [])):
+        ui.info(f"old {os_name} template {vmid} was not built by the installer: left in place (ranges use the newest)")
+        return
+    res = run(["qm", "destroy", str(vmid), "--purge", "1"], check=False)
+    if res.returncode:
+        ui.warn(f"old {os_name} template {vmid} kept: {(res.stderr or res.stdout).strip().splitlines()[-1:]}")
+        return
+    rec.remove_template(vmid)
+    ui.ok(f"old {os_name} template {vmid} removed")
 
 
 def remove_built(rec: Record) -> None:

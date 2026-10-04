@@ -72,6 +72,12 @@ class Host(_Strict):
     disk: int = Field(10, ge=8, le=500, description="GiB")
     roles: list[RoleRef] = Field(default_factory=list)
     description: str = ""
+    iso: str | None = Field(None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.iso$",
+                            description="an ISO from the ISO library attached as a CD-ROM")
+    install: Literal["template", "iso"] = Field("template", description="clone the OS template (fast) or install "
+                                                "from the OS's installer ISO (Rocky/Alma, kickstart)")
+    nested: bool = Field(False, description="pass hardware virtualization through (CPU type host), e.g. to run "
+                                             "a hypervisor such as Proxmox VE inside the host")
 
 
 class Router(_Strict):
@@ -113,6 +119,38 @@ class Test(_Strict):
     expect: Literal["open", "closed"]
 
 
+class WireGuard(_Strict):
+    """Remote access to the range through a WireGuard tunnel that ends on the range router."""
+    port: int = Field(51820, ge=1024, le=65535, description="UDP port on the router's uplink address")
+    network: ipaddress.IPv4Network = Field(ipaddress.IPv4Network("10.250.0.0/24"),
+                                           description="tunnel addresses (the router takes the first)")
+    peers: list[str] = Field(min_length=1, max_length=100, description="one config per person or device")
+    reach: list[str] = Field(default_factory=list, description="segments peers may reach (default: all)")
+    endpoint: str = Field("", max_length=253, pattern=r"^$|^[A-Za-z0-9.-]+(:\d{1,5})?$",
+                          description="address peers connect to, e.g. a port forward (default: the router's)")
+
+    @field_validator("network")
+    @classmethod
+    def _net(cls, v: ipaddress.IPv4Network) -> ipaddress.IPv4Network:
+        if not v.is_private or not 16 <= v.prefixlen <= 29:
+            raise ValueError("the tunnel network must be private address space between /16 and /29")
+        return v
+
+    @field_validator("peers")
+    @classmethod
+    def _peers(cls, v: list[str]) -> list[str]:
+        for name in v:
+            if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name):
+                raise ValueError(f"peer name '{name}' must be lowercase letters, digits or dashes")
+        if len(set(v)) != len(v):
+            raise ValueError("peer names must be unique")
+        return v
+
+
+class Access(_Strict):
+    wireguard: WireGuard | None = None
+
+
 class RangeSpec(_Strict):
     apiVersion: Literal["valor/v1"] = API_VERSION
     name: str = Field(pattern=NAME)
@@ -124,6 +162,7 @@ class RangeSpec(_Strict):
     policy: list[Rule] = Field(default_factory=list)
     tests: list[Test] = Field(default_factory=list)
     auto_tests: bool = True
+    access: Access | None = None
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "RangeSpec":
@@ -171,6 +210,16 @@ class RangeSpec(_Strict):
             if sf and st and sf == st:
                 errs.append(f"policy[{i}]: {r.from_} and {r.to} are in the same segment ({sf}); "
                             "traffic inside a segment never reaches the router, so it cannot be filtered")
+        wg = self.access.wireguard if self.access else None
+        if wg:
+            for s in wg.reach:
+                if s not in segs:
+                    errs.append(f"access.wireguard.reach: unknown segment '{s}'")
+            for s in self.segments:
+                if s.cidr.overlaps(wg.network):
+                    errs.append(f"access.wireguard.network {wg.network} overlaps segment {s.name} ({s.cidr})")
+            if len(wg.peers) > wg.network.num_addresses - 3:
+                errs.append(f"access.wireguard.network {wg.network} is too small for {len(wg.peers)} peers")
         for i, t in enumerate(self.tests):
             if t.from_ not in hosts:
                 errs.append(f"tests[{i}]: 'from' must be a host, got '{t.from_}'")
@@ -222,7 +271,17 @@ def normalize(spec: RangeSpec, default_os: str) -> RangeSpec:
 
 
 def canonical(spec: RangeSpec) -> str:
-    return json.dumps(spec.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":"))
+    data = spec.model_dump(mode="json", by_alias=True)
+    if data.get("access") is None:              # added later: leaving it out keeps older specs' hashes unchanged
+        data.pop("access", None)
+    for h in data["hosts"]:
+        if h.get("iso") is None:
+            h.pop("iso", None)
+        if h.get("install") == "template":
+            h.pop("install", None)
+        if h.get("nested") is False:
+            h.pop("nested", None)
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
 def spec_hash(spec: RangeSpec) -> str:

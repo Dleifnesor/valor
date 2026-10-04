@@ -1,0 +1,109 @@
+id: windows-l1
+title: Windows hardening baseline - Server 2022/2025, Windows 11 (aligned with common CIS Level 1 themes)
+# Applied to Windows hosts of any range whose spec does not say `baseline: none`.
+# Results are reported as "aligned with" these themes - never as a certified benchmark implementation.
+# check: a PowerShell expression that is true when compliant; fix: idempotent PowerShell. $IsDC is set.
+claim: aligned-with
+families: [windows]
+shell: powershell
+controls:
+  - id: smb1-disabled
+    area: Network services
+    title: SMBv1 server protocol disabled
+    theme: CIS Level 1 - network protocols
+    reference: "Microsoft Learn: Set-SmbServerConfiguration -EnableSMB1Protocol"
+    applies_to: all
+    check: |
+      -not (Get-SmbServerConfiguration).EnableSMB1Protocol
+    fix: |
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+
+  - id: smb-signing-required
+    area: Network services
+    title: SMB server requires message signing
+    theme: CIS Level 1 - network protocols
+    reference: "Microsoft Learn: Set-SmbServerConfiguration -RequireSecuritySignature"
+    applies_to: all
+    check: |
+      (Get-SmbServerConfiguration).RequireSecuritySignature
+    fix: |
+      Set-SmbServerConfiguration -RequireSecuritySignature $true -Force
+
+  - id: firewall-enabled
+    area: Firewall
+    title: Windows Defender Firewall enabled for all profiles
+    theme: CIS Level 1 - host firewall
+    reference: "Microsoft Learn: Set-NetFirewallProfile"
+    applies_to: all
+    check: |
+      @(Get-NetFirewallProfile | Where-Object { -not $_.Enabled }).Count -eq 0
+    fix: |
+      Set-NetFirewallProfile -All -Enabled True
+
+  - id: guest-account-disabled
+    area: Accounts
+    title: Built-in Guest account disabled
+    theme: CIS Level 1 - account policies
+    reference: "Microsoft Learn: Disable-LocalUser; Active Directory Guest account"
+    applies_to: all
+    check: |
+      if ($IsDC) { -not (Get-ADUser -Identity Guest -Properties Enabled).Enabled } else { -not (Get-LocalUser -Name Guest).Enabled }
+    fix: |
+      if ($IsDC) { Disable-ADAccount -Identity Guest } else { Disable-LocalUser -Name Guest }
+
+  - id: password-min-length
+    area: Accounts
+    title: Minimum password length of 14 or more
+    theme: CIS Level 1 - password policy
+    reference: "Microsoft Learn: net accounts /minpwlen; Set-ADDefaultDomainPasswordPolicy -MinPasswordLength"
+    applies_to: all
+    check: |
+      if ($IsDC) { (Get-ADDefaultDomainPasswordPolicy).MinPasswordLength -ge 14 }
+      else { [int]((net accounts | Select-String 'Minimum password length') -replace '\D', '') -ge 14 }
+    fix: |
+      if ($IsDC) { Get-ADDomain | Set-ADDefaultDomainPasswordPolicy -MinPasswordLength 14 } else { net accounts /minpwlen:14 | Out-Null }
+
+  - id: llmnr-disabled
+    area: Network services
+    title: LLMNR (multicast name resolution) disabled
+    theme: CIS Level 1 - network protocols
+    reference: "Microsoft Learn: DNS Client policy 'Turn off multicast name resolution' (EnableMulticast)"
+    applies_to: all
+    check: |
+      (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name EnableMulticast -ErrorAction Stop).EnableMulticast -eq 0
+    fix: |
+      New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Force | Out-Null
+      New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name EnableMulticast -Value 0 -PropertyType DWord -Force | Out-Null
+
+  - id: rdp-nla-required
+    area: Remote access
+    title: Remote Desktop requires Network Level Authentication
+    theme: CIS Level 1 - remote access
+    reference: "Microsoft Learn: RDP-Tcp UserAuthentication registry value"
+    applies_to: all
+    check: |
+      (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp').UserAuthentication -eq 1
+    fix: |
+      Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
+
+  - id: audit-logon
+    area: Auditing
+    title: Logon events audited (success and failure)
+    theme: CIS Level 1 - audit policy
+    reference: "Microsoft Learn: auditpol /set /subcategory"
+    applies_to: all
+    check: |
+      ((auditpol /get /subcategory:"Logon" /r | ConvertFrom-Csv).'Inclusion Setting') -eq 'Success and Failure'
+    fix: |
+      auditpol /set /subcategory:"Logon" /success:enable /failure:enable | Out-Null
+
+  - id: defender-realtime
+    area: Malware protection
+    title: Microsoft Defender real-time protection on
+    theme: CIS Level 1 - malware defenses
+    reference: "Microsoft Learn: Set-MpPreference -DisableRealtimeMonitoring"
+    applies_to: all
+    check: |
+      (Get-MpComputerStatus).RealTimeProtectionEnabled
+    fix: |
+      Set-MpPreference -DisableRealtimeMonitoring $false

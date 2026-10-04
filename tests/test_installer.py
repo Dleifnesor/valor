@@ -122,3 +122,54 @@ def test_pve8_privileges():
     from installer.identity import roles
     r = roles(facts())
     assert "VM.Monitor" in r["ValorEngine"] and not any("GuestAgent" in p for p in r["ValorEngine"])
+
+
+def test_record_merges_concurrent_runs(tmp_path, monkeypatch):
+    """Two installer runs (e.g. template builds in two shells) must not overwrite each other's record entries."""
+    import json
+    from installer import record as R
+    monkeypatch.setattr(R, "RECORD_DIR", tmp_path / "rec")
+    monkeypatch.setattr(R, "LOCK_DIR", tmp_path / "lock")
+    first = R.Record("valor")
+    first.set("vm", {"vmid": 5100, "ip": "dhcp"})
+    snapshot = json.loads(first.path.read_text())
+    a, b = R.Record("valor", json.loads(json.dumps(snapshot))), R.Record("valor", json.loads(json.dumps(snapshot)))
+    a.add_template({"os": "rocky-10", "vmid": 5900, "built": True})
+    b.set("vm", {"vmid": 5100, "ip": "192.168.1.87"})          # e.g. an upgrade, started before a's write
+    b.add_template({"os": "kali", "vmid": 5902, "built": True})
+    a.set("windows_password_5900", "x")                        # a still holds the old "vm": must not win
+    a.mark("templates")
+    disk = json.loads(a.path.read_text())
+    assert [t["vmid"] for t in disk["objects"]["templates"]] == [5900, 5902]
+    assert disk["objects"]["vm"]["ip"] == "192.168.1.87" and disk["objects"]["windows_password_5900"] == "x"
+    assert disk["steps"] == {"templates": "done"}
+
+
+def test_record_retired_template_stays_removed(tmp_path, monkeypatch):
+    import json
+    from installer import record as R
+    monkeypatch.setattr(R, "RECORD_DIR", tmp_path / "rec")
+    monkeypatch.setattr(R, "LOCK_DIR", tmp_path / "lock")
+    a = R.Record("valor")
+    a.add_template({"os": "rocky-10", "vmid": 5900, "built": True})
+    b = R.Record("valor", json.loads(a.path.read_text()))        # another run that still knows the old template
+    a.add_template({"os": "rocky-10", "vmid": 5908, "built": True})
+    a.remove_template(5900)
+    b.set("vm", {"vmid": 5999})                                    # must not bring 5900 back
+    disk = json.loads(a.path.read_text())
+    assert [t["vmid"] for t in disk["objects"]["templates"]] == [5908] and disk["objects"]["vm"] == {"vmid": 5999}
+
+
+def test_bridge_check_ignores_formatting():
+    """A hand-edited interfaces file (spaces, comments) rewritten by Proxmox (tabs) is not a change."""
+    before = ("# my notes\nauto lo\niface lo inet loopback\n\niface eth0 inet manual\n\nauto vmbr0\n"
+              "iface vmbr0 inet static\n    address 10.0.0.10/24\n    gateway 10.0.0.1\n    bridge-ports eth0\n"
+              "    hwaddress BC:24:11:5B:3B:FD\n    bridge-stp off\n    bridge-fd 0\n")
+    after = ("auto lo\niface lo inet loopback\n\niface eth0 inet manual\n\nauto vmbr0\niface vmbr0 inet static\n"
+             "\taddress 10.0.0.10/24\n\tgateway 10.0.0.1\n\tbridge-ports eth0\n\tbridge-stp off\n\tbridge-fd 0\n"
+             "\thwaddress bc:24:11:5b:3b:fd\n\nauto vmbr100\niface vmbr100 inet manual\n\tbridge-ports none\n"
+             "\tbridge-vlan-aware yes\n")
+    removed, added = _new_lines(before, after)
+    assert removed == [] and "auto vmbr100" in added
+    removed, _ = _new_lines(before, after.replace("\tgateway 10.0.0.1\n", ""))
+    assert removed == ["gateway 10.0.0.1"]

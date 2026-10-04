@@ -65,6 +65,7 @@ log "content (roles, baselines, OS catalog) and web UI"
 rm -rf /opt/valor/share.new && mkdir -p /opt/valor/share.new
 cp -a "$SRC/roles" "$SRC/baselines" "$SRC/templates" /opt/valor/share.new/
 cp -a "$SRC/ranges" /opt/valor/share.new/examples
+cp "$SRC/.claude/skills/range-build/spec-reference.md" /opt/valor/share.new/ 2>/dev/null || true   # chat builder prompt
 rm -rf /opt/valor/share && mv /opt/valor/share.new /opt/valor/share
 rm -rf /opt/valor/web.new && cp -a "$SRC/web/dist" /opt/valor/web.new
 [[ -f /opt/valor/web/ca.crt ]] && cp -a /opt/valor/web/ca.crt /opt/valor/web.new/ca.crt
