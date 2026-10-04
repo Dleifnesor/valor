@@ -24,6 +24,9 @@ def prep_script(name: str, address: str, prefix: int, gateway: str, dns: list[st
           "Enable-LocalUser -Name Administrator }\n") if password else ""
     return f"""
 $cs = Get-CimInstance Win32_ComputerSystem
+# the VM's hardware clock is UTC (Proxmox localtime=0): keep it so if someone changes the time zone
+New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' -Name RealTimeIsUniversal `
+  -Value 1 -PropertyType DWord -Force | Out-Null
 {pw}
 $nic = Get-NetAdapter -Physical | Sort-Object ifIndex | Select-Object -First 1
 if (-not $nic) {{ throw 'no network adapter' }}

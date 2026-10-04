@@ -74,3 +74,26 @@ def test_baseline_bundle():
         assert subprocess.run(["bash", "-n"], input=s, text=True).returncode == 0
     rows = parse_results(b, "VALOR-CONTROL ssh-root-login fail pass\nnoise\nVALOR-CONTROL tmp-sticky-bit pass pass\n")
     assert [(r["control"], r["fixed"]) for r in rows] == [("ssh-root-login", True), ("tmp-sticky-bit", False)]
+
+
+def test_iso_attachment_plans_without_reboot(cfg):
+    from valor.plan import _classify, desired_state
+    from valor.spec import canonical, normalize, parse_spec
+    from valor.cluster import VMState
+    base = """
+name: isolab
+segments: [{name: lan, vlan: 650, cidr: 10.66.0.0/24}]
+hosts:
+  - {name: box, segment: lan, address: 10.66.0.10}
+"""
+    plain = normalize(parse_spec(base), "ubuntu-24.04")
+    with_iso = normalize(parse_spec(base.replace("address: 10.66.0.10}", "address: 10.66.0.10, iso: tails-7.0.iso}")),
+                         "ubuntu-24.04")
+    assert '"iso"' not in canonical(plain)                         # older specs keep their hashes
+    a, b = desired_state(cfg, plain)[1], desired_state(cfg, with_iso)[1]
+    assert "iso" not in a.hw and b.hw["iso"] == "tails-7.0.iso"
+    vm = VMState(vmid=5100, name="isolab-box", status="running", tags=[], meta={"hw_spec": a.hw, "conv": a.conv_hash})
+    action, reasons = _classify(b, vm)
+    assert action == "update" and reasons == ["ISO none -> tails-7.0.iso"]          # no "reboot required"
+    with pytest.raises(Exception):
+        parse_spec(base.replace("address: 10.66.0.10}", "address: 10.66.0.10, iso: ../../etc/passwd}"))

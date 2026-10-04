@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import credentials, windows, wireguard
+from . import credentials, isos, windows, wireguard
 from .baseline import baseline_for, bundle, load_baseline, parse_results
 from .cluster import range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
@@ -76,10 +76,14 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     pve.clone(d.template, vmid, name, render_description(vm_meta(spec, d, None), spec_hash(spec)[:12]))
     if d.family == "windows":
         nic = d.nics[0]
-        pve.update_config(vmid, cores=d.cores, memory=d.memory, onboot=0, tags=vm_tags(spec, d), vga="std",
+        # localtime=0: the hardware clock runs in UTC like Linux VMs (Proxmox defaults Windows to the host's local
+        # time, which with Windows' UTC zone puts the clock hours off)
+        pve.update_config(vmid, cores=d.cores, memory=d.memory, onboot=0, tags=vm_tags(spec, d), vga="std", localtime=0,
                           net0=f"{nic.get('model', 'e1000e')},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else ""))
         if d.disk > WINDOWS_TEMPLATE_DISK_GIB:
             pve.resize(vmid, "sata0", d.disk)
+        if d.hw.get("iso"):
+            attach_iso(pve, vmid, d.hw["iso"])
         pve.power(vmid, "start")
         return vmid
     params: dict = {
@@ -97,8 +101,25 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     pve.update_config(vmid, **params)
     if d.disk > TEMPLATE_DISK_GIB:
         pve.resize(vmid, "scsi0", d.disk)
+    if d.hw.get("iso"):
+        attach_iso(pve, vmid, d.hw["iso"])
     pve.power(vmid, "start")
     return vmid
+
+
+ISO_SLOT = "ide3"                   # ide2 is the cloud-init drive on Linux clones
+
+
+def attach_iso(pve: PVE, vmid: int, name: str | None) -> None:
+    if not name:
+        if ISO_SLOT in pve.vm_config(vmid):                   # eject (removing the drive would need a reboot)
+            pve.update_config(vmid, **{ISO_SLOT: "none,media=cdrom"})
+        return
+    volid = isos.find(pve, name)
+    if volid is None:
+        raise ValorError("iso_missing", f"ISO {name} is not in the ISO library",
+                         hint="Download or upload it in the ISO library first.")
+    pve.update_config(vmid, **{ISO_SLOT: f"{volid},media=cdrom"})
 
 
 def stamp(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, conv: str | None) -> None:
@@ -332,13 +353,20 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                     vmids[d.host] = create_vm(pve, spec, d, taken)
             else:
                 vmids[d.host] = a["vmid"]
-                if a["action"] == "update":
+                if a["action"] == "update" and "reboot required" not in a.get("reasons", []):
+                    with steps.step("change ISO media", d.host):         # only the CD-ROM changed
+                        attach_iso(pve, a["vmid"], d.hw.get("iso"))
+                        if pve.vm_status(a["vmid"]).get("status") != "running":
+                            pve.power(a["vmid"], "start")
+                elif a["action"] == "update":
                     with steps.step("resize CPU/memory/disk and reboot", d.host):
                         pve.update_config(a["vmid"], cores=d.cores, memory=d.memory, vga=d.hw.get("display", "std"),
                                           serial0="socket")
-                        cur = int(str(pve.vm_config(a["vmid"]).get("scsi0", "size=0G")).split("size=")[-1].rstrip("G") or 0)
+                        disk = "sata0" if d.family == "windows" else "scsi0"
+                        cur = int(str(pve.vm_config(a["vmid"]).get(disk, "size=0G")).split("size=")[-1].rstrip("G") or 0)
                         if d.disk > cur:
-                            pve.resize(a["vmid"], "scsi0", d.disk)
+                            pve.resize(a["vmid"], disk, d.disk)
+                        attach_iso(pve, a["vmid"], d.hw.get("iso"))
                         if pve.vm_status(a["vmid"]).get("status") == "running":
                             pve.power(a["vmid"], "reboot")
                         else:

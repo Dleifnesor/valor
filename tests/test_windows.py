@@ -104,3 +104,10 @@ def test_login_accounts_per_os(cfg, corp):
     assert a["valor"]["hosts"] == ["rtr", "web"]
     assert a["Administrator"]["hosts"] == ["pc1"]                       # DCs have no local accounts
     assert a["CORP\\Administrator"]["hosts"] == ["dc1", "dc2", "pc1"] and a["CORP\\Administrator"]["domain"] == "corp.lab"
+
+
+def test_catalog_lists_windows_roles(cfg):
+    from valor.web.ranges import role_list
+    roles = {r["name"]: r for r in role_list(cfg)}
+    assert roles["ad-dc"]["families"] == ["windows"] and roles["iis"]["families"] == ["windows"]
+    assert roles["nginx"]["families"] == ["debian", "rhel"] and "domain" in roles["ad-member"]["params"]

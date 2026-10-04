@@ -94,6 +94,11 @@ def resolve(cfg, entry_id: str) -> dict:
             "algorithm": e.get("algorithm", "sha256"), "verified": verified}
 
 
+def find(pve, name: str) -> str | None:
+    """volid of the library ISO with this file name (first ISO storage that has it)."""
+    return next((i["volid"] for i in list_isos(pve) if i["name"] == name), None)
+
+
 def list_isos(pve) -> list[dict]:
     out = []
     for storage in pve.cfg.iso_storages or ((pve.cfg.iso_storage,) if pve.cfg.iso_storage else ()):

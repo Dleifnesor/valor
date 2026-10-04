@@ -29,6 +29,7 @@ hosts:                          # 1-40
     cores: 1                    # 1-16
     memory: 1024                # MiB, 512-65536
     disk: 10                    # GiB, 8-500 (can grow later, never shrink)
+    iso: tails-7.0-amd64.iso    # optional: an ISO from the ISO library attached as a CD-ROM (changing it: no reboot)
     roles:                      # applied in order; see roles/<name>/role.yaml for params
       - name: nginx
       - name: postgresql

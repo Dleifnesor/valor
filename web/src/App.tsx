@@ -16,6 +16,7 @@ import { Settings } from "./pages/Settings";
 import { Account } from "./pages/Account";
 import { Library } from "./pages/Library";
 import { Blueprints } from "./pages/Blueprints";
+import { Builder } from "./pages/Builder";
 // The console page carries noVNC and xterm.js: loaded only when a console is opened.
 const ConsolePage = lazy(() => import("./pages/Console").then((m) => ({ default: m.ConsolePage })));
 
@@ -56,6 +57,7 @@ export default function App() {
 const NAV: { path: string; label: string; icon: Parameters<typeof Icon>[0]["name"]; role?: "admin" }[] = [
   { path: "dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "ranges", label: "Ranges", icon: "ranges" },
+  { path: "builder", label: "Chat builder", icon: "chat" },
   { path: "blueprints", label: "Blueprints", icon: "copy" },
   { path: "jobs", label: "Jobs", icon: "jobs" },
   { path: "library", label: "ISO library", icon: "disc" },
@@ -117,6 +119,9 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
   } else if (p0 === "ranges") {
     title = "Ranges";
     page = <Ranges canOperate={can("operator")} />;
+  } else if (p0 === "builder") {
+    title = "Chat builder";
+    page = can("operator") ? <Builder isAdmin={isAdmin} /> : <div className="alert warn">The chat builder needs the operator role.</div>;
   } else if (p0 === "blueprints") {
     title = "Blueprints";
     page = <Blueprints canOperate={can("operator")} />;

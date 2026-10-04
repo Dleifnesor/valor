@@ -79,6 +79,20 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (notification_id, user_id)
     );
     """,
+    # 2: AI chat builder usage (tokens per user and request)
+    """
+    CREATE TABLE ai_usage (
+        id INTEGER PRIMARY KEY,
+        ts REAL NOT NULL,
+        username TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        ok INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX ai_usage_user_ts ON ai_usage(username, ts);
+    """,
 ]
 
 

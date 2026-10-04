@@ -208,7 +208,7 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos
              "--sata1", f"{win_volid},media=cdrom", "--sata2", f"{virtio_volid},media=cdrom",
              "--sata3", f"{answer_volid},media=cdrom", "--boot", "order=sata1;sata0",
              "--net0", f"e1000e,bridge={a.vm_bridge},link_down=1" + (f",tag={a.vm_vlan}" if a.vm_vlan else ""),
-             "--agent", "enabled=1", "--vga", "std", "--tablet", "1",
+             "--agent", "enabled=1", "--vga", "std", "--tablet", "1", "--localtime", "0",
              "--tags", f"valor-template;os-{os_name.replace('.', '-')}", "--description", desc])
         ui.info(f"created Windows template VM {vmid} ({name}) on {st.id}")
         rec.add_template({"os": os_name, "vmid": vmid, "built": True})

@@ -16,16 +16,18 @@ interface Channel {
 const KIND_LABEL: Record<Kind, string> = { email: "Email (SMTP)", discord: "Discord webhook", slack: "Slack webhook", teams: "Microsoft Teams (Workflows webhook)" };
 
 export function Settings() {
-  const [tab, setTab] = useState<"notifications" | "directory" | "about">("notifications");
+  const [tab, setTab] = useState<"notifications" | "directory" | "ai" | "about">("notifications");
   return (
     <>
       <div className="tabs" role="tablist">
         <button className={tab === "notifications" ? "active" : ""} onClick={() => setTab("notifications")}>Notifications</button>
         <button className={tab === "directory" ? "active" : ""} onClick={() => setTab("directory")}>Directory (LDAP / AD)</button>
+        <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI provider</button>
         <button className={tab === "about" ? "active" : ""} onClick={() => setTab("about")}>Certificate & about</button>
       </div>
       {tab === "notifications" && <NotificationSettings />}
       {tab === "directory" && <DirectorySettings />}
+      {tab === "ai" && <AiSettings />}
       {tab === "about" && <About />}
     </>
   );
@@ -189,6 +191,109 @@ function DirectorySettings() {
         <ErrorBox error={err} />
       </div>
     </Card>
+  );
+}
+
+interface Ai {
+  provider: "none" | "anthropic" | "openai";
+  model: string;
+  base_url: string;
+  api_key: string;
+  max_tokens: number;
+  daily_tokens_per_user: number;
+  timeout: number;
+  providers?: string[];
+  anthropic_models?: string[];
+}
+
+function AiSettings() {
+  const [s, setS] = useState<Ai | null>(null);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const usage = useApi<{ users: { username: string; requests: number; input: number; output: number; today: number }[] }>("/api/settings/ai/usage");
+  useEffect(() => { get<Ai>("/api/settings/ai").then(setS).catch(setErr); }, []);
+  if (!s) return err ? <ErrorBox error={err} /> : <Loading />;
+  const set = (k: keyof Ai, v: any) => setS({ ...s, [k]: v });
+  const save = async () => {
+    setErr(null); setMsg(null);
+    const { providers, anthropic_models, ...body } = s;
+    try { setS({ ...s, ...(await put<Ai>("/api/settings/ai", body)) }); setMsg({ ok: true, text: "Saved." }); } catch (e) { setErr(e as ApiError); }
+  };
+  const test = async () => {
+    setErr(null); setMsg({ ok: true, text: "Asking the model…" });
+    try {
+      const r = await post<{ seconds: number; model: string; reply: string }>("/api/settings/ai/test");
+      setMsg({ ok: true, text: `${r.model} answered in ${r.seconds} s: "${r.reply}"` });
+    } catch (e) { setErr(e as ApiError); setMsg(null); }
+  };
+  return (
+    <>
+      <Card title="AI provider for the chat builder" actions={<button className="btn primary" onClick={save}>Save</button>}>
+        <div className="stack">
+          <div className="muted small">
+            The chat builder turns a description into a range spec. VALOR sends the conversation, its spec reference and
+            the cluster's free VLANs/networks to the provider - no passwords or keys. Specs are validated, and nothing is
+            built until someone plans and approves it. The API key is stored encrypted and never shown again.
+          </div>
+          <div className="grid cols-2">
+            <label className="field">Provider
+              <select value={s.provider} onChange={(e) => set("provider", e.target.value)}>
+                <option value="none">None (chat builder off)</option>
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="openai">OpenAI-compatible endpoint (e.g. a local model server)</option>
+              </select>
+            </label>
+            {s.provider === "anthropic" && (
+              <label className="field">Model
+                <select value={s.model || s.anthropic_models?.[0]} onChange={(e) => set("model", e.target.value)}>
+                  {s.anthropic_models?.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </label>
+            )}
+            {s.provider === "openai" && (
+              <>
+                <label className="field">Base URL <span className="hint">ending in /v1; http:// only to a private IP</span>
+                  <input value={s.base_url} onChange={(e) => set("base_url", e.target.value)} placeholder="https://llm.example.org/v1" />
+                </label>
+                <label className="field">Model
+                  <input value={s.model} onChange={(e) => set("model", e.target.value)} placeholder="llama-3.3-70b" />
+                </label>
+              </>
+            )}
+            {s.provider !== "none" && (
+              <>
+                <label className="field">API key {s.provider === "openai" && <span className="hint">optional for local servers</span>}
+                  <input type="password" value={s.api_key} onChange={(e) => set("api_key", e.target.value)} autoComplete="new-password" />
+                </label>
+                <label className="field">Daily token budget per user <span className="hint">0 = unlimited</span>
+                  <input type="number" min={0} value={s.daily_tokens_per_user} onChange={(e) => set("daily_tokens_per_user", Number(e.target.value))} />
+                </label>
+                <label className="field">Max tokens per answer
+                  <input type="number" min={256} max={32000} value={s.max_tokens} onChange={(e) => set("max_tokens", Number(e.target.value))} />
+                </label>
+              </>
+            )}
+          </div>
+          {s.provider !== "none" && <div className="row"><button className="btn" onClick={test}>Test connection</button></div>}
+          {msg && <div className={`alert ${msg.ok ? "info" : "error"}`}>{msg.text}</div>}
+          <ErrorBox error={err} />
+        </div>
+      </Card>
+      <Card title="Usage (last 30 days)">
+        {!usage.data?.users.length ? <div className="empty">No requests yet.</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>User</th><th>Requests</th><th>Input tokens</th><th>Output tokens</th><th>Last 24 h</th></tr></thead>
+              <tbody>
+                {usage.data.users.map((u) => (
+                  <tr key={u.username}><td>{u.username}</td><td>{u.requests}</td><td>{u.input}</td><td>{u.output}</td><td>{u.today}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </>
   );
 }
 

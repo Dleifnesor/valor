@@ -103,7 +103,7 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
         d = Desired(h.name, False, h.os, tpl(h.os), h.cores, memory, disk, nics, roles, h.segment,
                     str(h.address), family=family)
         d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics,
-                **common, **({"family": family} if windows else {})}
+                **common, **({"family": family} if windows else {}), **({"iso": h.iso} if h.iso else {})}
         d.hw_hash = _h(d.hw)
         d.conv_hash = _h({"hw": d.hw_hash, "roles": roles,
                           "baseline": (win_base.digest if win_base else None) if windows else base_digest,
@@ -131,7 +131,11 @@ def _classify(d: Desired, vm: VMState | None, current_spec: str = "") -> tuple[s
         if old.get(key) != d.hw.get(key):
             reasons.append(f"{key} {old.get(key)} -> {d.hw.get(key)}")
     if reasons:
-        return "update", reasons + ["reboot required"]
+        reasons.append("reboot required")
+    if old.get("iso") != d.hw.get("iso"):                   # CD-ROM media can change while the VM runs
+        reasons.insert(0, f"ISO {old.get('iso') or 'none'} -> {d.hw.get('iso') or 'none'}")
+    if reasons:
+        return "update", reasons
     if vm.meta.get("conv") != d.conv_hash:
         return "converge", ["roles, baseline or policy changed" if vm.meta.get("conv") else "previous apply did not finish"]
     if vm.status != "running":

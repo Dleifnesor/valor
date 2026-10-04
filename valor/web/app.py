@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..config import Config, load_config
 from ..errors import LockBusy, ValorError
-from . import access, auth, blueprints, consoles, db, isos, ranges, settings, status, users
+from . import access, auth, blueprints, builder, consoles, db, isos, ranges, settings, status, users
 from .config import WebConfig, load_web_config
 from .core import UNSAFE
 from .security import Box, RateLimiter
@@ -31,6 +31,11 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), usb=()",
 }
+
+
+# Every API router; the security tests walk this list (each route must state who may call it).
+API_ROUTERS = (auth.router, users.router, settings.router, status.router, ranges.router, consoles.router, isos.router,
+               access.router, blueprints.router, builder.router)
 
 
 def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_dir: str | None = None) -> FastAPI:
@@ -94,8 +99,7 @@ def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_
         log.exception("unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse({"error": "internal_error", "message": "Something went wrong on the server."}, 500)
 
-    for r in (auth.router, users.router, settings.router, status.router, ranges.router, consoles.router, isos.router,
-              access.router, blueprints.router):
+    for r in API_ROUTERS:
         app.include_router(r)
 
     # In the VALOR VM nginx serves the built UI; this fallback is for development only.

@@ -72,6 +72,8 @@ class Host(_Strict):
     disk: int = Field(10, ge=8, le=500, description="GiB")
     roles: list[RoleRef] = Field(default_factory=list)
     description: str = ""
+    iso: str | None = Field(None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.iso$",
+                            description="an ISO from the ISO library attached as a CD-ROM")
 
 
 class Router(_Strict):
@@ -268,6 +270,9 @@ def canonical(spec: RangeSpec) -> str:
     data = spec.model_dump(mode="json", by_alias=True)
     if data.get("access") is None:              # added later: leaving it out keeps older specs' hashes unchanged
         data.pop("access", None)
+    for h in data["hosts"]:
+        if h.get("iso") is None:
+            h.pop("iso", None)
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 

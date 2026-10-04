@@ -26,7 +26,7 @@ from .templates import cpu_type
 
 STAGE = "/var/lib/valor-install"
 PAYLOAD_DIRS = ["valor", "appliance", "roles", "baselines", "templates", "ranges"]
-PAYLOAD_FILES = ["pyproject.toml", "README.md"]
+PAYLOAD_FILES = ["pyproject.toml", "README.md", ".claude/skills/range-build/spec-reference.md"]
 
 
 def payload() -> bytes:

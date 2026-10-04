@@ -58,6 +58,18 @@ class RollbackIn(_In):
     delete_newer: bool = False
 
 
+def role_list(cfg) -> list[dict]:
+    """Every role (Linux role.sh and/or Windows role.ps1) with the OS families it supports."""
+    roles = []
+    for d in sorted(cfg.roles_dir.iterdir()):
+        if (d / "role.sh").is_file() or (d / "role.ps1").is_file():
+            role = load_role(cfg.roles_dir, d.name)
+            meta = role.meta
+            roles.append({"name": d.name, "description": meta.get("description", ""), "ports": meta.get("ports", []),
+                          "params": meta.get("params", {}), "families": role.families})
+    return roles
+
+
 def _cfg(request: Request):
     return request.app.state.cfg
 
@@ -119,12 +131,7 @@ def catalog(request: Request, s: Session = Depends(require("viewer"))) -> dict:
         present = templates(PVE(cfg), cat)
     except ValorError:
         present = {}
-    roles = []
-    for d in sorted(cfg.roles_dir.iterdir()):
-        if (d / "role.sh").is_file():
-            meta = load_role(cfg.roles_dir, d.name).meta
-            roles.append({"name": d.name, "description": meta.get("description", ""), "ports": meta.get("ports", []),
-                          "params": meta.get("params", {})})
+    roles = role_list(cfg)
     baselines = []
     for p in sorted(cfg.baselines_dir.glob("*.yaml")):
         b = load_baseline(cfg.baselines_dir, p.stem)

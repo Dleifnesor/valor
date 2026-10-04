@@ -310,3 +310,14 @@ tr.clickable { cursor: pointer; }
 .progress { height: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin-top: 6px; }
 .progress > div { height: 100%; background: var(--accent); transition: width 0.4s; }
 .qr svg { display: block; max-width: 100%; height: auto; }
+/* chat builder */
+.builder { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .builder { grid-template-columns: 1fr; } }
+.builder-chat { display: flex; flex-direction: column; }
+.chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
+.bubble { padding: 10px 12px; border-radius: 10px; max-width: 92%; line-height: 1.45; }
+.bubble.user { align-self: flex-end; background: var(--accent); color: #fff; }
+.bubble.assistant { align-self: flex-start; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); }
+.chat-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); align-items: flex-end; }
+.chat-input textarea { flex: 1; resize: vertical; }
+.btn.example { text-align: left; white-space: normal; font-weight: 400; }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 
 from .baseline import baseline_for, load_baseline
+from .isos import list_isos
 from .cluster import load_catalog, range_vms, templates, vlans_in_use
 from .errors import ValorError
 from .pve import PVE
@@ -69,8 +70,18 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
     except ValorError as e:
         err("baseline", e.message, e.hint)
 
+    library = None
     for hi, h in enumerate(spec.hosts):
         family = catalog.get(h.os or "", {}).get("family")
+        if h.iso:
+            if library is None:
+                try:
+                    library = {i["name"] for i in list_isos(pve)}
+                except ValorError:
+                    library = set()
+            if h.iso not in library:
+                err(f"hosts.{hi}.iso", f"ISO {h.iso} is not in the ISO library",
+                    "Download or upload it in the ISO library (or fix the file name).")
         for ri, ref in enumerate(h.roles):
             try:
                 role = load_role(cfg.roles_dir, ref.name)
