@@ -1,0 +1,46 @@
+[Unit]
+Description=VALOR web API
+Documentation=https://github.com/Dleifnesor/valor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=valor
+# Primary group www-data: the socket directory /run/valor-web is then valor:www-data 0750, so only nginx can
+# connect. The valor group (supplementary) gives read access to /etc/valor.
+Group=www-data
+SupplementaryGroups=valor
+RuntimeDirectory=valor-web
+RuntimeDirectoryMode=0750
+Environment=VALOR_CONFIG=/etc/valor/config.toml PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/valor/venv/bin/python -m valor.web.cli serve --uds /run/valor-web/web.sock
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/valor
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

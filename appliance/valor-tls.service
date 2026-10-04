@@ -1,0 +1,6 @@
+[Unit]
+Description=VALOR: renew the web certificate when needed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/valor/bin/valor-tls renew

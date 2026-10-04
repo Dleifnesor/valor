@@ -75,6 +75,8 @@ def execute(cfg, job_id: str, echo=None) -> dict:
 def start(cfg, kind: str, target: dict, origin: str, background: bool, echo=None) -> dict:
     job_id = jobs.create(cfg, kind, target, origin)
     if background:
+        if cfg.job_runner == "worker":    # the valor-worker service picks queued jobs up in order
+            return {"job": job_id, "state": "queued", "hint": "poll job_status(job) until state is succeeded/failed"}
         jobs.spawn(cfg, job_id)
         return {"job": job_id, "state": "started", "hint": "poll job_status(job) until state is succeeded/failed"}
     return execute(cfg, job_id, echo)

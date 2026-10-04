@@ -274,8 +274,9 @@ def load_spec(path: str | Path, ranges_dir: Path, default_os: str) -> tuple[Rang
 
 
 # ---------------------------------------------------------------------- tests
-def effective_tests(spec: RangeSpec) -> list[dict]:
-    """Explicit tests plus, with auto_tests, tests derived from the policy and egress settings."""
+def effective_tests(spec: RangeSpec, probe: tuple[str, int] = INTERNET_PROBE) -> list[dict]:
+    """Explicit tests plus, with auto_tests, tests derived from the policy and egress settings.
+    probe: the public host:port that stands for "the internet" (configurable per installation)."""
     out: list[dict] = []
 
     def add(name, src, dst, proto, port, expect, origin):
@@ -288,7 +289,7 @@ def effective_tests(spec: RangeSpec) -> list[dict]:
     for t in spec.tests:
         port = t.port
         if t.to == "internet" and t.proto == "tcp":
-            port = port or INTERNET_PROBE[1]
+            port = port or probe[1]
         add(t.name or f"{t.from_} -> {t.to} {t.proto}{'/' + str(port) if port else ''} {t.expect}",
             t.from_, t.to, t.proto, port, t.expect, "spec")
     if not spec.auto_tests:
@@ -336,5 +337,5 @@ def effective_tests(spec: RangeSpec) -> list[dict]:
         if not src:
             continue
         add(f"egress: {s.name} internet {'allowed' if s.internet else 'blocked'}",
-            src, "internet", "tcp", INTERNET_PROBE[1], "open" if s.internet else "closed", "egress")
+            src, "internet", "tcp", probe[1], "open" if s.internet else "closed", "egress")
     return out
