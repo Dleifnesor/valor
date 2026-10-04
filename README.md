@@ -28,7 +28,7 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 |---|---|
 | Dashboard | health checks: Proxmox API, token scope, templates, range network, certificate, disk, OS updates |
 | Ranges | every range with its build and verification status |
-| Range | **topology map** (React Flow): add VMs and services, resize or remove VMs right on the map - changes collect as a draft shown in the plan colors and are built through Review plan → Approve; a **Chat** panel on the map answers questions (Question), proposes changes as a draft with VALOR's plan (Plan) or edits the YAML with a diff (Code), kept per range; hosts, tests, verification matrix, spec, journal, history |
+| Range | **topology map** (React Flow): add VMs, services and network segments (presets: DMZ, users, servers, management, attacker lab, isolated), edit traffic rules, resize or remove VMs right on the map - changes collect as a draft shown in the plan colors and are built through Review plan → Approve; a **Chat** panel on the map answers questions (Question), proposes changes as a draft with VALOR's plan (Plan) or edits the YAML with a diff (Code), kept per range; hosts, tests, verification matrix, spec, journal, history |
 | Consoles | every VM's screen (noVNC) or serial console (xterm.js) in the browser, through VALOR (operators, audited) |
 | Login | one generated password per range for the VM consoles (Linux `valor`, Windows `Administrator` / `DOMAIN\Administrator`), encrypted at rest, shown to operators, audited, rotatable |
 | Power, snapshots | start / shut down / reboot a range or one VM; snapshots, automatic `valor-clean` after each verified build, reset to a snapshot |

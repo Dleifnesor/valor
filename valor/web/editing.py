@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import drafts
-from ..cluster import range_vms
+from ..blueprints import _taken
+from ..cluster import range_vms, vlans_in_use
 from ..errors import ValorError
 from ..pve import PVE
 from ..roles import load_role
@@ -31,7 +32,9 @@ class RoleIn(_In):
 
 
 class Op(_In):
-    op: Literal["add_host", "update_host", "remove_host", "add_role", "remove_role"]
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    op: Literal["add_host", "update_host", "remove_host", "add_role", "remove_role",
+                "add_segment", "update_segment", "remove_segment", "add_rule", "remove_rule"]
     name: str | None = Field(default=None, max_length=15)
     host: str | None = Field(default=None, max_length=15)
     segment: str | None = Field(default=None, max_length=15)
@@ -45,6 +48,18 @@ class Op(_In):
     role: str | None = Field(default=None, max_length=41)
     params: dict[str, Any] = Field(default_factory=dict)
     allow_from: list[str] = Field(default_factory=list, max_length=20)
+    # segments
+    vlan: int | None = Field(default=None, ge=2, le=4094)
+    cidr: str | None = Field(default=None, max_length=18)
+    internet: bool | None = None
+    vpn_reach: bool | None = None
+    with_hosts: bool = False
+    # traffic rules
+    from_: str | None = Field(default=None, alias="from", max_length=15)
+    to: str | None = Field(default=None, max_length=15)
+    proto: Literal["tcp", "udp", "icmp", "any"] | None = None
+    ports: list[int | str] = Field(default_factory=list, max_length=20)
+    index: int | None = Field(default=None, ge=0, le=500)
 
 
 class OpsIn(_In):
@@ -53,6 +68,16 @@ class OpsIn(_In):
 
 class DraftIn(_In):
     yaml: str = Field(max_length=MAX_SPEC_BYTES)
+
+
+def _alloc(cfg) -> dict:
+    """VLANs and networks taken by every range, the cluster and live VMs - for new segments."""
+    try:
+        live = vlans_in_use(PVE(cfg))
+    except ValorError:
+        live = {}
+    vlans, nets = _taken(cfg, live)
+    return {"vlans": set(vlans), "nets": [n for n, _ in nets], "vlan_range": (cfg.vlan_min, cfg.vlan_max)}
 
 
 def _vms(cfg, name: str) -> dict:
@@ -113,13 +138,28 @@ def edit(name: str, body: OpsIn, request: Request, s: Session = Depends(require(
                 except ValorError:
                     raise ApiError(400, "unknown_role", f"There is no service (role) '{r}'.")
     try:
-        data = drafts.apply_ops(base, [o.model_dump(exclude_none=True) for o in body.ops], ports)
+        segment_ops = any(o.op in ("add_segment", "update_segment") for o in body.ops)
+        data = drafts.apply_ops(base, [o.model_dump(exclude_none=True, by_alias=True) for o in body.ops], ports,
+                                _alloc(cfg) if segment_ops else None)
         text = drafts.to_yaml(data)
         drafts.save(cfg, name, text, s.username, "map")
     except ValorError as e:
         raise ApiError(400, e.code, e.message, **({"details": e.details} if e.details else {}))
     s.audit("range.draft.edit", target=name, detail={"ops": [o.op for o in body.ops]})
     return view(cfg, name)
+
+
+@router.get("/ranges/{name}/draft/suggest-segment")
+def suggest_segment(name: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    """A free VLAN and private network for the Add-segment form (editable there)."""
+    cfg = _cfg(request)
+    _, saved = _load(cfg, _name(name))
+    d = drafts.load(cfg, name)
+    data = parse_spec(d[0] if d else saved).model_dump(mode="json", by_alias=True, exclude_none=True)
+    try:
+        return {**drafts.suggest_segment(data, _alloc(cfg)), "vlan_range": [cfg.vlan_min, cfg.vlan_max]}
+    except ValorError as e:
+        raise ApiError(409, e.code, e.message)
 
 
 @router.delete("/ranges/{name}/draft")
