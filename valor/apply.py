@@ -485,16 +485,16 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         if hosts:
             with steps.step("router: temporary build egress", ROUTER):
                 load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=True)
-        if from_iso:
-            with steps.step("install from ISO (kickstart)"):
-                try:
-                    with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
-                        for f in as_completed([ex.submit(wait_iso_install, pve, spec, d, vmids[d.host])
-                                               for d in from_iso]):
-                            f.result()
-                except Exception:
-                    load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
-                    raise
+            if from_iso:                                        # installs download through the build egress
+                with steps.step("install from ISO (kickstart)"):
+                    try:
+                        with ThreadPoolExecutor(PARALLEL_HOSTS) as ex:
+                            for f in as_completed([ex.submit(wait_iso_install, pve, spec, d, vmids[d.host])
+                                                   for d in from_iso]):
+                                f.result()
+                    except Exception:
+                        load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
+                        raise
 
             def converge(d: Desired):
                 vmid = vmids[d.host]
