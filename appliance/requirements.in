@@ -1,3 +1,7 @@
+# OwO *lists the Python friends VALOR brings along* appliance/requirements.in ^w^
+# The direct dependencies, exactly pinned. The VM installs from requirements.lock instead (every package, with
+# hashes). Each one: web framework, ASGI server, password hashing, crypto, QR codes, LDAP, the Proxmox client, HTTP,
+# data validation, YAML, websockets *wags tail*
 # Top-level Python dependencies of the VALOR VM (engine + web service). Exact pins; run tools/lock.py after
 # changing this file to regenerate requirements.lock (full closure with hashes).
 fastapi==0.142.2
@@ -10,3 +14,4 @@ proxmoxer==2.3.0
 requests==2.34.2
 pydantic==2.13.5
 PyYAML==6.0.3
+websockets==17.2

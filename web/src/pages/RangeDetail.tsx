@@ -4,6 +4,7 @@ import { Change, Plan, Topology } from "../types";
 import { ago, go, useApi, when } from "../hooks";
 import { ErrorBox, Loading, Modal, StateBadge } from "../components/ui";
 import { CHANGE_LABEL, TopologyMap } from "../components/Topology";
+import { HostPower, LoginModal, PowerMenu, SnapshotsTab } from "../components/RangeActions";
 
 interface Detail {
   name: string;
@@ -24,6 +25,7 @@ interface Detail {
     baseline: Record<string, { control: string; title: string; area: string; after: string }[]>;
   };
   last_apply: null | { ok: boolean; started: string; seconds: number; error?: string; message?: string };
+  logins: boolean;
 }
 
 interface PlanResponse {
@@ -35,7 +37,7 @@ interface PlanResponse {
   topology: Topology;
 }
 
-const TABS = ["Map", "Hosts", "Tests", "Verification", "Spec", "Journal", "History"] as const;
+const TABS = ["Map", "Hosts", "Snapshots", "Tests", "Verification", "Spec", "Journal", "History"] as const;
 
 export function RangeDetail({ name, canOperate }: { name: string; canOperate: boolean }) {
   const { data, error, loading, reload } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
@@ -44,6 +46,7 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [actionError, setActionError] = useState<ApiError | null>(null);
   const [destroying, setDestroying] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
 
   if (loading && !data) return <Loading />;
   if (!data) return <ErrorBox error={error} />;
@@ -88,6 +91,8 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
         {canOperate && (
           <div className="row">
             <button className="btn" onClick={() => go(`ranges/${name}/edit`)}>Edit spec</button>
+            {built && data.logins && <button className="btn" onClick={() => setShowLogin(true)}>Login</button>}
+            {built && <PowerMenu range={name} onError={setActionError} />}
             {built && <button className="btn" onClick={doVerify}>Verify</button>}
             <button className="btn primary" onClick={doPlan} disabled={planning}>
               {planning ? <><span className="spinner" /> Planning…</> : built ? "Plan changes" : "Plan build"}
@@ -105,8 +110,10 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
           ))}
         </div>
-        {tab === "Map" && <TopologyMap topology={data.topology} tall />}
-        {tab === "Hosts" && <Hosts data={data} />}
+        {tab === "Map" && <TopologyMap topology={data.topology} tall
+          onConsole={canOperate ? (h) => go(`ranges/${name}/console/${h}/vnc`) : undefined} />}
+        {tab === "Hosts" && <Hosts data={data} canOperate={canOperate} onError={setActionError} />}
+        {tab === "Snapshots" && <SnapshotsTab range={name} canOperate={canOperate} />}
         {tab === "Tests" && <Tests data={data} />}
         {tab === "Verification" && <Verification data={data} />}
         {tab === "Spec" && <div className="card-body"><pre className="mono">{data.yaml}</pre></div>}
@@ -118,18 +125,19 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
 
       {plan && <PlanModal name={name} res={plan} onClose={() => setPlan(null)} />}
       {destroying && <DestroyModal name={name} onClose={() => { setDestroying(false); reload(); }} />}
+      {showLogin && <LoginModal range={name} onClose={() => setShowLogin(false)} />}
     </>
   );
 }
 
-function Hosts({ data }: { data: Detail }) {
+function Hosts({ data, canOperate, onError }: { data: Detail; canOperate: boolean; onError: (e: ApiError) => void }) {
   const rows = [{ name: "rtr", segment: "all", address: data.spec.segments.map((s: any) => s.cidr).join(", "), os: data.spec.router.os,
     cores: data.spec.router.cores, memory: data.spec.router.memory, disk: data.spec.router.disk, roles: [{ name: "router" }] },
     ...data.spec.hosts];
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr><th>Host</th><th>Segment</th><th>Address</th><th>OS</th><th>Size</th><th>Roles</th><th>VM</th></tr></thead>
+        <thead><tr><th>Host</th><th>Segment</th><th>Address</th><th>OS</th><th>Size</th><th>Roles</th><th>VM</th><th></th></tr></thead>
         <tbody>
           {rows.map((h: any) => {
             const vm = data.vms[h.name];
@@ -142,6 +150,7 @@ function Hosts({ data }: { data: Detail }) {
                 <td className="nowrap">{h.cores} vCPU · {h.memory} MiB · {h.disk} GiB</td>
                 <td>{(h.roles || []).map((r: any) => r.name).join(", ") || "–"}</td>
                 <td className="nowrap">{vm ? <><StateBadge state={vm.status === "running" ? "ok" : "unknown"} label={vm.status} /> <span className="muted small">#{vm.vmid}</span></> : "–"}</td>
+                <td>{vm && canOperate && <HostPower range={data.name} host={h.name} status={vm.status} onError={onError} />}</td>
               </tr>
             );
           })}

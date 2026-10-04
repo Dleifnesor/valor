@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useState } from "react";
+import { ReactNode, Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { ApiError, get, post, setCsrf, setUnauthenticatedHandler } from "./api";
 import { Me } from "./types";
 import { go, useRoute } from "./hooks";
@@ -14,6 +14,8 @@ import { Users } from "./pages/Users";
 import { Audit } from "./pages/Audit";
 import { Settings } from "./pages/Settings";
 import { Account } from "./pages/Account";
+// The console page carries noVNC and xterm.js: loaded only when a console is opened.
+const ConsolePage = lazy(() => import("./pages/Console").then((m) => ({ default: m.ConsolePage })));
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -91,8 +93,15 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
 
   let page: ReactNode;
   let title = "";
-  const [p0, p1, p2] = route;
-  if (p0 === "ranges" && p1 === "new") {
+  const [p0, p1, p2, p3, p4] = route;
+  if (p0 === "ranges" && p1 && p2 === "console" && p3) {
+    title = `${p3} console`;
+    page = (
+      <Suspense fallback={<Loading label="Loading the console…" />}>
+        <ConsolePage range={p1} host={p3} kind={p4 === "serial" ? "serial" : "vnc"} />
+      </Suspense>
+    );
+  } else if (p0 === "ranges" && p1 === "new") {
     title = "New range";
     page = <RangeEditor canEdit={can("operator")} />;
   } else if (p0 === "ranges" && p1 && p2 === "edit") {

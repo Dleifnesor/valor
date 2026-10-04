@@ -77,13 +77,21 @@ controls:
 
   - id: kernel-suid-dumpable
     area: Kernel
-    title: Core dumps of setuid programs disabled (fs.suid_dumpable = 0)
-    theme: CIS Level 1 - process hardening
-    reference: "Linux kernel admin-guide, sysctl/fs: suid_dumpable"
+    title: Core dumps of setuid programs disabled (fs.suid_dumpable = 0), also after reboots
+    theme: CIS Level 1 - process hardening; automatic error reporting not enabled
+    reference: "Linux kernel admin-guide, sysctl/fs: suid_dumpable; Ubuntu apport(8) - apport sets suid_dumpable=2 when it starts"
     applies_to: all
     check: |
-      [ "$(sysctl -n fs.suid_dumpable)" = 0 ] && grep -qs '^fs.suid_dumpable = 0' /etc/sysctl.d/60-valor-baseline.conf
+      [ "$(sysctl -n fs.suid_dumpable)" = 0 ] && grep -qs '^fs.suid_dumpable = 0' /etc/sysctl.d/60-valor-baseline.conf || exit 1
+      if systemctl cat apport.service >/dev/null 2>&1; then
+        [ "$(systemctl is-enabled apport.service 2>/dev/null)" = masked ] && ! systemctl is-active -q apport.service
+      fi
     fix: |
+      if systemctl cat apport.service >/dev/null 2>&1; then
+        systemctl stop apport.service 2>/dev/null || true
+        systemctl mask -q apport.service
+        [ -f /etc/default/apport ] && sed -i 's/^enabled=.*/enabled=0/' /etc/default/apport
+      fi
       f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
       grep -v '^fs.suid_dumpable' "$f" > "$f.new"; echo 'fs.suid_dumpable = 0' >> "$f.new"; mv "$f.new" "$f"
       sysctl -q -w fs.suid_dumpable=0

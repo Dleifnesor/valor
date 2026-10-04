@@ -20,7 +20,7 @@ from .sh import CommandError, pvesh
 
 ENGINE_PRIVS = ["Pool.Audit", "VM.Allocate", "VM.Audit", "VM.Clone", "VM.Config.CDROM", "VM.Config.CPU",
                 "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.HWType", "VM.Config.Memory", "VM.Config.Network",
-                "VM.Config.Options", "VM.PowerMgmt"]
+                "VM.Config.Options", "VM.PowerMgmt", "VM.Console", "VM.Snapshot", "VM.Snapshot.Rollback"]
 AGENT_PRIVS_9 = ["VM.GuestAgent.Audit", "VM.GuestAgent.FileRead", "VM.GuestAgent.FileWrite", "VM.GuestAgent.Unrestricted"]
 AGENT_PRIVS_8 = ["VM.Monitor"]          # PVE 8: guest agent access is part of VM.Monitor
 TOKEN = "appliance"
@@ -76,8 +76,8 @@ def plan(a: Answers, facts: Facts, bridge: str) -> list[str]:
     return out
 
 
-def ensure(a: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
-    """Create/refresh everything; returns {"token_id", "secret"} (the secret goes only into the VALOR VM)."""
+def ensure_roles(facts: Facts, rec: Record) -> None:
+    """Create or update VALOR's roles to this version's privileges (also run by --upgrade)."""
     created_roles = rec.objects.get("roles_created", [])
     for name, privs in roles(facts).items():
         have = facts.roles.get(name)
@@ -89,6 +89,21 @@ def ensure(a: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
             pvesh("set", f"/access/roles/{name}", privs=",".join(privs), append=0)
             ui.ok(f"role {name} updated")
     rec.set("roles_created", sorted(set(created_roles)))
+
+
+def grant(a: Answers, facts: Facts, rec: Record, bridge: str, token_id: str) -> None:
+    granted = []
+    for path, role in acls(a, facts, bridge):
+        pvesh("set", "/access/acl", path=path, roles=role, users=a.user, propagate=1)
+        pvesh("set", "/access/acl", path=path, roles=role, tokens=token_id, propagate=1)
+        granted.append([path, role])
+    rec.set("acls", granted)
+    ui.ok(f"{len(granted)} permissions granted to the user and the token")
+
+
+def ensure(a: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
+    """Create/refresh everything; returns {"token_id", "secret"} (the secret goes only into the VALOR VM)."""
+    ensure_roles(facts, rec)
 
     if a.user not in facts.users:
         pvesh("create", "/access/users", userid=a.user, comment=f"VALOR {a.id}: engine API user (token only, no password)")
@@ -117,13 +132,7 @@ def ensure(a: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
     rec.set("token", token_id)
     ui.ok(f"API token {token_id} (privilege-separated; secret goes only into the VALOR VM)")
 
-    granted = []
-    for path, role in acls(a, facts, bridge):
-        pvesh("set", "/access/acl", path=path, roles=role, users=a.user, propagate=1)
-        pvesh("set", "/access/acl", path=path, roles=role, tokens=token_id, propagate=1)
-        granted.append([path, role])
-    rec.set("acls", granted)
-    ui.ok(f"{len(granted)} permissions granted to the user and the token")
+    grant(a, facts, rec, bridge, token_id)
     return {"token_id": token_id, "secret": secret}
 
 
