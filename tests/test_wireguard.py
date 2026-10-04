@@ -149,7 +149,7 @@ def test_web_endpoints(env, tmp_path):
         assert op.get("/api/ranges/wglab/wireguard/peers/mallory").status_code == 404
         r = op.get("/api/ranges/wglab/wireguard/peers/alice")
         assert r.status_code == 200 and "Endpoint = 192.168.1.50:51820" in r.json()["config"]
-        assert r.json()["qr_svg"].startswith("<svg") and r.json()["filename"] == "wglab-alice.conf"
+        assert r.json()["qr_svg"].startswith('<svg xmlns="http://www.w3.org/2000/svg"') and r.json()["filename"] == "wglab-alice.conf"
         audit = db.connect(wcfg.db).execute(
             "SELECT COUNT(*) FROM audit WHERE action='range.wireguard.config'").fetchone()[0]
         assert audit == 1
