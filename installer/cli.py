@@ -202,6 +202,9 @@ def upgrade(args, facts: Facts) -> None:
     bridge = rec["objects"]["bridge"]["name"]
     vmid = rec["objects"]["vm"]["vmid"]
     ui.step(f"Upgrading VALOR '{a.id}' from {rec.get('version')} to {VERSION}")
+    r = Record(a.id, rec)
+    identity.ensure_roles(facts, r)                    # new versions may need new privileges
+    identity.grant(a, facts, r, bridge, rec["objects"]["token"])
     ip = appliance.boot(facts, vmid)
     api_host, pve_ca = identity.api_endpoint(facts)
     files: dict[str, str | bytes] = {"config.toml": appliance.config_toml(a, facts, bridge, api_host, pve_ca, ip),
@@ -209,7 +212,6 @@ def upgrade(args, facts: Facts) -> None:
     if pve_ca:
         files["pve-ca.pem"] = pve_ca
     appliance.provision(a, facts, vmid, "upgrade", files)
-    r = Record(a.id, rec)
     r.set("vm", {**rec["objects"]["vm"], "ip": ip})
     ca = appliance.ca_pem(facts, vmid) if a.tls == "valor-ca" else None
     if not appliance.health(ip, ca):

@@ -30,7 +30,7 @@ def env(tmp_path):
     wcfg = WebConfig(db=str(tmp_path / "web.sqlite3"), secret_key_file=str(key), tls_cert=str(tmp_path / "none.crt"))
     cfg = Config(project_dir=str(ROOT), state_dir=str(tmp_path / "state"), token_file=str(tmp_path / "no-token.json"),
                  node="pve1", pool="valor-ranges", template_pool="valor-templates", storage="local-lvm",
-                 segment_bridge="vmbr100", uplink_bridge="vmbr0")
+                 segment_bridge="vmbr100", uplink_bridge="vmbr0", job_runner="worker", secret_key_file=str(key))
     db.migrate(wcfg.db)
     conn = db.connect(wcfg.db)
     now = time.time()
@@ -268,3 +268,34 @@ def test_ldap_authentication_with_mock_directory(monkeypatch):
     assert not ldapauth.authenticate(cfg, "al*", "alicepw", server=server).ok          # filter input is escaped
     assert ldapauth.authenticate(cfg, "bob", "bobpw", server=server).reason == "not in any VALOR group"
     assert ldapauth.test_connection(cfg, "alice", server=server)["ok"]
+
+
+def test_range_logins_power_and_snapshot_endpoints(env):
+    app, wcfg = env
+    from valor import credentials, jobs
+    cfg = app.state.cfg
+    with client(app) as op, client(app) as viewer:
+        me, _ = enroll(op, "olivia")
+        h = {"X-CSRF-Token": me["csrf"]}
+        vme, _ = enroll(viewer, "vic")
+        assert op.get("/api/ranges/web2tier/credentials").status_code == 404           # not built yet
+        login = credentials.ensure(cfg, "web2tier")
+        r = op.get("/api/ranges/web2tier/credentials")
+        assert r.status_code == 200 and r.json()["password"] == login["password"]
+        assert viewer.get("/api/ranges/web2tier/credentials").status_code == 403
+        audit = db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='range.credentials.view'").fetchone()[0]
+        assert audit == 1
+        j = op.post("/api/ranges/web2tier/power", json={"action": "reboot", "hosts": ["web"]}, headers=h)
+        assert j.status_code == 200 and j.json()["state"] == "queued"
+        assert jobs.status(cfg, j.json()["job"])["target"] == {"range": "web2tier", "action": "reboot", "hosts": ["web"]}
+        assert op.post("/api/ranges/web2tier/power", json={"action": "suspend"}, headers=h).status_code == 422
+        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "valor-clean"}, headers=h).status_code == 400
+        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "a b"}, headers=h).status_code == 422
+        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "before-test"}, headers=h).status_code == 200
+        r = op.post("/api/ranges/web2tier/snapshots/valor-clean/rollback", json={"confirm": "nope"}, headers=h)
+        assert r.status_code == 400
+        r = op.post("/api/ranges/web2tier/snapshots/valor-clean/rollback", json={"confirm": "web2tier"}, headers=h)
+        assert r.status_code == 200
+        assert viewer.post("/api/ranges/web2tier/power", json={"action": "start"},
+                           headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
+        assert op.post("/api/ranges/web2tier/credentials/rotate", headers=h).status_code == 200
