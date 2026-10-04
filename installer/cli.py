@@ -21,6 +21,7 @@ examples:
   ./install.sh --status                         show the installation and check the web UI
   ./install.sh --upgrade                        push this version into the VALOR VM (data is kept)
   ./install.sh --template debian-13             build another OS template for an existing installation
+  ./install.sh --template rocky-10 --rebuild    rebuild a template (current updates) and remove the old one
   ./install.sh --uninstall [--purge-ranges]     remove VALOR (ranges are kept unless --purge-ranges)
 """
 
@@ -208,6 +209,13 @@ def upgrade(args, facts: Facts) -> None:
     identity.ensure_roles(facts, r)                    # new versions may need new privileges
     identity.grant(a, facts, r, bridge, rec["objects"]["token"])
     ip = appliance.boot(facts, vmid)
+    busy = appliance.busy_jobs(facts, vmid)
+    if busy:
+        ui.warn(f"VALOR is running or has queued {len(busy)} job(s) ({', '.join(busy)}). The upgrade restarts the "
+                "worker, so it waits until they are done.")
+        if not ui.confirm("Wait for them, then upgrade?", default=True):
+            raise SystemExit(0)
+        appliance.wait_jobs(facts, vmid)
     api_host, pve_ca = identity.api_endpoint(facts)
     files: dict[str, str | bytes] = {"config.toml": appliance.config_toml(a, facts, bridge, api_host, pve_ca, ip),
                                      "appliance.env": appliance.appliance_env(a, facts, "upgrade", api_host)}
@@ -270,7 +278,7 @@ def add_template(args, facts: Facts) -> None:
         raise SystemExit(f"unknown OS {args.template}; known: {', '.join(templates.catalog())}")
     rec = Record(a.id, facts.record)
     ui.step(f"Template {args.template}")
-    templates.ensure(a, facts, rec, [args.template])
+    templates.ensure(a, facts, rec, [args.template], rebuild=args.rebuild)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -287,6 +295,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
     ap.add_argument("--yes", action="store_true", help="accept defaults and confirmations (unattended)")
     ap.add_argument("--purge-ranges", action="store_true", help="with --uninstall: also delete all range VMs")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="with --template: build a fresh template (current updates) and remove the old one")
     ap.add_argument("--version", action="version", version=f"VALOR {VERSION}")
     args = ap.parse_args(argv)
     if os.geteuid() != 0:

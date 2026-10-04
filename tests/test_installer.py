@@ -143,3 +143,18 @@ def test_record_merges_concurrent_runs(tmp_path, monkeypatch):
     assert [t["vmid"] for t in disk["objects"]["templates"]] == [5900, 5902]
     assert disk["objects"]["vm"]["ip"] == "192.168.1.87" and disk["objects"]["windows_password_5900"] == "x"
     assert disk["steps"] == {"templates": "done"}
+
+
+def test_record_retired_template_stays_removed(tmp_path, monkeypatch):
+    import json
+    from installer import record as R
+    monkeypatch.setattr(R, "RECORD_DIR", tmp_path / "rec")
+    monkeypatch.setattr(R, "LOCK_DIR", tmp_path / "lock")
+    a = R.Record("valor")
+    a.add_template({"os": "rocky-10", "vmid": 5900, "built": True})
+    b = R.Record("valor", json.loads(a.path.read_text()))        # another run that still knows the old template
+    a.add_template({"os": "rocky-10", "vmid": 5908, "built": True})
+    a.remove_template(5900)
+    b.set("vm", {"vmid": 5999})                                    # must not bring 5900 back
+    disk = json.loads(a.path.read_text())
+    assert [t["vmid"] for t in disk["objects"]["templates"]] == [5908] and disk["objects"]["vm"] == {"vmid": 5999}

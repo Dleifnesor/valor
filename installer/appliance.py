@@ -226,6 +226,31 @@ def provision(a: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, s
     raise SystemExit("appliance setup did not finish within 40 minutes; see /var/log/valor-setup.log in the VM")
 
 
+JOBS_DIR = "/var/lib/valor/state/jobs"
+
+
+def busy_jobs(facts: Facts, vmid: int) -> list[str]:
+    """Jobs running or queued in the VALOR VM (an upgrade restarts the worker, which first finishes its job)."""
+    code, out, _ = guest.script(facts.node, vmid, f"""
+for f in {JOBS_DIR}/*/job.json; do
+  [ -f "$f" ] && grep -qE '"state": "(running|queued)"' "$f" && basename "$(dirname "$f")"
+done
+true
+""", timeout=60)
+    return out.split() if code == 0 else []
+
+
+def wait_jobs(facts: Facts, vmid: int, timeout: float = 3 * 3600) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        busy = busy_jobs(facts, vmid)
+        if not busy:
+            return
+        ui.info(f"... waiting for {len(busy)} job(s): {', '.join(busy)}")
+        time.sleep(30)
+    raise SystemExit("VALOR jobs are still running; try the upgrade again later")
+
+
 def ca_pem(facts: Facts, vmid: int) -> str:
     return guest.read_file(facts.node, vmid, "/etc/valor/tls/ca.crt")
 

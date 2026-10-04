@@ -40,6 +40,19 @@ def _probe(pve: PVE, vmid: int, proto: str, ip: str, port: int | None, family: s
     return "closed", f"no reply (exit {code})"
 
 
+def _wireguard_check(pve: PVE, router_vmid: int, wg) -> dict:
+    """The router's wg0 listens on the spec's port and knows every peer."""
+    port = pve.exec(router_vmid, ["wg", "show", "wg0", "listen-port"], timeout=30)
+    peers = pve.exec(router_vmid, ["wg", "show", "wg0", "peers"], timeout=30)
+    listening = port.ok and port.out.strip() == str(wg.port)
+    known = len(peers.out.split()) if peers.ok else 0
+    ok = listening and known == len(wg.peers)
+    return {"name": f"WireGuard access: router listens on udp/{wg.port} for {len(wg.peers)} peer(s)",
+            "from": ROUTER, "to": "wireguard", "proto": "udp", "port": wg.port, "expect": "open",
+            "origin": "access", "target": f"wg0 udp/{wg.port}", "observed": "open" if ok else "closed",
+            "detail": f"listening: {listening}; peers configured: {known}/{len(wg.peers)}", "pass": ok}
+
+
 def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
     t0 = time.time()
     vms = {vm.host: vm for vm in range_vms(pve, spec.name)}
@@ -75,6 +88,10 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
     with ThreadPoolExecutor(4) as ex:
         for r in ex.map(run_src, list(by_src)):
             results.extend(r)
+    wg = spec.access.wireguard if spec.access else None
+    if wg:
+        results.append(_wireguard_check(pve, vms[ROUTER].vmid, wg))
+        emit("test", name=results[-1]["name"], passed=results[-1]["pass"])
 
     baseline = load_baseline(pve.cfg.baselines_dir, spec.baseline)
     base: dict[str, list[dict]] = {}

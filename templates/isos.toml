@@ -89,10 +89,12 @@ filename = "windows-server-2022-eval-en-us.iso"
 note = "Microsoft publishes no checksum for evaluation media; VALOR records the SHA-256 after the download."
 
 ["windows-11-enterprise-eval"]
-title = "Windows 11 Enterprise 24H2 (90-day evaluation)"
+# Microsoft's Evaluation Center link for the current release (26H2 in Oct 2026). Older links serve builds whose
+# evaluation has already expired (such a PC shuts down every hour), so keep this link current.
+title = "Windows 11 Enterprise, current release (90-day evaluation)"
 kind = "windows"
 family = "windows"
 install = "unattend"
-url = "https://go.microsoft.com/fwlink/?linkid=2289031&clcid=0x409&culture=en-us&country=us"
-filename = "windows-11-enterprise-eval-en-us.iso"
+url = "https://go.microsoft.com/fwlink/?linkid=2382600&clcid=0x409&culture=en-us&country=us"
+filename = "windows-11-enterprise-eval-x64-en-us.iso"
 note = "Microsoft publishes no checksum for evaluation media; VALOR records the SHA-256 after the download."

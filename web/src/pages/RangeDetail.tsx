@@ -5,6 +5,7 @@ import { ago, go, useApi, when } from "../hooks";
 import { ErrorBox, Loading, Modal, StateBadge } from "../components/ui";
 import { CHANGE_LABEL, TopologyMap } from "../components/Topology";
 import { HostPower, LoginModal, PowerMenu, SnapshotsTab } from "../components/RangeActions";
+import { AccessTab } from "../components/Access";
 
 interface Detail {
   name: string;
@@ -37,7 +38,7 @@ interface PlanResponse {
   topology: Topology;
 }
 
-const TABS = ["Map", "Hosts", "Snapshots", "Tests", "Verification", "Spec", "Journal", "History"] as const;
+const TABS = ["Map", "Hosts", "Access", "Snapshots", "Tests", "Verification", "Spec", "Journal", "History"] as const;
 
 export function RangeDetail({ name, canOperate }: { name: string; canOperate: boolean }) {
   const { data, error, loading, reload } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
@@ -113,6 +114,7 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
         {tab === "Map" && <TopologyMap topology={data.topology} tall
           onConsole={canOperate ? (h) => go(`ranges/${name}/console/${h}/vnc`) : undefined} />}
         {tab === "Hosts" && <Hosts data={data} canOperate={canOperate} onError={setActionError} />}
+        {tab === "Access" && <AccessTab range={name} canOperate={canOperate} />}
         {tab === "Snapshots" && <SnapshotsTab range={name} canOperate={canOperate} />}
         {tab === "Tests" && <Tests data={data} />}
         {tab === "Verification" && <Verification data={data} />}

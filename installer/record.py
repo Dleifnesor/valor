@@ -24,6 +24,8 @@ class Record:
         self.data = existing or {"instance": instance, "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                                  "objects": {}, "steps": {}}
         self._dirty: set[tuple[str, str]] = set()          # what this run changed: ("objects"|"steps"|"", key)
+        self._added: dict[int, dict] = {}                   # templates this run built
+        self._retired: set[int] = set()                     # template VMIDs this run removed
 
     @property
     def path(self):
@@ -48,9 +50,16 @@ class Record:
 
     def add_template(self, entry: dict) -> None:
         with self._locked():
+            self._added[entry["vmid"]] = entry
+            if not self.path.exists():
+                self.objects.setdefault("templates", []).append(entry)
             self._merge_disk()
-            templates = [t for t in self.objects.get("templates", []) if t["vmid"] != entry["vmid"]]
-            self.objects["templates"] = templates + [entry]
+            self._write()
+
+    def remove_template(self, vmid: int) -> None:
+        with self._locked():
+            self._retired.add(vmid)
+            self._merge_disk()
             self._write()
 
     def save(self, answers=None) -> None:
@@ -84,9 +93,10 @@ class Record:
             return out
 
         objects = merged("objects")
-        templates = {t["vmid"]: t for t in disk.get("objects", {}).get("templates", [])}
-        templates.update({t["vmid"]: t for t in self.objects.get("templates", [])})
-        if templates:
+        templates = {t["vmid"]: t for t in disk.get("objects", {}).get("templates", [])}     # the disk knows best,
+        templates.update(self._added)                                                        # plus this run's
+        templates = {v: t for v, t in templates.items() if v not in self._retired}
+        if templates or "templates" in objects:
             objects["templates"] = sorted(templates.values(), key=lambda t: t["vmid"])
         answers = self.data.get("answers") if ("", "answers") in self._dirty else disk.get("answers", self.data.get("answers"))
         self.data = {**self.data, **disk, "objects": objects, "steps": merged("steps")}

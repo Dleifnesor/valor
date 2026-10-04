@@ -214,9 +214,10 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos
         rec.add_template({"os": os_name, "vmid": vmid, "built": True})
         rec.set(f"windows_password_{vmid}", password)       # break-glass for the template only (root-only record)
         run(["qm", "start", str(vmid)])
-        # "Press any key to boot from CD or DVD..." - keep pressing Enter for the first 40 seconds
+        # "Press any key to boot from CD or DVD..." - keep pressing a key for the first 40 seconds. A letter, not
+        # Enter: a fast setup can already show its progress page, where Enter would press "Cancel".
         for _ in range(40):
-            run(["qm", "sendkey", str(vmid), "ret"], check=False)
+            run(["qm", "sendkey", str(vmid), "x"], check=False)
             time.sleep(1)
         ui.info("Windows setup runs unattended (install, drivers, guest agent, sysprep): typically 15-40 minutes")
         t0, end = time.time(), time.time() + 3 * 3600

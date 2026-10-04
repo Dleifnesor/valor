@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import credentials, windows
+from . import credentials, windows, wireguard
 from .baseline import baseline_for, bundle, load_baseline, parse_results
 from .cluster import range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
@@ -127,6 +127,35 @@ def router_interfaces(pve: PVE, vmid: int, n_segments: int, spec: RangeSpec) -> 
         names[i] = by_mac[mac]
     ifmap = {s.name: names[i + 1] for i, s in enumerate(spec.segments)}
     return ifmap, names[0]
+
+
+def configure_wireguard(pve: PVE, spec: RangeSpec, vmid: int, uplink: str, steps: Steps) -> dict | None:
+    """Set up (or remove) the range's WireGuard access on the router; keys stay encrypted in VALOR's state."""
+    cfg = pve.cfg
+    if not (spec.access and spec.access.wireguard):
+        if wireguard.load(cfg, spec.name) is None:
+            return None
+        with steps.step("router: remove WireGuard access", ROUTER):
+            res = pve.script(vmid, wireguard.router_script(None), timeout=120)
+            if not res.ok or "VALOR-WG-REMOVED" not in res.out:
+                raise ValorError("wireguard_failed", "removing WireGuard from the router failed", host=ROUTER,
+                                 details=res.tail())
+            wireguard.forget(cfg, spec.name)
+        return None
+    with steps.step("router: WireGuard access", ROUTER):
+        data = wireguard.ensure(cfg, spec)
+        res = pve.script(vmid, wireguard.router_script(wireguard.server_conf(data, spec)), timeout=900)
+        if not res.ok or "VALOR-WG-PORT" not in res.out:
+            raise ValorError("wireguard_failed", "setting up WireGuard on the router failed", host=ROUTER,
+                             details=res.tail())
+        addr = pve.exec(vmid, ["ip", "-j", "-4", "addr", "show", "dev", uplink], timeout=30)
+        try:
+            local = json.loads(addr.out)[0]["addr_info"][0]["local"]
+            wireguard.set_router_address(cfg, spec.name, local)
+        except (ValueError, LookupError):
+            local = None
+    return {"port": spec.access.wireguard.port, "peers": len(data["peers"]),
+            "endpoint": wireguard.endpoint(spec, {**data, "router_address": local})}
 
 
 def load_router_policy(pve: PVE, spec: RangeSpec, vmid: int, ifmap, uplink, build_egress: bool) -> None:
@@ -389,6 +418,10 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                 report[ROUTER] = {"baseline": run_baseline(pve, spec, router, rvmid, steps)}
             with steps.step("router: final policy", ROUTER):
                 load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
+            if router_conv:
+                access = configure_wireguard(pve, spec, rvmid, uplink, steps)
+                if access:
+                    result["wireguard"] = access
             stamp(pve, spec, router, rvmid, router.conv_hash)
 
         with steps.step("record spec version on all VMs"):

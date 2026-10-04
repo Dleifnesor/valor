@@ -22,13 +22,18 @@ a VPN and sign in. The first password is in `/root/valor-<id>-credentials.txt` o
 authentication is set up at the first sign-in. Unattended installs, every setting, upgrade and uninstall:
 [docs/INSTALL.md](docs/INSTALL.md).
 
-## What the web UI does today (milestone 1)
+## What the web UI does today
 
 | Page | |
 |---|---|
 | Dashboard | health checks: Proxmox API, token scope, templates, range network, certificate, disk, OS updates |
 | Ranges | every range with its build and verification status |
 | Range | **topology map** (React Flow, view-only), hosts, tests, verification matrix, spec, journal, history |
+| Consoles | every VM's screen (noVNC) or serial console (xterm.js) in the browser, through VALOR (operators, audited) |
+| Login | one generated password per range for the VM consoles (Linux `valor`, Windows `Administrator` / `DOMAIN\Administrator`), encrypted at rest, shown to operators, audited, rotatable |
+| Power, snapshots | start / shut down / reboot a range or one VM; snapshots, automatic `valor-clean` after each verified build, reset to a snapshot |
+| Access | WireGuard per range on the range router: peer configs with QR codes, live connection status, new keys per peer |
+| ISO library | download from a verified catalog (signed checksums), by URL, upload from the browser, delete |
 | Spec editor | write or paste a range spec, check it against the cluster, see it on the map |
 | Plan → approve | the plan is shown on the map in color (added / changed / rebuilt / removed). Approving runs exactly that plan. |
 | Jobs | builds, verifications and teardowns with their live step log |
@@ -115,5 +120,7 @@ how the engine is exercised during development.
 
 - Ranges live on one node; multi-node ranges through Proxmox SDN are milestone 5.
 - Range routers get their uplink address from the LAN's DHCP (NAT through the VALOR VM: issue #15).
-- Debian-family Linux guests (Ubuntu, Debian); Windows, firewall appliances and more Linux are milestone 4.
+- Guests: Ubuntu 24.04, Debian 13, Kali, Rocky Linux 10, AlmaLinux 10, Windows Server 2022/2025 (Desktop and
+  Core) and Windows 11 Enterprise (evaluation media; bring your own license for longer use). Firewall appliances
+  are milestone 4.
 - "Exposed to the internet" means internet egress; inbound port publishing is not implemented.

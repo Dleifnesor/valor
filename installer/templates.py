@@ -199,25 +199,50 @@ def iso_catalog() -> dict:
         return tomllib.load(fh)
 
 
-def ensure(a: Answers, facts: Facts, rec: Record, wanted: list[str]) -> dict[str, int]:
+def ensure(a: Answers, facts: Facts, rec: Record, wanted: list[str], rebuild: bool = False) -> dict[str, int]:
+    """rebuild: build a fresh template even if one exists (new point release, current updates, fixed preparation)
+    and then retire the old ones. Ranges always clone the newest template of an OS."""
     from . import windows
     out: dict[str, int] = {}
     snippet = None
     cat = catalog()
     for os_name in wanted:
         have = existing(facts, a, os_name)
-        if have:
+        if have and not rebuild:
             out[os_name] = int(have["vmid"])
             ui.ok(f"{os_name}: reusing template {have['vmid']}")
             continue
         entry = cat[os_name]
         if entry.get("family") == "windows":
             out[os_name] = windows.build(a, facts, rec, os_name, entry, iso_catalog(), cpu_type(facts, entry))
-            continue
-        if snippet is None:
-            snippet = ensure_snippets(a, facts, rec)
-        out[os_name] = build(a, facts, rec, os_name, snippet)
+        else:
+            if snippet is None:
+                snippet = ensure_snippets(a, facts, rec)
+            out[os_name] = build(a, facts, rec, os_name, snippet)
+        if rebuild:
+            for old in _same_os(facts, a, os_name):
+                if int(old["vmid"]) != out[os_name]:
+                    retire(rec, int(old["vmid"]), os_name)
     return out
+
+
+def _same_os(facts: Facts, a: Answers, os_name: str) -> list[dict]:
+    return [t for t in facts.valor_templates
+            if t.get("node") == facts.node and t.get("pool") == a.pool_templates
+            and os_tag(os_name) in re.split(r"[;, ]", t.get("tags") or "")]
+
+
+def retire(rec: Record, vmid: int, os_name: str) -> None:
+    """Remove an old template this installer built. Proxmox refuses while linked clones still use its disks."""
+    if not any(t["vmid"] == vmid and t.get("built") for t in rec.objects.get("templates", [])):
+        ui.info(f"old {os_name} template {vmid} was not built by the installer: left in place (ranges use the newest)")
+        return
+    res = run(["qm", "destroy", str(vmid), "--purge", "1"], check=False)
+    if res.returncode:
+        ui.warn(f"old {os_name} template {vmid} kept: {(res.stderr or res.stdout).strip().splitlines()[-1:]}")
+        return
+    rec.remove_template(vmid)
+    ui.ok(f"old {os_name} template {vmid} removed")
 
 
 def remove_built(rec: Record) -> None:

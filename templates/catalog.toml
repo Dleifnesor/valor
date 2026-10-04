@@ -104,7 +104,7 @@ default_disk = 64
 
 ["windows-11"]
 family = "windows"
-description = "Windows 11 Enterprise 24H2, evaluation"
+description = "Windows 11 Enterprise (current release), evaluation"
 iso = "windows-11-enterprise-eval"
 edition = 'Enterprise'
 default_memory = 4096

@@ -54,7 +54,7 @@ export function LoginModal({ range, onClose }: { range: string; onClose: () => v
             ))}
             <dt>Password</dt>
             <dd className="row" style={{ gap: 8 }}>
-              <span className="mono" style={{ fontSize: 15, letterSpacing: "0.04em" }}>{shown ? login.password : "•".repeat(login.password.length)}</span>
+              <span className="mono" style={{ fontSize: 15, letterSpacing: "0.04em" }}>{shown ? login.password : "•".repeat(12)}</span>
               <button className="btn small" onClick={() => setShown(!shown)}>{shown ? "Hide" : "Show"}</button>
               <button className="btn small" onClick={() => navigator.clipboard?.writeText(login.password)}>Copy</button>
             </dd>

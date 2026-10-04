@@ -38,8 +38,14 @@ if (-not ($cur | Where-Object {{ $_.IPAddress -eq $ip -and $_.PrefixLength -eq $
 if (-not (Test-Path 'HKLM:\\SOFTWARE\\VALOR\\DnsByRole')) {{
   Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses @({', '.join(q(d) for d in dns)})
 }}
-Get-NetConnectionProfile -InterfaceIndex $nic.ifIndex -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.NetworkCategory -eq 'Public' }} | Set-NetConnectionProfile -NetworkCategory Private
+# Private network profile. Right after an address change Windows shows "Identifying..." and refuses to set it;
+# retry for a minute, never fail on it (firewall rules VALOR relies on apply to every profile).
+for ($i = 0; $i -lt 12; $i++) {{
+  $p = Get-NetConnectionProfile -InterfaceIndex $nic.ifIndex -ErrorAction SilentlyContinue
+  if ($p -and $p.NetworkCategory -ne 'Public') {{ break }}
+  if ($p) {{ try {{ $p | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction Stop; break }} catch {{ }} }}
+  Start-Sleep -Seconds 5
+}}
 if ($cs.DomainRole -lt 4 -and $env:COMPUTERNAME -ne {q(name.upper())}) {{
   Rename-Computer -NewName {q(name)} -Force -WarningAction SilentlyContinue
   '{REBOOT}'

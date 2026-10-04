@@ -38,6 +38,12 @@ def _api_error(e: Exception, what: str) -> ValorError:
         if e.status_code == 403:
             hint = ("The engine's API token is not allowed to do this. It may only act on VMs in its pool, "
                     "its storage and its bridges; check the spec targets those.")
+        elif "command" in what and (e.status_code == 596 or "Permission denied" in str(e.content or e.errors or "")):
+            # Proxmox cannot relay agent errors with non-ASCII text (HTTP 596); on RHEL-family guests that error is
+            # usually SELinux confining the agent, which templates built by VALOR 0.2+ take care of
+            hint = ("The guest agent refused to run the command (SELinux confines it on Rocky/Alma templates built "
+                    "by older VALOR versions). Rebuild the template on a Proxmox node: "
+                    "./install.sh --template <os> --rebuild")
         return ValorError("proxmox_api", msg, details=detail, hint=hint)
     return ValorError("proxmox_unreachable", f"{what}: {e.__class__.__name__}: {e}")
 

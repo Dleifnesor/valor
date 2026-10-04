@@ -6,6 +6,8 @@ import ipaddress
 
 from .spec import RangeSpec
 
+WG_IFACE = "wg0"
+
 # Destinations that never count as "internet": private ranges, link-local, loopback, multicast and reserved
 # space. The cluster's own networks (reserved_networks in the config) are added, so a cluster whose LAN uses
 # public addresses is protected too.
@@ -57,7 +59,11 @@ def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress:
     w("    ct state established,related accept")
     w("    ct state invalid drop")
     w(f"    iifname {{ {', '.join(f'\"{i}\"' for i in seg_ifs)} }} icmp type echo-request accept comment \"segments may ping their gateway\"")
-    w("    # No services are exposed on the router; it is managed through the QEMU guest agent.")
+    wg = spec.access.wireguard if spec.access else None
+    if wg:
+        w(f'    iifname "{uplink}" udp dport {wg.port} accept comment "WireGuard access (access.wireguard)"')
+        w(f'    iifname "{WG_IFACE}" ip saddr {wg.network} icmp type echo-request accept comment "peers may ping the router"')
+    w("    # No other services are exposed on the router; it is managed through the QEMU guest agent.")
     w("  }")
     w("")
     w("  chain forward {")
@@ -76,6 +82,10 @@ def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress:
             w(f"    {match} meta l4proto icmp accept comment \"policy: {label}\"")
         else:
             w(f"    {match} accept comment \"policy: {label}\"")
+    if wg:
+        for name in wg.reach or [s.name for s in spec.segments]:
+            w(f'    iifname "{WG_IFACE}" oifname "{ifmap[name]}" ip saddr {wg.network} ip daddr {spec.segment(name).cidr} '
+              f'accept comment "WireGuard peers -> {name}"')
     for s in spec.segments:
         if s.internet or build_egress:
             why = "internet egress" if s.internet else "temporary build egress"

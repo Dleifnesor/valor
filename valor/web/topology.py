@@ -46,6 +46,12 @@ def build(spec: RangeSpec, vms: dict[str, dict] | None = None, plan: dict | None
         if s.internet:
             edges.append({"id": f"egress:{s.name}", "source": f"seg:{s.name}", "target": "internet", "kind": "egress",
                           "label": "internet (public addresses only)"})
+    wg = spec.access.wireguard if spec.access else None
+    if wg:
+        nodes.append({"id": "vpn", "kind": "vpn", "label": "WireGuard", "port": wg.port, "peers": list(wg.peers),
+                      "cidr": str(wg.network), "reach": wg.reach or [s.name for s in spec.segments],
+                      "endpoint": wg.endpoint or ""})
+        edges.append({"id": "vpn", "source": "vpn", "target": ROUTER, "kind": "vpn", "label": f"udp/{wg.port}"})
     for h in spec.hosts:
         nodes.append({"id": f"host:{h.name}", "kind": "host", "parent": f"seg:{h.segment}", "label": h.name,
                       "address": str(h.address), "os": h.os, "roles": [x.name for x in h.roles], "cores": h.cores,

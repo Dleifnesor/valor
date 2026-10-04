@@ -4,4 +4,4 @@ ports: []
 params:
   extra_packages:
     default: ""
-    description: Additional apt packages to install (space separated)
+    description: Additional packages to install (space separated; apt names on Debian/Ubuntu/Kali, dnf names on Rocky/Alma)

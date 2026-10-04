@@ -8,9 +8,11 @@ package_upgrade: true
 packages:
   - qemu-guest-agent
 runcmd:
-  # RHEL-family agents ship with guest-exec blocked and confined by SELinux; VALOR manages VMs through it
-  - [sh, -c, "if [ -f /etc/sysconfig/qemu-ga ]; then sed -i -E 's/^(BLACKLIST_RPC|FILTER_RPC_ARGS)=.*/\\1=/' /etc/sysconfig/qemu-ga; fi"]
-  - [sh, -c, "if command -v setsebool >/dev/null 2>&1; then setsebool -P virt_qemu_ga_run_unconfined 1 || true; fi"]
+  # RHEL-family agents ship with guest-exec blocked, and SELinux confines what the agent may run to a few helper
+  # scripts. VALOR manages VMs through the agent (as root either way), so only the agent's SELinux domain is made
+  # permissive; the rest of the system stays enforcing.
+  - [sh, -c, "if [ -f /etc/sysconfig/qemu-ga ]; then sed -i -E 's/^(BLACKLIST_RPC|BLOCK_RPCS|FILTER_RPC_ARGS)=.*/\\1=/' /etc/sysconfig/qemu-ga; fi"]
+  - [sh, -c, "if command -v semodule >/dev/null 2>&1 && [ \"$(getenforce 2>/dev/null)\" != Disabled ]; then printf '(typepermissive virt_qemu_ga_t)\\n' > /root/valor_qga.cil && semodule -i /root/valor_qga.cil; rm -f /root/valor_qga.cil; fi"]
   - [systemctl, enable, qemu-guest-agent]
   - [sh, -c, "if command -v apt-get >/dev/null 2>&1; then apt-get clean && rm -rf /var/lib/apt/lists/*; else dnf clean all; fi"]
   - [cloud-init, clean, --logs, --machine-id]

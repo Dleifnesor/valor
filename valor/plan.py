@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import credentials
+from . import credentials, wireguard
 from .baseline import baseline_for, load_baseline
 from .cluster import VMState, load_catalog, range_vms, template_ids
 from .netpolicy import render
@@ -76,8 +76,9 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
     final_rules = render(spec, ifmap, "eth0", build_egress=False, spec_id="", reserved=cfg.reserved_networks)
     d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics, **common}
     d.hw_hash = _h(d.hw)
+    wg = wireguard.digest(cfg, spec)
     d.conv_hash = _h({"hw": d.hw_hash, "policy": _h(final_rules), "baseline": base_digest, "proto": CONVERGE_PROTOCOL,
-                      **({"login": login} if login else {})})
+                      **({"login": login} if login else {}), **({"wireguard": wg} if wg else {})})
     out.append(d)
 
     for h in spec.hosts:
