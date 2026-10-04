@@ -13,7 +13,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..config import Config, load_config
 from ..errors import LockBusy, ValorError
-from . import access, auth, blueprints, builder, consoles, db, isos, ranges, settings, status, users
+from . import (access, auth, blueprints, builder, consoles, db, editing, isos, rangechat, ranges, settings, status,
+               users)
 from .config import WebConfig, load_web_config
 from .core import UNSAFE
 from .security import Box, RateLimiter
@@ -35,7 +36,7 @@ SECURITY_HEADERS = {
 
 # Every API router; the security tests walk this list (each route must state who may call it).
 API_ROUTERS = (auth.router, users.router, settings.router, status.router, ranges.router, consoles.router, isos.router,
-               access.router, blueprints.router, builder.router)
+               access.router, blueprints.router, builder.router, editing.router, rangechat.router)
 
 
 def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_dir: str | None = None) -> FastAPI:

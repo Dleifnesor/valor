@@ -196,7 +196,8 @@ def plan_copies(cfg, bp: RangeSpec, copies: list[dict], live_vlans: dict[int, st
 def _tidy(data: dict) -> dict:
     """Drop values equal to the spec defaults so a copy reads like a hand-written spec."""
     defaults = {"internet": False, "description": "", "cores": 1, "memory": 1024, "disk": 10, "roles": [],
-                "params": {}, "ports": [], "tests": [], "policy": [], "auto_tests": True, "apiVersion": None}
+                "params": {}, "ports": [], "tests": [], "policy": [], "auto_tests": True, "apiVersion": None,
+                "install": "template", "nested": False, "baseline": "ubuntu-l1"}
     def clean(obj, top=False):
         if isinstance(obj, dict):
             return {k: (v if k == "params" else clean(v)) for k, v in obj.items()      # role params stay as written

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { ApiError, post } from "../api";
-import { Change, Plan, Topology } from "../types";
+import { Topology } from "../types";
 import { ago, go, useApi, when } from "../hooks";
 import { ErrorBox, Loading, Modal, StateBadge } from "../components/ui";
-import { CHANGE_LABEL, TopologyMap } from "../components/Topology";
+import { RangeMapTab } from "../components/RangeEditing";
+import { PlanModal, PlanResponse } from "../components/PlanModal";
 import { HostPower, LoginModal, PowerMenu, SnapshotsTab } from "../components/RangeActions";
 import { AccessTab } from "../components/Access";
 
@@ -29,14 +30,6 @@ interface Detail {
   logins: boolean;
 }
 
-interface PlanResponse {
-  ok: boolean;
-  errors?: { location: string; message: string; hint?: string }[];
-  warnings?: { location: string; message: string }[];
-  plan?: Plan;
-  plan_hash?: string;
-  topology: Topology;
-}
 
 const TABS = ["Map", "Hosts", "Access", "Snapshots", "Tests", "Verification", "Spec", "Journal", "History"] as const;
 
@@ -111,7 +104,7 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
           ))}
         </div>
-        {tab === "Map" && <TopologyMap topology={data.topology} tall
+        {tab === "Map" && <RangeMapTab name={name} canOperate={canOperate}
           onConsole={canOperate ? (h) => go(`ranges/${name}/console/${h}/vnc`) : undefined} />}
         {tab === "Hosts" && <Hosts data={data} canOperate={canOperate} onError={setActionError} />}
         {tab === "Access" && <AccessTab range={name} canOperate={canOperate} />}
@@ -252,76 +245,6 @@ function History({ data }: { data: Detail }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-function PlanModal({ name, res, onClose }: { name: string; res: PlanResponse; onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<ApiError | null>(null);
-  const approve = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await post<{ job: string }>(`/api/ranges/${name}/apply`, { plan_hash: res.plan_hash });
-      go(`jobs/${r.job}`);
-    } catch (e) {
-      setErr(e as ApiError);
-      setBusy(false);
-    }
-  };
-  const p = res.plan;
-  const changeOf: Record<string, Change | undefined> = {};
-  for (const n of res.topology.nodes) {
-    if (n.id === "rtr") changeOf.rtr = n.change;
-    else if (n.id.startsWith("host:")) changeOf[n.id.slice(5)] = n.change;
-  }
-  return (
-    <Modal title={`Plan for ${name}`} onClose={onClose} wide footer={
-      <>
-        <button className="btn" onClick={onClose}>Close</button>
-        {res.ok && p?.changes && (
-          <button className="btn primary" onClick={approve} disabled={busy}>
-            {busy ? <><span className="spinner" /> Starting…</> : "Approve and build"}
-          </button>
-        )}
-      </>
-    }>
-      {!res.ok && (
-        <div className="alert error">
-          The spec can't be built on this cluster yet:
-          <ul>{res.errors?.map((e, i) => <li key={i}>{e.location}: {e.message}{e.hint ? ` (${e.hint})` : ""}</li>)}</ul>
-        </div>
-      )}
-      {res.warnings?.map((w, i) => <div key={i} className="alert warn">{w.message}</div>)}
-      {p && !p.changes && <div className="alert ok">Nothing to do: the range already matches its spec.</div>}
-      {p && p.changes && (
-        <div className="row small">
-          {Object.entries(p.summary).map(([k, n]) => <span key={k} className="badge">{k} {n}</span>)}
-          <span className="muted">Approving runs exactly this plan; if anything changes before it starts, VALOR asks again.</span>
-        </div>
-      )}
-      <div className="card" style={{ overflow: "hidden" }}><TopologyMap topology={res.topology} /></div>
-      {p && (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>VM</th><th>Change</th><th>Why</th></tr></thead>
-            <tbody>
-              {p.actions.map((a) => (
-                <tr key={a.host}>
-                  <td><b>{a.host}</b> <span className="muted small">{a.vmid ? `#${a.vmid}` : ""}</span></td>
-                  <td>
-                    <span className="badge" style={{ color: `var(--c-${changeOf[a.host] ?? "keep"})` }}>{a.action}</span>{" "}
-                    <span className="muted small">{CHANGE_LABEL[changeOf[a.host] ?? "keep"]}</span>
-                  </td>
-                  <td className="small">{a.reasons.join("; ") || "–"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <ErrorBox error={err} />
-    </Modal>
   );
 }
 

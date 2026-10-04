@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,7 +38,12 @@ class Reply:
     truncated: bool = False             # the answer stopped at max_tokens
 
 
+MAX_TOTAL = 1140             # seconds for one answer, under the web proxy's 20 minutes for a chat request
+
+
 class Provider:
+    """Answers are streamed: `timeout` is how long the model may stay silent, so slow local models that think
+    for minutes still work, while a stuck server is noticed."""
     name = "none"
 
     def __init__(self, model: str, api_key: str = "", base_url: str = "", max_tokens: int = 16384, timeout: int = 300):
@@ -47,10 +53,11 @@ class Provider:
     def complete(self, system: str, messages: list[dict]) -> Reply:   # pragma: no cover - interface
         raise NotImplementedError
 
-    def _post(self, url: str, headers: dict, body: dict) -> dict:
+    def _events(self, url: str, headers: dict, body: dict):
+        """POST with stream=true; yields the JSON payload of every server-sent event."""
         where = urlparse(url).netloc
         try:
-            r = requests.post(url, headers=headers, json=body, timeout=(10, self.timeout))
+            r = requests.post(url, headers=headers, json=body, timeout=(10, self.timeout), stream=True)
         except requests.ConnectTimeout:
             raise ValorError("ai_unreachable", f"VALOR could not reach {where}: nothing answered (connection timed out)",
                              hint="Usually a firewall on the model server's computer drops the connection, or the "
@@ -61,10 +68,46 @@ class Provider:
                              hint="Check that the model server is running, listens on the network (not only on "
                                   "localhost) and uses that port.")
         except requests.ReadTimeout:
-            raise ValorError("ai_unreachable", f"{where} did not finish its answer within {self.timeout} s",
-                             hint="Raise the timeout, lower 'Max tokens per answer', or use a faster model.")
+            raise self._silent(where)
         except requests.RequestException as e:
             raise ValorError("ai_unreachable", f"the AI provider did not answer: {e.__class__.__name__}")
+        self._check_status(r, url)
+        t0 = time.time()
+        try:
+            for line in r.iter_lines(decode_unicode=True):
+                if time.time() - t0 > MAX_TOTAL:
+                    raise ValorError("ai_unreachable", f"{where} was still answering after {MAX_TOTAL // 60} minutes",
+                                     hint="Lower 'Max tokens per answer' or use a faster model.")
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    yield json.loads(data)
+                except ValueError:
+                    continue
+        except (requests.ReadTimeout, requests.ConnectionError) as e:
+            if isinstance(e, requests.ConnectionError) and "Read timed out" not in str(e):
+                raise ValorError("ai_unreachable", f"{where} closed the connection in the middle of the answer")
+            raise self._silent(where)
+        finally:
+            r.close()
+
+    def _silent(self, where: str) -> ValorError:
+        return ValorError("ai_unreachable", f"{where} sent nothing for {self.timeout} s",
+                          hint="The model may be loading or very slow: raise the timeout in Settings -> AI provider, "
+                               "or use a smaller model.")
+
+    @staticmethod
+    def _check_status(r, url: str) -> None:
+        if r.status_code < 400:
+            return
+        detail = ""
+        try:
+            detail = json.dumps(r.json().get("error", ""))[:300]
+        except ValueError:
+            pass
         if r.status_code == 404:
             raise ValorError("ai_error", f"{url} does not exist on the provider (HTTP 404)",
                              hint="For OpenAI-compatible servers the base URL usually ends in /v1 "
@@ -73,17 +116,8 @@ class Provider:
             raise ValorError("ai_auth", "the AI provider rejected the API key", hint="An administrator can update it in Settings.")
         if r.status_code == 429:
             raise ValorError("ai_rate_limited", "the AI provider is rate limiting VALOR; try again in a minute")
-        if r.status_code >= 400:
-            detail = ""
-            try:
-                detail = json.dumps(r.json().get("error", ""))[:300]
-            except ValueError:
-                pass
-            raise ValorError("ai_error", f"the AI provider answered HTTP {r.status_code} {detail}".strip())
-        try:
-            return r.json()
-        except ValueError:
-            raise ValorError("ai_error", "the AI provider sent a response that is not JSON")
+        raise ValorError("ai_error", f"the AI provider answered HTTP {r.status_code} {detail}".strip(),
+                         details={"status": r.status_code, "detail": detail})
 
 
 class Anthropic(Provider):
@@ -91,14 +125,23 @@ class Anthropic(Provider):
     URL = "https://api.anthropic.com/v1/messages"
 
     def complete(self, system: str, messages: list[dict]) -> Reply:
-        d = self._post(self.base_url + "/v1/messages" if self.base_url else self.URL,
-                       {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                       {"model": self.model or ANTHROPIC_MODELS[0], "max_tokens": self.max_tokens, "system": system,
-                        "messages": messages})
-        text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
-        u = d.get("usage") or {}
-        return Reply(text, int(u.get("input_tokens", 0)), int(u.get("output_tokens", 0)),
-                     truncated=d.get("stop_reason") == "max_tokens")
+        text, tin, tout, stop = [], 0, 0, None
+        for ev in self._events(self.base_url + "/v1/messages" if self.base_url else self.URL,
+                               {"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
+                                "content-type": "application/json"},
+                               {"model": self.model or ANTHROPIC_MODELS[0], "max_tokens": self.max_tokens,
+                                "system": system, "messages": messages, "stream": True}):
+            kind = ev.get("type")
+            if kind == "message_start":
+                tin = int(((ev.get("message") or {}).get("usage") or {}).get("input_tokens", 0))
+            elif kind == "content_block_delta" and (ev.get("delta") or {}).get("type") == "text_delta":
+                text.append(ev["delta"].get("text", ""))
+            elif kind == "message_delta":
+                stop = (ev.get("delta") or {}).get("stop_reason") or stop
+                tout = int((ev.get("usage") or {}).get("output_tokens", tout))
+            elif kind == "error":
+                raise ValorError("ai_error", f"the AI provider reported an error: {json.dumps(ev.get('error'))[:300]}")
+        return Reply("".join(text), tin, tout, truncated=stop == "max_tokens")
 
 
 class OpenAICompatible(Provider):
@@ -110,16 +153,28 @@ class OpenAICompatible(Provider):
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
-        d = self._post(self.base_url + "/chat/completions", headers,
-                       {"model": self.model, "max_tokens": self.max_tokens,
-                        "messages": [{"role": "system", "content": system}, *messages]})
+        body = {"model": self.model, "max_tokens": self.max_tokens, "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "system", "content": system}, *messages]}
         try:
-            text = d["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
-            raise ValorError("ai_error", "the AI provider's answer has no message")
-        u = d.get("usage") or {}
-        return Reply(text, int(u.get("prompt_tokens", 0)), int(u.get("completion_tokens", 0)),
-                     truncated=d["choices"][0].get("finish_reason") == "length")
+            return self._read(self._events(self.base_url + "/chat/completions", headers, body))
+        except ValorError as e:
+            if not (isinstance(e.details, dict) and e.details.get("status") == 400 and "stream_options" in e.details.get("detail", "")):
+                raise
+            body.pop("stream_options")      # servers that don't know it: no token counts, but an answer
+            return self._read(self._events(self.base_url + "/chat/completions", headers, body))
+
+    @staticmethod
+    def _read(events) -> Reply:
+        text, tin, tout, finish = [], 0, 0, None
+        for ev in events:
+            for ch in ev.get("choices") or []:
+                text.append((ch.get("delta") or {}).get("content") or "")
+                finish = ch.get("finish_reason") or finish
+            u = ev.get("usage") or {}
+            if u:
+                tin, tout = int(u.get("prompt_tokens", tin)), int(u.get("completion_tokens", tout))
+        return Reply("".join(text), tin, tout, truncated=finish == "length")
 
 
 def provider_from(settings: dict, api_key: str) -> Provider:
@@ -144,7 +199,8 @@ def spec_reference(cfg) -> str:
     return ""
 
 
-def system_prompt(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
+def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
+    """What every VALOR prompt needs: the spec format, the OSes and roles this cluster has, and its facts."""
     oses = "\n".join(f"- {name}{' (default)' if name == cfg.default_os else ''}: {e.get('description', '')} "
                      f"[{e.get('family', 'debian')}]" for name, e in catalog.items() if name in present)
     role_lines = []
@@ -154,21 +210,7 @@ def system_prompt(cfg, catalog: dict, present: set[str], roles: list[dict], fact
                            for k, v in (r.get("params") or {}).items())
         role_lines.append(f"- {r['name']} [{', '.join(r.get('families') or ['debian'])}]: {r['description']}"
                           + (f" | params: {params}" if params else ""))
-    return f"""You design cyber ranges (isolated lab networks of virtual machines) for VALOR, which builds them on
-Proxmox VE. The person you talk to describes an environment; you answer with a short explanation (a few sentences:
-what you built and any assumption you made) followed by exactly one complete range spec in a ```yaml code block.
-
-Rules:
-- Follow the spec reference below exactly; the spec is validated and you will be told about any problem.
-- Use only operating systems from the list of available templates and roles from the role list; a role only works
-  on the OS families shown in brackets.
-- Never put passwords, keys or other secrets in the spec (VALOR generates logins itself).
-- Keep a spec you were given and change only what the person asks for; always return the whole spec.
-- Deny by default: only add policy rules the environment needs, and say which flows you allowed.
-- Pick unused VLANs and private networks that avoid the networks listed under cluster facts.
-- If the request is unclear, make a sensible small choice and say what you assumed.
-
-# Spec reference
+    return f"""# Spec reference
 {spec_reference(cfg)}
 
 # Available operating systems (templates on this cluster)
@@ -180,6 +222,62 @@ Rules:
 # Cluster facts
 {json.dumps(facts, indent=1, sort_keys=True)}
 """
+
+
+SPEC_RULES = """Rules for specs:
+- Follow the spec reference below exactly; the spec is validated and you will be told about any problem.
+- Use only operating systems from the list of available templates and roles from the role list; a role only works
+  on the OS families shown in brackets.
+- Never put passwords, keys or other secrets in the spec (VALOR generates logins itself).
+- Keep a spec you were given and change only what the person asks for; always return the whole spec.
+- Deny by default: only add policy rules the environment needs, and say which flows you allowed.
+- Pick unused VLANs and private networks that avoid the networks listed under cluster facts.
+- If the request is unclear, make a sensible small choice and say what you assumed."""
+
+
+def system_prompt(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
+    return builder_prompt(reference(cfg, catalog, present, roles, facts))
+
+
+def builder_prompt(ref: str) -> str:
+    return f"""You design cyber ranges (isolated lab networks of virtual machines) for VALOR, which builds them on
+Proxmox VE. The person you talk to describes an environment; you answer with a short explanation (a few sentences:
+what you built and any assumption you made) followed by exactly one complete range spec in a ```yaml code block.
+
+{SPEC_RULES}
+
+{ref}"""
+
+
+RANGE_MODES = {
+    "question": """You answer questions about one VALOR range (shown below with its live state). Answer in plain,
+concise text: what the range contains, who can reach what under its policy, why a test failed, how to use a service.
+Do not write or change the spec in this mode; if the person wants a change, tell them to switch to Plan or Code mode.""",
+    "plan": f"""You plan changes to one VALOR range (shown below with its live state). Start with a short plan: a few
+bullet points saying what you change and why, and which traffic you allow. Then give the complete updated spec in
+exactly one ```yaml code block. VALOR shows it as a draft on the map; nothing is built until a person approves the plan.
+
+{SPEC_RULES}""",
+    "code": f"""You edit the YAML spec of one VALOR range (shown below with its live state). Reply with the complete
+updated spec in exactly one ```yaml code block and at most two sentences about the change. VALOR shows the diff and
+keeps it as a draft; nothing is built until a person approves the plan.
+
+{SPEC_RULES}""",
+}
+
+
+def range_prompt(mode: str, ref: str, spec_yaml: str, live: dict) -> str:
+    return f"""{RANGE_MODES[mode]}
+
+# The range's current spec{' (with unsaved draft changes)' if live.get('draft') else ''}
+```yaml
+{spec_yaml.strip()}
+```
+
+# Live state
+{json.dumps(live, indent=1, sort_keys=True, default=str)}
+
+{ref}"""
 
 
 def extract_yaml(text: str) -> tuple[str | None, str]:
@@ -202,6 +300,19 @@ def trim(messages: list[dict]) -> list[dict]:
     while out and out[0]["role"] != "user":
         out.pop(0)
     return out
+
+
+def ask(provider: Provider, system: str, messages: list[dict]) -> dict:
+    """One answer, no spec (question mode)."""
+    convo = trim(messages)
+    if not convo:
+        raise ValorError("ai_no_message", "Ask something.")
+    r = provider.complete(system, convo)
+    if r.truncated:
+        raise ValorError("ai_truncated", f"the model's answer was cut off at {provider.max_tokens} tokens",
+                         hint="Raise 'Max tokens per answer' in Settings -> AI provider.",
+                         details={"input_tokens": r.input_tokens, "output_tokens": r.output_tokens})
+    return {"reply": r.text.strip(), "problems": [], "input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
 
 
 def build(provider: Provider, system: str, messages: list[dict], check) -> dict:

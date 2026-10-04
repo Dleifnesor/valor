@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import credentials, jobs, lifecycle, ops, state
+from .. import credentials, drafts, jobs, lifecycle, ops, state
 from ..cluster import load_catalog, range_vms, ranges_overview, templates
 from ..errors import ValorError
 from ..baseline import load_baseline
@@ -37,6 +37,11 @@ class SpecIn(_In):
 
 class ApplyIn(_In):
     plan_hash: str = Field(min_length=16, max_length=64)
+    draft: bool = False             # build the range's draft (map edits / chat) instead of its saved spec
+
+
+class PlanIn(_In):
+    draft: bool = False
 
 
 class DestroyIn(_In):
@@ -233,10 +238,21 @@ def delete_spec(name: str, request: Request, s: Session = Depends(require("opera
     return {"ok": True}
 
 
+def _target(cfg, name: str, draft: bool):
+    """The spec to plan: the saved one, or the range's draft."""
+    if not draft:
+        return _load(cfg, name)
+    _load(cfg, name)
+    d = drafts.load(cfg, _name(name))
+    if d is None:
+        raise ApiError(404, "no_draft", "This range has no draft changes.")
+    return normalize(parse_spec(d[0]), cfg.default_os), d[0]
+
+
 @router.post("/ranges/{name}/plan")
-def plan(name: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+def plan(name: str, request: Request, body: PlanIn | None = None, s: Session = Depends(require("operator"))) -> dict:
     cfg = _cfg(request)
-    spec, _ = _load(cfg, name)
+    spec, _ = _target(cfg, name, bool(body and body.draft))
     pve = PVE(cfg)
     v = validate_cluster(pve, spec)
     if not v["ok"]:
@@ -251,12 +267,19 @@ def plan(name: str, request: Request, s: Session = Depends(require("operator")))
 def apply(name: str, body: ApplyIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
     """Runs only the plan the user approved: the plan is computed again and must hash the same."""
     cfg = _cfg(request)
-    spec, _ = _load(cfg, name)
+    spec, text = _target(cfg, name, body.draft)
     pve = PVE(cfg)
     current = make_plan(pve, spec)
     if _plan_hash(spec, current) != body.plan_hash:
         s.audit("range.apply", "fail", target=name, detail="plan changed since it was approved")
         raise ApiError(409, "plan_changed", "The plan changed since you reviewed it. Review the new plan.")
+    if body.draft:                          # the approved draft becomes the range's spec
+        path = _spec_path(cfg, name)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
+        drafts.discard(cfg, name)
+        s.audit("range.spec.save", target=name, detail={"version": spec_hash(spec)[:12], "from": "draft"})
     job = ops.start(cfg, "apply", {"spec": f"{name}.yaml", "verify": True}, f"web:{s.username}", background=True)
     s.audit("range.apply", target=name, detail={"job": job["job"], "plan": body.plan_hash,
                                                 "changes": current["summary"]})

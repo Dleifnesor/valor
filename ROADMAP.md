@@ -40,7 +40,7 @@ Claude Code in this repository is for *developing* VALOR, not for using it.
 |---|---|
 | Installation | The installer runs from a Proxmox node shell and creates its own VALOR VM, which manages the cluster through the Proxmox API. |
 | Web UI | React + React Flow. Reachable from the LAN and VPNs only. TLS is chosen at install: VALOR's own CA, your own certificate, or ACME DNS-01. |
-| Topology map | View-only: changes go through the chat. A color overlay shows planned additions, changes and removals. |
+| Topology map | Editable since 4 Oct 2026 (was view-only): add/remove VMs and services on the map and from a chat panel (Question / Plan / Code modes, kept per range). Edits form a draft shown in the plan colors; nothing is built until someone approves the plan. |
 | Users | Individuals, teams, classrooms and multiple organizations. Quotas plus reserved VLAN/IP ranges per organization. |
 | Sign-in | Local accounts with MFA, and LDAP/Active Directory. |
 | AI | Pluggable providers, a strong + fast model mix, a usage dashboard (no hard caps). |
