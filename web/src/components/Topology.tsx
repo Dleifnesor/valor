@@ -2,7 +2,7 @@ import { ReactNode, useMemo, useState } from "react";
 import {
   Background, Controls, Edge, Handle, MarkerType, Node, NodeProps, Position, ReactFlow,
 } from "@xyflow/react";
-import { Change, TopoNode, Topology as Topo } from "../types";
+import { Change, TopoEdge, TopoNode, Topology as Topo } from "../types";
 
 // View-only map of a range. Layout is computed here (no dragging, no editing): Internet on top, the range router
 // below it, one box per segment with its hosts inside, and the allowed flows between them as dashed arrows.
@@ -195,13 +195,16 @@ function colorMode(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions }: {
+export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, edgeActions }: {
   topology: Topo; tall?: boolean; onConsole?: (host: string) => void;
   overlay?: ReactNode;                                   // e.g. editing / chat buttons over the map
   nodeActions?: (node: TopoNode, close: () => void) => ReactNode;   // buttons in the selected node's panel
+  edgeActions?: (edge: TopoEdge, close: () => void) => ReactNode;   // buttons for a selected traffic rule
 }) {
   const { nodes, edges } = useMemo(() => layout(topology), [topology]);
   const [selected, setSelected] = useState<TopoNode | null>(null);
+  const [rule, setRule] = useState<TopoEdge | null>(null);
+  const label = (id: string) => topology.nodes.find((n) => n.id === id)?.label ?? id.replace(/^(host|seg):/, "");
   const key = useMemo(() => topology.nodes.map((n) => n.id + (n.change ?? "")).join("|"), [topology]);
   const changes = topology.changes;
 
@@ -229,13 +232,34 @@ export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions }:
         elementsSelectable
         minZoom={0.2}
         maxZoom={1.75}
-        onNodeClick={(_, n) => setSelected((n.data as Data).raw)}
-        onPaneClick={() => setSelected(null)}
+        onNodeClick={(_, n) => { setSelected((n.data as Data).raw); setRule(null); }}
+        onEdgeClick={(_, e) => {
+          const raw = topology.edges.find((x) => x.id === e.id);
+          if (raw?.kind === "policy" && edgeActions) { setRule(raw); setSelected(null); }
+        }}
+        onPaneClick={() => { setSelected(null); setRule(null); }}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={20} size={1} />
         <Controls showInteractive={false} />
       </ReactFlow>
+      {rule && edgeActions && (
+        <div className="side-panel card">
+          <div className="card-head">
+            <h2>Traffic rule</h2>
+            <button className="btn ghost small" onClick={() => setRule(null)} aria-label="Close">✕</button>
+          </div>
+          <div className="card-body">
+            <dl className="kv">
+              <dt>From</dt><dd>{label(rule.source)}</dd>
+              <dt>To</dt><dd>{label(rule.target)}</dd>
+              <dt>Allows</dt><dd className="mono">{rule.label}</dd>
+              {rule.description && <><dt>Why</dt><dd>{rule.description}</dd></>}
+            </dl>
+            {edgeActions(rule, () => setRule(null))}
+          </div>
+        </div>
+      )}
       {selected && selected.kind !== "internet" && (
         <div className="side-panel card">
           <div className="card-head">

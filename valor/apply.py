@@ -135,7 +135,13 @@ def wait_iso_install(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, timeout: 
         pass                                    # a leftover kickstart ISO holds no secrets
 
 
-def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
+def _mac(net: str) -> str | None:
+    """The MAC address in a Proxmox netN value ('virtio=BC:24:11:..,bridge=..')."""
+    first = net.split(",", 1)[0]
+    return first.split("=", 1)[1] if "=" in first else None
+
+
+def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int], uplink_mac: str | None = None) -> int:
     cfg = pve.cfg
     vmid = pve.allocate_vmid(taken)
     taken.add(vmid)
@@ -167,7 +173,8 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     if pub.exists():
         params["sshkeys"] = pub.read_text().strip() + "\n"
     for i, nic in enumerate(d.nics):
-        params[f"net{i}"] = f"virtio,bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else "")
+        model = f"virtio={uplink_mac}" if i == 0 and uplink_mac else "virtio"
+        params[f"net{i}"] = f"{model},bridge={nic['bridge']}" + (f",tag={nic['vlan']}" if nic["vlan"] else "")
         ip = "ip=dhcp" if nic["ip"] == "dhcp" else f"ip={nic['ip']}" + (f",gw={nic['gw']}" if nic["gw"] else "")
         params[f"ipconfig{i}"] = ip
     pve.update_config(vmid, **params)
@@ -412,9 +419,12 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
             return result
 
         actions = {a["host"]: a for a in plan["actions"]}
+        uplink_mac = None               # a rebuilt router keeps its LAN MAC, so its DHCP address (VPN endpoint) stays
         for a in plan["actions"]:
             if a["action"] in ("remove", "replace") and a.get("vmid"):
                 with steps.step(f"{a['action']}: delete old VM {a['vmid']}", a["host"]):
+                    if a["host"] == ROUTER and a["action"] == "replace":
+                        uplink_mac = _mac(pve.vm_config(a["vmid"]).get("net0", ""))
                     pve.destroy(a["vmid"])
 
         taken: set[int] = set()
@@ -423,7 +433,7 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
             a = actions[d.host]
             if a["action"] in ("create", "replace"):
                 with steps.step("create VM", d.host):
-                    vmids[d.host] = create_vm(pve, spec, d, taken)
+                    vmids[d.host] = create_vm(pve, spec, d, taken, uplink_mac if d.is_router else None)
             else:
                 vmids[d.host] = a["vmid"]
                 if a["action"] == "update" and "reboot required" not in a.get("reasons", []):

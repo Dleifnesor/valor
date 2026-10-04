@@ -132,3 +132,58 @@ def test_range_chat_modes(env, tmp_path, monkeypatch):
                            headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
         assert op.delete("/api/ranges/lab/chat", headers=h).status_code == 200
         assert viewer.get("/api/ranges/lab/chat").json()["messages"] == []
+
+
+WG = SPEC + """access:
+  wireguard:
+    peers: [alice]
+"""
+
+
+def test_segment_and_rule_edits():
+    spec = parse_spec(WG)
+    alloc = {"vlans": {100, 101}, "nets": [__import__("ipaddress").IPv4Network("10.100.0.0/24")], "vlan_range": (100, 3999)}
+    data = drafts.apply_ops(spec, [
+        {"op": "add_segment", "name": "mgmt", "internet": False, "vpn_reach": False, "description": "admin hosts"},
+        {"op": "add_rule", "from": "mgmt", "to": "lan", "proto": "tcp", "ports": [22]},
+    ], None, alloc)
+    new = parse_spec(drafts.to_yaml(data))
+    mgmt = new.segment("mgmt")
+    assert mgmt.vlan == 102 and str(mgmt.cidr) == "10.100.1.0/24" and not mgmt.internet     # free, not taken
+    assert new.access.wireguard.reach == ["dmz", "lan"]                                      # peers kept out of mgmt
+    assert new.policy[-1].from_ == "mgmt" and new.policy[-1].ports == [22]
+    moved = parse_spec(drafts.to_yaml(drafts.apply_ops(new, [{"op": "update_segment", "name": "lan", "cidr": "10.70.0.0/24",
+                                                              "internet": True}])))
+    assert str(moved.host("pc").address) == "10.70.0.10" and moved.segment("lan").internet and moved.tests[0].to == "web"
+    with pytest.raises(ValorError) as e:
+        drafts.apply_ops(new, [{"op": "remove_segment", "name": "lan"}])
+    assert e.value.code == "segment_not_empty"
+    gone = parse_spec(drafts.to_yaml(drafts.apply_ops(new, [{"op": "remove_segment", "name": "lan", "with_hosts": True}])))
+    assert [s.name for s in gone.segments] == ["dmz", "mgmt"] and [h.name for h in gone.hosts] == ["web"]
+    assert gone.policy == [] and gone.access.wireguard.reach == ["dmz"]
+    i = len(new.policy) - 1
+    kept = drafts.apply_ops(new, [{"op": "remove_rule", "index": i, "from": "mgmt", "to": "lan"}])
+    assert len(kept["policy"]) == len(new.policy) - 1
+    with pytest.raises(ValorError) as e:
+        drafts.apply_ops(new, [{"op": "remove_rule", "index": i, "from": "pc", "to": "web"}])          # stale index
+    assert e.value.code == "rule_changed"
+    cur = normalize(parse_spec(WG), "ubuntu-24.04")
+    acts = {a["host"]: a["action"] for a in drafts.changes(cur, normalize(new, "ubuntu-24.04"))["actions"]}
+    assert acts["rtr"] == "replace"                                                         # a NIC per segment
+
+
+def test_segment_api(env, tmp_path):
+    app, wcfg, cfg = _app(env, tmp_path)
+    with client(app) as op:
+        me, _ = enroll(op, "olivia")
+        h = {"X-CSRF-Token": me["csrf"]}
+        sug = op.get("/api/ranges/lab/draft/suggest-segment").json()
+        assert sug["vlan"] not in (680, 681) and sug["cidr"].endswith("/24")
+        r = op.post("/api/ranges/lab/draft/ops", json={"ops": [
+            {"op": "add_segment", "name": "srv", "internet": True},
+            {"op": "add_rule", "from": "lan", "to": "srv", "proto": "any"}]}, headers=h).json()
+        seg = next(n for n in r["topology"]["nodes"] if n["id"] == "seg:srv")
+        assert seg["vlan"] == sug["vlan"] and seg["cidr"] == sug["cidr"] and r["draft"]["summary"] == {"replace": 1}
+        assert any(e["kind"] == "policy" and e["target"] == "seg:srv" for e in r["topology"]["edges"])
+        bad = op.post("/api/ranges/lab/draft/ops", json={"ops": [{"op": "add_rule", "from": "web", "to": "web", "proto": "any"}]}, headers=h)
+        assert bad.status_code == 400                                                       # same segment: invalid spec

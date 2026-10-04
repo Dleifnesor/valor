@@ -53,7 +53,7 @@ def run(cfg, monkeypatch):
         return {"actions": acts, "changes": True, "summary": {"create": len(acts)}, "node": {"within_limit": True}}
     monkeypatch.setattr(A, "make_plan", plan)
     ids = iter(range(100, 200))
-    monkeypatch.setattr(A, "create_vm", lambda pve, s, d, taken: log.append(("create", d.host)) or next(ids))
+    monkeypatch.setattr(A, "create_vm", lambda pve, s, d, taken, mac=None: log.append(("create", d.host)) or next(ids))
     monkeypatch.setattr(A, "router_interfaces", lambda pve, vmid, n, s: ({"dmz": "eth1", "lan": "eth2"}, "eth0"))
     monkeypatch.setattr(A, "load_router_policy", lambda pve, s, vmid, ifmap, up, build_egress: log.append(
         ("policy", "build" if build_egress else "final")))
@@ -88,3 +88,8 @@ def test_a_failing_host_closes_the_build_window(run, monkeypatch):
     with pytest.raises(A.ValorError):
         run()
     assert policies == ["build", "final"]                             # never left open after a failure
+
+
+def test_mac_from_net_config():
+    assert A._mac("virtio=BC:24:11:AA:BB:CC,bridge=vmbr0,firewall=0") == "BC:24:11:AA:BB:CC"
+    assert A._mac("virtio,bridge=vmbr0") is None and A._mac("") is None

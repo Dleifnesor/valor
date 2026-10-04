@@ -85,6 +85,7 @@ ACCESS = {
     "PUT /api/ranges/{name}/draft": "role:operator",
     "POST /api/ranges/{name}/draft/ops": "role:operator",
     "DELETE /api/ranges/{name}/draft": "role:operator",
+    "GET /api/ranges/{name}/draft/suggest-segment": "role:operator",
     "GET /api/ranges/{name}/chat": "role:viewer",
     "DELETE /api/ranges/{name}/chat": "role:operator",
     "POST /api/ranges/{name}/chat": "role:operator",
