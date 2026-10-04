@@ -61,6 +61,7 @@ def show(a: Answers, facts: Facts, bridge: str, create_bridge: bool) -> None:
         ("  uplink", f"{a.vm_bridge} via the LAN's DHCP, NAT, private networks blocked"),
         ("  reserved", ", ".join(a.reserved_networks)),
         ("templates", ", ".join(a.templates) + f"  (snippets on {a.snippets_storage})"),
+        ("ISO library", f"downloads/uploads to {a.iso_storage or '-'}; reads {', '.join(a.iso_storages) or '-'}"),
     ])
 
 
@@ -198,11 +199,12 @@ def upgrade(args, facts: Facts) -> None:
     if not rec or rec.get("steps", {}).get("installed") != "done":
         raise SystemExit("no complete installation to upgrade; run ./install.sh")
     preflight(facts)
-    a = Answers(**rec["answers"])
+    a = defaults(facts, rec["answers"])                 # settings added by newer versions get their default
     bridge = rec["objects"]["bridge"]["name"]
     vmid = rec["objects"]["vm"]["vmid"]
     ui.step(f"Upgrading VALOR '{a.id}' from {rec.get('version')} to {VERSION}")
     r = Record(a.id, rec)
+    r.save(a)
     identity.ensure_roles(facts, r)                    # new versions may need new privileges
     identity.grant(a, facts, r, bridge, rec["objects"]["token"])
     ip = appliance.boot(facts, vmid)

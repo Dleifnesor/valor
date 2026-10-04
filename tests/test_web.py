@@ -299,3 +299,23 @@ def test_range_logins_power_and_snapshot_endpoints(env):
         assert viewer.post("/api/ranges/web2tier/power", json={"action": "start"},
                            headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
         assert op.post("/api/ranges/web2tier/credentials/rotate", headers=h).status_code == 200
+
+
+def test_iso_library_permissions(env):
+    app, _ = env
+    with client(app) as op, client(app) as viewer:
+        me, _ = enroll(op, "olivia")
+        vme, _ = enroll(viewer, "vic")
+        h = {"X-CSRF-Token": me["csrf"]}
+        r = viewer.get("/api/isos/catalog")
+        assert r.status_code == 200 and {"windows-server-2025-eval", "virtio-win"} <= {e["id"] for e in r.json()["entries"]}
+        assert viewer.post("/api/isos/download", json={"catalog": "virtio-win"},
+                           headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
+        r = op.post("/api/isos/download", json={"url": "https://x.example/a.iso"}, headers=h)
+        assert r.status_code == 400                                   # file name missing
+        r = op.post("/api/isos/download", json={"url": "https://x.example/a.iso", "filename": "a.iso", "checksum": "ab"},
+                    headers=h)
+        assert r.status_code == 400                                   # checksum without algorithm
+        assert op.delete("/api/isos/iso-store:iso/a.iso", headers=h).status_code == 403          # admins only
+        r = op.post("/api/isos/upload?filename=../x.iso", content=b"x", headers={**h, "Content-Type": "application/octet-stream"})
+        assert r.status_code == 400

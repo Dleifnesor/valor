@@ -28,6 +28,7 @@ SECTIONS = {
     "ranges": ["range_storage", "range_bridge", "uplink", "vmid_start", "vlan_min", "vlan_max", "reserved_networks",
                "nameservers", "internet_probe"],
     "templates": ["templates", "snippets_storage"],
+    "isos": ["iso_storage", "iso_storages"],
     "web": ["allowed_networks", "tls", "tls_cert", "tls_key", "admin_user"],
 }
 
@@ -58,6 +59,8 @@ class Answers:
     internet_probe: str = "1.1.1.1:443"
     templates: list[str] = field(default_factory=lambda: ["ubuntu-24.04"])
     snippets_storage: str = ""
+    iso_storage: str = ""               # ISO library: downloads and uploads go here
+    iso_storages: list[str] = field(default_factory=list)   # ISO storages VALOR may list
     allowed_networks: list[str] = field(default_factory=list)
     tls: str = "valor-ca"               # valor-ca | own
     tls_cert: str = ""
@@ -157,6 +160,14 @@ def default_storage(facts: Facts) -> str:
     return max(named or cands, key=lambda s: s.avail).id
 
 
+def default_iso_storages(facts: Facts) -> tuple[str, list[str]]:
+    isos = [s for s in facts.storages if "iso" in s.content and s.active]
+    if not isos:
+        return "", []
+    target = max(isos, key=lambda s: (s.shared, s.avail))       # shared storage first: every node sees the media
+    return target.id, [s.id for s in isos]
+
+
 def default_snippets(facts: Facts) -> str:
     have = [s for s in facts.storages if "snippets" in s.content and s.active and s.file_based and s.path]
     if have:
@@ -185,6 +196,12 @@ def defaults(facts: Facts, given: dict | None = None) -> Answers:
         a.allowed_networks = [facts.mgmt_network]
     if not a.snippets_storage:
         a.snippets_storage = default_snippets(facts)
+    if not a.iso_storage or not a.iso_storages:
+        target, readable = default_iso_storages(facts)
+        a.iso_storage = a.iso_storage or target
+        a.iso_storages = a.iso_storages or readable
+    if a.iso_storage and a.iso_storage not in a.iso_storages:
+        a.iso_storages = [a.iso_storage, *a.iso_storages]
     if not a.vm_dns:
         a.vm_dns = list(facts.nameservers)
     if not a.vm_domain:
@@ -294,6 +311,13 @@ def problems(a: Answers, facts: Facts, catalog: dict) -> list[str]:
     sn = facts.storage(a.snippets_storage)
     if not sn or not sn.file_based or not sn.path:
         out.append(f"snippets_storage: '{a.snippets_storage}' must be a directory-type storage on {facts.node}")
+    if a.iso_storage:
+        st = facts.storage(a.iso_storage)
+        if not st or "iso" not in st.content:
+            out.append(f"iso_storage: '{a.iso_storage}' must be a storage with 'iso' content on {facts.node}")
+    for sid in a.iso_storages:
+        if not facts.storage(sid):
+            out.append(f"iso_storages: '{sid}' does not exist on {facts.node}")
     if a.tls not in ("valor-ca", "own"):
         out.append("tls: 'valor-ca' or 'own' (ACME DNS-01 is planned: issue #7)")
     if a.tls == "own":

@@ -171,6 +171,48 @@ class PVE:
                          **{"destroy-unreferenced-disks": 1})
         self.wait_task(upid, f"delete VM {vmid}")
 
+    # ------------------------------------------------------------------ storage content (ISO library)
+    def storage_content(self, storage: str, content: str) -> list[dict]:
+        return self.call(f"list {content} on {storage}", self.n.storage(storage).content.get, content=content)
+
+    def download_url(self, storage: str, url: str, filename: str, checksum: str | None = None,
+                     algorithm: str | None = None) -> str:
+        params = {"content": "iso", "url": url, "filename": filename, "verify-certificates": 1}
+        if checksum:
+            params.update({"checksum": checksum, "checksum-algorithm": algorithm})
+        return self.call(f"download {filename} to {storage}", self.n.storage(storage)("download-url").post, **params)
+
+    def delete_volume(self, storage: str, volid: str) -> None:
+        upid = self.call(f"delete {volid}", self.n.storage(storage).content(volid).delete)
+        if upid:
+            self.wait_task(upid, f"delete {volid}")
+
+    def task(self, upid: str) -> dict:
+        st = self.call("read task status", self.n.tasks(upid).status.get)
+        log = self.call("read task log", self.n.tasks(upid).log.get, limit=500)
+        st["log"] = [l.get("t", "") for l in log]
+        return st
+
+    def upload_iso(self, storage: str, path: str, filename: str, checksum: str | None = None,
+                   algorithm: str | None = None) -> str:
+        """Streams a local file to the storage (multi-GB safe); returns the UPID of Proxmox's import task."""
+        import requests
+        from .isos import MultipartFile
+        fields = {"content": "iso"}
+        if checksum:      # Proxmox's multipart parser expects exactly this order: content, checksum-algorithm, checksum
+            fields.update({"checksum-algorithm": algorithm, "checksum": checksum})
+        body = MultipartFile(fields, "filename", filename, path)
+        url = f"https://{self.cfg.api_host}:{self.cfg.api_port}/api2/json/nodes/{self.node}/storage/{storage}/upload"
+        try:
+            r = requests.post(url, data=body, timeout=(15, 3600), verify=self.cfg.verify_ssl,
+                              headers={"Authorization": self._auth, "Content-Type": body.content_type,
+                                       "Content-Length": str(len(body))})
+        finally:
+            body.close()
+        if r.status_code != 200:
+            raise ValorError("upload_failed", f"upload of {filename} failed: HTTP {r.status_code} {r.text[:300]}")
+        return r.json()["data"]
+
     # ------------------------------------------------------------------ consoles (relayed by the web service)
     def vncproxy(self, vmid: int) -> dict:
         """A VNC console session: {port, ticket, user, ...}. The ticket doubles as the VNC password."""
