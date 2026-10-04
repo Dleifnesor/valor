@@ -111,3 +111,52 @@ def test_catalog_lists_windows_roles(cfg):
     roles = {r["name"]: r for r in role_list(cfg)}
     assert roles["ad-dc"]["families"] == ["windows"] and roles["iis"]["families"] == ["windows"]
     assert roles["nginx"]["families"] == ["debian", "rhel"] and "domain" in roles["ad-member"]["params"]
+
+
+class ValidatePVE:
+    """Just enough cluster for validate_cluster: a VLAN-aware bridge, memory and storage."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def network(self):
+        return [{"iface": b, "type": "bridge", "bridge_vlan_aware": 1}
+                for b in (self.cfg.segment_bridge, self.cfg.uplink_bridge)]
+
+    def node_status(self):
+        return {"memory": {"free": 64 * 2**30}, "cpuinfo": {"flags": "vmx"}}
+
+    def storage_status(self):
+        return {"avail": 100 * 2**30}
+
+
+@pytest.mark.parametrize("baseline, error, warning", [
+    ("ubuntu-l1", None, None),
+    ("windows-l1", "is the Windows baseline", None),       # a model once "fixed" a spec by turning hardening off
+    ("none", None, "no hardening"),
+])
+def test_range_baseline_names_the_linux_baseline(cfg, monkeypatch, baseline, error, warning):
+    from valor import validate as V
+    from valor.spec import normalize, parse_spec
+    monkeypatch.setattr(V, "templates", lambda pve, catalog: {k: {"present": True, "vmid": 9000} for k in catalog})
+    monkeypatch.setattr(V, "vlans_in_use", lambda pve: {})
+    monkeypatch.setattr(V, "range_vms", lambda pve, with_config=True: [])
+    spec = normalize(parse_spec(f"""
+name: adlab
+baseline: {baseline}
+segments:
+  - {{name: lan, vlan: 700, cidr: 10.70.0.0/24}}
+hosts:
+  - {{name: dc, segment: lan, address: 10.70.0.10, os: windows-server-2022}}
+  - {{name: web, segment: lan, address: 10.70.0.20}}
+"""), "ubuntu-24.04")
+    v = V.validate_cluster(ValidatePVE(cfg), spec)
+    errors = [e for e in v["errors"] if e["location"] == "baseline"]
+    if error:
+        assert len(errors) == 1 and error in errors[0]["message"]                       # no follow-on errors
+        assert "windows-l1 automatically" in errors[0]["hint"]
+    else:
+        assert not errors
+    warned = [w["message"] for w in v["warnings"] if w["location"] == "baseline"]
+    assert (warning in warned[0]) if warning else not warned
+    assert v["ok"] is (error is None), v["errors"]

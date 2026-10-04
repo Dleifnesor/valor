@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from valor import ai
+from valor import ai, validate
 from valor.web import builder, db
 
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
@@ -61,6 +61,9 @@ def test_fix_loop():
     assert res["input_tokens"] == 2000 and res["output_tokens"] == 400
     second = fake.calls[1][1]
     assert second[-1]["role"] == "user" and "could not use that spec" in second[-1]["content"]
+    assert "does not see" in second[-1]["content"] and "do not apologize" in second[-1]["content"]
+    assert res["fixed"] == ["spec has 1 problem(s)"]                    # what the model corrected, for the UI
+    assert ai.build(Fake([f"```yaml\n{GOOD}```"]), "S", [{"role": "user", "content": "x"}], check)["fixed"] == []
     gave_up = ai.build(Fake(["no yaml here"] * 3), "S", [{"role": "user", "content": "x"}], lambda t: [])
     assert gave_up["problems"] and gave_up["attempts"] == ai.FIX_ROUNDS + 1
 
@@ -169,6 +172,7 @@ def test_settings_and_chat(env, tmp_path, monkeypatch):
         assert r.status_code == 200, r.text
         res = r.json()
         assert res["ok"] and res["attempts"] == 2 and res["reply"] == "Renamed." and res["topology"]["nodes"]
+        assert len(res["fixed"]) == 1 and "already exists" in res["fixed"][0] and res["warnings"] == []
         assert seen["key"] == "sk-ant-SECRET"                                               # decrypted server-side only
         system, msgs = fake.calls[0]
         assert "ad-dc" in system and "access:" in system and "taken" in system              # roles, reference, facts
@@ -177,8 +181,11 @@ def test_settings_and_chat(env, tmp_path, monkeypatch):
         assert op.get("/api/builder").json() == {"configured": True, "provider": "anthropic", "model": "claude-sonnet-5-5"}
         u = adm.get("/api/settings/ai/usage").json()["users"]
         assert u[0]["username"] == "olivia" and u[0]["input"] == 2000 and u[0]["today"] == 2400
+        fake.replies = [f"No hardening.\n```yaml\n{GOOD}baseline: none\n```"]
+        res = op.post("/api/builder/chat", json=ask, headers=oh).json()
+        assert res["ok"] and res["fixed"] == [] and res["warnings"] == [validate.NO_BASELINE]   # shown, not hidden
         fake.replies = [f"```yaml\n{GOOD}```"] * 5
-        for _ in range(3):                      # 2400 + 3 x 1200 tokens > the 5000 budget
+        for _ in range(2):                      # 2400 + 3 x 1200 tokens (with the one above) > the 5000 budget
             op.post("/api/builder/chat", json=ask, headers=oh)
         over = op.post("/api/builder/chat", json=ask, headers=oh)
         assert over.status_code == 429 and over.json()["error"] == "ai_budget"

@@ -5,7 +5,9 @@ apiVersion: valor/v1            # optional, default valor/v1
 name: web2tier                  # 2-15 chars: a-z, 0-9, '-'; starts with a letter. VM names become <name>-<host>
 description: >                  # free text, shown in the journal
   What this range is for.
-baseline: ubuntu-l1             # baselines/<id>.yaml, or 'none'
+baseline: ubuntu-l1             # the Linux hardening baseline (default ubuntu-l1, covers Debian/Ubuntu/Kali and
+                                # Rocky/Alma). Windows hosts ALWAYS get windows-l1 automatically - never put it here.
+                                # 'none' turns hardening off for every host (Windows too): only when asked to.
 router:                         # optional; the router 'rtr' is always created automatically
   cores: 1                      # 1-8
   memory: 1024                  # MiB, 512-8192

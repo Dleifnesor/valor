@@ -8,12 +8,14 @@ import { TopologyMap } from "../components/Topology";
 // Chat builder: describe an environment, the AI writes the range spec, VALOR validates it and shows it on the map.
 // Nothing is built from here: the spec goes to the editor or is saved as a range, then planned and approved.
 
-interface Msg { role: "user" | "assistant"; content: string; problems?: string[] }
+interface Msg { role: "user" | "assistant"; content: string; problems?: string[]; fixed?: string[]; warnings?: string[] }
 interface ChatResponse {
   reply: string;
   yaml: string | null;
   ok: boolean;
   problems: string[];
+  fixed: string[];
+  warnings: string[];
   attempts: number;
   topology: Topology | null;
   usage: { input_tokens: number; output_tokens: number };
@@ -81,7 +83,8 @@ export function Builder({ isAdmin }: { isAdmin: boolean }) {
         messages: messages.map(({ role, content }) => ({ role, content })),
         spec: state.yaml,
       });
-      const reply: Msg = { role: "assistant", content: r.reply || "(no explanation)", problems: r.ok ? undefined : r.problems };
+      const reply: Msg = { role: "assistant", content: r.reply || "(no explanation)", problems: r.ok ? undefined : r.problems,
+        fixed: r.fixed, warnings: r.warnings };
       setState({
         messages: [...messages, reply],
         yaml: r.yaml && r.ok ? r.yaml : state.yaml,
@@ -138,6 +141,7 @@ export function Builder({ isAdmin }: { isAdmin: boolean }) {
                   The spec still has problems: {m.problems.join("; ")}
                 </div>
               )}
+              <CheckNotes fixed={m.fixed} warnings={m.warnings} />
             </div>
           ))}
           {busy && <div className="bubble assistant"><span className="spinner" /> Designing and checking the spec…</div>}
@@ -167,5 +171,20 @@ export function Builder({ isAdmin }: { isAdmin: boolean }) {
           : <TopologyMap topology={state.topology} tall />}
       </section>
     </div>
+  );
+}
+
+/** What VALOR's checks did behind the scenes: problems the model fixed, and warnings about the final spec. */
+export function CheckNotes({ fixed, warnings }: { fixed?: string[]; warnings?: string[] }) {
+  return (
+    <>
+      {!!warnings?.length && warnings.map((w, i) => <div key={i} className="alert warn small" style={{ marginTop: 8 }}>{w}</div>)}
+      {!!fixed?.length && (
+        <details className="check-notes">
+          <summary>VALOR checked the spec: the model fixed {fixed.length} problem{fixed.length === 1 ? "" : "s"} before answering</summary>
+          <ul>{fixed.map((f, i) => <li key={i}>{f}</li>)}</ul>
+        </details>
+      )}
+    </>
   );
 }
