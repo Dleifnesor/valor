@@ -52,6 +52,8 @@ def enroll(c: TestClient, username: str) -> tuple[dict, bytes]:
     csrf = r.json()["csrf"]
     r = c.post("/api/auth/enroll/start", headers={"X-CSRF-Token": csrf})
     assert r.status_code == 200 and "<svg" in r.json()["qr_svg"] and r.json()["uri"].startswith("otpauth://totp/")
+    # shown as an <img> data URI: a standalone SVG needs its namespace or browsers show a broken image
+    assert r.json()["qr_svg"].startswith('<svg xmlns="http://www.w3.org/2000/svg"')
     secret = _secret(r.json()["secret"])
     r = c.post("/api/auth/enroll/confirm", json={"code": totp_code(secret, _now_step())}, headers={"X-CSRF-Token": csrf})
     assert r.status_code == 200, r.text

@@ -142,3 +142,15 @@ def user_out(u: sqlite3.Row) -> dict:
             "disabled": bool(u["disabled"]), "locked": u["locked_until"] > time.time(),
             "must_change_password": bool(u["must_change_password"]),
             "created_at": u["created_at"], "last_login_at": u["last_login_at"]}
+
+
+def qr_svg(text: str, error: str = "m") -> str:
+    """A standalone SVG QR code (with the SVG namespace, so it also works as an <img> data URI - segno's
+    svg_inline() leaves the namespace out, which browsers only accept inside HTML)."""
+    import io
+
+    import segno
+    buf = io.BytesIO()
+    segno.make(text, error=error).save(buf, kind="svg", xmldecl=False, svgns=True, nl=False, scale=5, border=2,
+                                       dark="#111111", light="#ffffff")
+    return buf.getvalue().decode()
