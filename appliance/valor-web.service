@@ -1,0 +1,59 @@
+# OwO *tucks the web service into its cozy box* appliance/valor-web.service: the systemd unit for valor-web! ^w^
+# It runs the web API (uvicorn) as the 'valor' user on a unix socket only nginx can reach, inside a tight systemd
+# sandbox *wags tail*
+[Unit]
+Description=VALOR web API
+Documentation=https://github.com/Dleifnesor/valor
+# Start after the network is up UwU
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# A plain long-running process, as the 'valor' user >w<
+Type=simple
+User=valor
+# Primary group www-data: the socket directory /run/valor-web is then valor:www-data 0750, so only nginx can
+# connect. The valor group (supplementary) gives read access to /etc/valor.
+Group=www-data
+SupplementaryGroups=valor
+# /run/valor-web is created for the socket, 0750 OwO
+RuntimeDirectory=valor-web
+RuntimeDirectoryMode=0750
+# The config file location; don't write .pyc files (the code folder is read-only anyway) ^w^
+Environment=VALOR_CONFIG=/etc/valor/config.toml PYTHONDONTWRITEBYTECODE=1
+# Serve the API on the unix socket; restart after 3 s if it crashes UwU
+ExecStart=/opt/valor/venv/bin/python -m valor.web.cli serve --uds /run/valor-web/web.sock
+Restart=on-failure
+RestartSec=3
+# The sandbox >w<: private files by default (UMask 0027), no privilege gain, the whole system read-only except
+# /var/lib/valor, no /home, a private /tmp and /dev, no kernel tunables/modules/logs/cgroups/clock/hostname changes,
+# no namespaces, realtime or SUID, only normal system calls (no privileged or resource ones), NO capabilities at all,
+# and only unix + IPv4/IPv6 sockets
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/valor
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# Start at boot OwO
+[Install]
+WantedBy=multi-user.target

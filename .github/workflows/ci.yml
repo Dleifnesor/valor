@@ -1,0 +1,63 @@
+# OwO *runs every test on every push* .github/workflows/ci.yml: VALOR's own CI! ^w^
+# Three jobs: the Python tests, a check that the committed web build matches the source, and shell syntax checks.
+# The original one-line summary follows *wags tail*
+# Unit tests (engine, web API, installer logic) and a check that the committed web UI build is current.
+name: ci
+
+# Runs on pushes to main and on every pull request UwU
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The workflow may only read the repository >w<
+permissions:
+  contents: read
+
+jobs:
+  # Python: install the EXACT pinned packages (with hashes) plus pytest and httpx, run the tests, and prove the
+  # installer imports only the standard library (in an empty venv) OwO
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"        # the VALOR VM's Python (Ubuntu 24.04)
+      - name: Install the pinned appliance dependencies
+        run: |
+          python -m pip install --require-hashes --no-deps -r appliance/requirements.lock
+          python -m pip install pytest httpx
+      - name: Tests
+        run: python -m pytest -q
+      - name: The installer imports nothing outside the standard library
+        run: |
+          python -m venv /tmp/bare && /tmp/bare/bin/python -c "import installer.answers, installer.discover, installer.cli"
+
+  # Web: install the locked npm packages, build, and fail if web/dist differs from what's committed ^w^
+  web:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Committed dist/ matches the source
+        run: git diff --exit-code -- dist || (echo "::error::web/dist is out of date - run npm run build and commit it" && exit 1)
+
+  # Shell: bash syntax checks, plus shellcheck warnings (informational only: `|| true`) UwU
+  shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax of the installer and appliance scripts
+        run: |
+          bash -n install.sh appliance/setup.sh appliance/valor-tls
+          shellcheck -S warning install.sh appliance/setup.sh appliance/valor-tls || true

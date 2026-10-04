@@ -1,123 +1,119 @@
-# V.A.L.O.R. - MVP
+# V.A.L.O.R.
 
-A tool operated through **Claude Code** that turns a plain-language description of a test environment into a
-segmented, hardened and verified set of VMs on the Proxmox VE cluster *valor*, and rebuilds that same environment
-on demand. Implements the *V.A.L.O.R. Minimum Viable Product Specification v0.1* (Dan, Champlain College).
+Turns a description of a test environment into a **segmented, hardened and verified** set of VMs on Proxmox VE,
+and rebuilds that same environment on demand. Champlain College capstone (Dan). Where this is going:
+[ROADMAP.md](ROADMAP.md).
 
-**Where this is going**: an installer for any Proxmox VE cluster, a VALOR VM with a secure web UI, chat-driven
-builds and a live topology map. See [ROADMAP.md](ROADMAP.md).
+**Core principle: the agent plans, the engine executes.** The AI only writes declarative range specs. A
+deterministic Python engine is the only component that calls the Proxmox API, and a person approves every build
+and every teardown.
 
-**Core principle: the agent plans, the engine executes.** Claude writes a declarative range spec (YAML); a
-deterministic Python engine is the only component that calls the Proxmox API.
+## Install (any Proxmox VE 8.2+ / 9 cluster)
 
-## Architecture
+```bash
+git clone https://github.com/Dleifnesor/valor && cd valor
+./install.sh          # as root on the Proxmox node that should host VALOR
+```
 
-| Component | Responsibility | Implementation |
-|---|---|---|
-| Claude Code | agent interface, orchestration | operator account `valorop`, project `/srv/valor` |
-| Skills | procedures and domain knowledge | `.claude/skills/{range-build,range-destroy,role-authoring,compliance,proxmox-reference}` |
-| MCP server | engine operations as tools; long ops as background jobs | `valor/mcp_server.py` (MCP SDK 2.x `MCPServer`) |
-| Engine | validate, plan, apply, verify, destroy | `valor/` (proxmoxer, Pydantic) |
-| Range spec | source of truth per environment | `ranges/<name>.yaml` |
-| Router VM | segmentation, policy, NAT | Ubuntu + nftables, created automatically per range |
-| Guest management | config and tests inside VMs, no management network | QEMU guest agent |
-| CLI | headless execution for CI/CD | `valor` (`valor/cli.py`) |
-| Admin tool | templates, bridges, deployment (root) | `valor-admin` (`valor/admin.py`) |
+The installer discovers the cluster and asks only what it must, always with a detected default. It creates a
+least-privilege API identity, an isolated range network (with an automatic rollback), verified OS templates and
+the **VALOR VM**, provisioned entirely over the QEMU guest agent. Then open `https://<valor-vm>/` from the LAN or
+a VPN and sign in. The first password is in `/root/valor-<id>-credentials.txt` on the node, and two-factor
+authentication is set up at the first sign-in. Unattended installs, every setting, upgrade and uninstall:
+[docs/INSTALL.md](docs/INSTALL.md).
 
-MCP tools: `cluster_info`, `range_validate`, `range_plan`, `range_apply`, `range_verify`, `range_destroy`,
-`job_status`, `guest_run`.
+## What the web UI does today (milestone 1)
+
+| Page | |
+|---|---|
+| Dashboard | health checks: Proxmox API, token scope, templates, range network, certificate, disk, OS updates |
+| Ranges | every range with its build and verification status |
+| Range | **topology map** (React Flow, view-only), hosts, tests, verification matrix, spec, journal, history |
+| Spec editor | write or paste a range spec, check it against the cluster, see it on the map |
+| Plan → approve | the plan is shown on the map in color (added / changed / rebuilt / removed). Approving runs exactly that plan. |
+| Jobs | builds, verifications and teardowns with their live step log |
+| Users, audit log | roles admin / operator / viewer; every change is audited |
+| Settings | notification channels (email, Discord, Slack, Teams, in-app), LDAP / Active Directory, certificate |
+
+The chat builder (describe an environment, the AI writes the spec) is milestone 2.
 
 ## How a build works
 
-1. **Validate**: schema (Pydantic: names, addressing, overlaps, references) + cluster (templates, bridges, VLAN
-   conflicts, reserved networks, roles, memory).
-2. **Plan**: per VM `create / update / replace / converge / start / restamp / keep / remove`, plus totals vs free
-   memory.
-3. **Apply** (idempotent): linked clones of the OS template -> cloud-init networking + SSH key -> start -> guest agent
-   -> router gets *temporary build egress* -> roles -> baseline -> router baseline -> **final policy last** -> every
-   VM is stamped with the spec version and a converged-state hash. An unchanged spec re-applies with **zero changes**.
+1. **Validate**: schema (names, addressing, overlaps, references) + cluster (templates, bridges, VLAN conflicts,
+   reserved networks, roles, memory).
+2. **Plan**: per VM `create / update / replace / converge / start / restamp / keep / remove`, plus totals against
+   free memory.
+3. **Apply** (idempotent): linked clones of the OS template -> cloud-init networking -> guest agent -> temporary
+   build egress -> roles -> hardening baseline -> **final policy last** -> every VM is stamped with the spec version.
+   An unchanged spec re-applies with **zero changes**.
 4. **Verify**: connectivity tests from inside the guests (explicit + automatic policy/isolation/egress tests) and
    every baseline check on every host.
-5. **Journal**: `journals/<range>.md` - topology (Mermaid), hosts, network, policy, verification matrix, history.
+5. **Journal**: one Markdown page per range: topology, hosts, network, policy, verification matrix, history.
 
-Failures return a structured error: `error`, `message`, `step`, `host`, `details`, `hint`, `completed_steps`.
-The agent fixes the spec/role/baseline and re-applies (max 3 attempts, per the `range-build` skill).
+## Architecture
+
+| Component | Where | What |
+|---|---|---|
+| Installer | `install.sh`, `installer/` | Runs on a Proxmox node: Python standard library only |
+| VALOR VM | Ubuntu 24.04, `appliance/` | nginx (TLS) -> web API (FastAPI, unix socket) + job worker. SQLite. nftables. |
+| Web UI | `web/` | React + TypeScript + Vite + React Flow; `web/dist` is committed |
+| Web API | `valor/web/` | accounts, MFA, LDAP, sessions, CSRF, audit, settings, ranges, plans, jobs |
+| Engine | `valor/` | validate, plan, apply, verify, destroy, journal (proxmoxer, Pydantic) |
+| Content | `roles/`, `baselines/`, `templates/` | idempotent service roles, a hardening baseline, the OS catalog |
+| Range router | per range, automatic | Ubuntu + nftables: segmentation, policy, NAT |
 
 ## Security model
 
-- **Engine identity**: Linux user `valor` owns `/etc/valor` (config, API token, SSH key). The operator account
-  `valorop` (Claude Code) cannot read it; it may only start the engine as `valor` through one sudo rule
-  (`/etc/sudoers.d/valor`). Spec paths are confined to `ranges/` and parse errors never echo file content.
-- **API token** `valor@pve!engine` (privilege-separated) is limited to:
-  `/pool/valor` (VM lifecycle + guest agent), `/pool/valor-templates` (clone only), `/storage/valor-tank`
-  (allocate), `/sdn/zones/localnetwork/vmbr100` and `/vmbr0` (bridge use), `/nodes/svr-02` (read status).
-  It cannot see or touch any other VM (e.g. the VPN VM: HTTP 403).
-- **Approvals**: `range_apply`, `range_destroy`, `guest_run` are `ask` rules in `.claude/settings.json`;
-  `sudo`, `qm`, `pvesh`, `ssh`, reading `/etc/valor` and editing engine code are denied.
-- **Isolation**: segments are VLANs on `vmbr100`, a bridge with **no physical port**; the router's uplink is NAT
-  only, its input chain is closed, and "internet" egress excludes all private ranges (home LAN, cluster network).
-- **Teardown** deletes only VMs in pool `valor` tagged `valor-range-<name>`.
-- **Compliance claims**: results are "aligned with common CIS Level 1 themes", never "compliant" or "certified";
-  control references come only from vendor/upstream documentation.
+- **Proxmox**: one privilege-separated token. VM rights end at the range pool; it can clone only from the template
+  pool and can allocate only on the range storage and bridges. It gets HTTP 403 on everything else, **including
+  the VALOR VM itself**. The installer checks this.
+- **VALOR VM**: default-deny firewall: HTTPS only from the LAN/VPN networks chosen at install, SSH (keys only)
+  only from the Proxmox nodes. Hardened systemd units with an unprivileged user. Hash-pinned Python packages.
+  Automatic security updates.
+- **Web**: TLS 1.2+, HSTS, strict CSP. Argon2id passwords; mandatory TOTP with replay protection and recovery
+  codes. `__Host-` cookies (HttpOnly, Secure, SameSite=Strict) with idle/absolute timeouts; CSRF tokens + Origin
+  checks; rate limits and lockout; an audit log of every change. Stored secrets are encrypted with AES-256-GCM.
+- **Ranges**: segments sit on a bridge with no physical port. Routers deny everything not in the spec, and
+  "internet" egress never reaches private addresses or the cluster's own networks.
+- **Compliance claims**: results are "aligned with common CIS Level 1 themes", never "compliant" or "certified".
 
-## Cluster resources (svr-02)
+## Range specs, roles and baselines
 
-| Resource | Value |
-|---|---|
-| Storage | `valor-tank` = ZFS dataset `tank/valor`, quota 1 TB |
-| Pools | `valor` (ranges), `valor-templates` |
-| Segment bridge | `vmbr100` (VLAN-aware, no port); usable VLANs 100-3999 |
-| Router uplink | `vmbr0` (home LAN, DHCP) |
-| VMIDs | ranges 4000-4999; templates 9000+ |
-| Templates | `templates/catalog.yaml` (ubuntu-24.04 built; ubuntu-26.04, debian-13, debian-12 on demand) |
-| Reserved networks | 192.168.1.0/24 (home LAN), 10.10.10.0/24 (cluster) |
+A range spec (YAML) lists segments (VLAN + private CIDR, optional internet egress), hosts (OS, size, roles), the
+allowed traffic between segments and optional tests. Examples are in `ranges/`. Roles (`roles/<name>/role.sh` +
+`role.yaml`) are idempotent and parameterized. The baseline `baselines/ubuntu-l1.yaml` has check + fix
+controls. See `.claude/skills/range-build/spec-reference.md` for the full format.
 
-## Using it (operator)
+## Engine CLI (CI/CD and break-glass)
 
-Log in to svr-02 as **`valorop`** (a second SSH connection in the Claude desktop app), open `/srv/valor`, then:
+Inside the VALOR VM (`valor ...`) or a development install:
 
 ```
-/range-build a DMZ with an nginx web server exposed to the internet and an isolated LAN running PostgreSQL
-             reachable only from the web server
-```
-
-Claude reads the cluster, writes `ranges/<name>.yaml`, validates, shows the plan, asks for approval, builds,
-verifies and reports. `/range-destroy <name>` tears it down.
-
-## CLI (CI/CD)
-
-```
-sudo -u valor /opt/valor/bin/valor validate web2tier.yaml
-sudo -u valor /opt/valor/bin/valor plan web2tier.yaml [--show-policy]
-sudo -u valor /opt/valor/bin/valor apply web2tier.yaml --verify
-sudo -u valor /opt/valor/bin/valor verify web2tier.yaml
-sudo -u valor /opt/valor/bin/valor destroy web2tier --yes
+valor validate web2tier.yaml | plan web2tier.yaml [--show-policy] | apply web2tier.yaml --verify
+valor verify web2tier.yaml | destroy web2tier --yes | journal web2tier | job <id>
 ```
 
 Exit codes: 0 ok, 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy, 5 other. `--json` for
-machine output, `--background` to get a job id. Examples: `ci/github-actions.yml`, `ci/gitlab-ci.yml`.
-
-## Administration (root)
-
-```
-valor-admin template list | build <os> [--force] | test <os>
-valor-admin bridge create <name>      # port-less VLAN-aware bridge, with backup + 5-min rollback timer
-valor-admin deploy                    # install engine from /srv/valor into /opt/valor/venv, wrappers, sudo rule
-```
-
-Engine config: `/etc/valor/config.toml`. Engine state and job logs: `/var/lib/valor/`.
+machine output. Example pipelines: `ci/`.
 
 ## Development
 
+Claude Code in this repository is for developing VALOR (see `CLAUDE.md`).
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r appliance/requirements.lock pytest httpx
+.venv/bin/python -m pytest                 # engine, web API and installer logic; no cluster needed
+cd web && npm ci && npm run build          # web UI (see web/README.md); commit web/dist
+python3 tools/lock.py                      # after changing appliance/requirements.in
+./install.sh --upgrade                     # push the working tree into an installed VALOR VM
 ```
-cd /srv/valor && /opt/valor/venv/bin/python -m pytest      # unit tests, no cluster needed
-```
 
-Engine changes only take effect after `valor-admin deploy` (the operator cannot change the code the engine runs).
+The MVP's Claude Code harness (MCP server, skills, `valor-admin`) still works on the development cluster. It is
+how the engine is exercised during development.
 
-## Limitations (MVP scope)
+## Limitations (today)
 
-- Ranges live on one node (svr-02): segment traffic stays on a port-less bridge by design.
-- Linux cloud-init guests of the Debian family (Ubuntu, Debian). Windows, ISO installs, SDN, 802.1X, framework
-  mappings, snapshots, multi-user: post-MVP (spec section 5.2 / 14).
+- Ranges live on one node; multi-node ranges through Proxmox SDN are milestone 5.
+- Range routers get their uplink address from the LAN's DHCP (NAT through the VALOR VM: issue #15).
+- Debian-family Linux guests (Ubuntu, Debian); Windows, firewall appliances and more Linux are milestone 4.
 - "Exposed to the internet" means internet egress; inbound port publishing is not implemented.

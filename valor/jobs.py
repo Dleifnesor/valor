@@ -126,5 +126,17 @@ def list_jobs(cfg, limit: int = 20) -> list[dict]:
     return out
 
 
+def next_queued(cfg) -> str | None:
+    """Oldest job still waiting to run (used by the worker service)."""
+    root = Path(cfg.jobs_dir)
+    for d in sorted(root.iterdir()) if root.exists() else []:
+        try:
+            if json.loads((d / "job.json").read_text()).get("state") == "queued":
+                return d.name
+        except Exception:
+            continue
+    return None
+
+
 def mark_running(cfg, job_id: str) -> None:
     update(cfg, job_id, state="running", pid=os.getpid(), started=time.strftime("%Y-%m-%dT%H:%M:%S%z"))

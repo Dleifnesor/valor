@@ -149,7 +149,7 @@ def dispatch(cfg, args) -> int:
     spec, path = load_spec(args.spec, cfg.ranges_dir, cfg.default_os)
     if args.cmd == "validate":
         res = validate_cluster(PVE(cfg), spec)
-        res.update(range=spec.name, spec=spec_hash(spec)[:12], tests=len(effective_tests(spec)))
+        res.update(range=spec.name, spec=spec_hash(spec)[:12], tests=len(effective_tests(spec, cfg.probe)))
         out(res, True)
         return 0 if res["ok"] else EXIT["invalid"]
     if args.cmd == "plan":
@@ -160,10 +160,11 @@ def dispatch(cfg, args) -> int:
             return EXIT["invalid"]
         p = make_plan(pve, spec)
         p["warnings"] = v["warnings"]
-        p["tests"] = [t["name"] for t in effective_tests(spec)]
+        p["tests"] = [t["name"] for t in effective_tests(spec, cfg.probe)]
         if args.show_policy:
             ifmap = {s.name: f"eth{i + 1}" for i, s in enumerate(spec.segments)}
-            p["policy_preview"] = render(spec, ifmap, "eth0", build_egress=False, spec_id=spec_hash(spec)[:12])
+            p["policy_preview"] = render(spec, ifmap, "eth0", build_egress=False, spec_id=spec_hash(spec)[:12],
+                                        reserved=cfg.reserved_networks)
         out(p, J, print_plan)
         return 0
     if args.cmd == "journal":

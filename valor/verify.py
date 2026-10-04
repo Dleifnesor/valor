@@ -12,9 +12,9 @@ from .pve import PVE
 from .spec import INTERNET_PROBE, ROUTER, RangeSpec, effective_tests, spec_hash
 
 
-def _target(spec: RangeSpec, to: str, port: int | None) -> tuple[str, int | None]:
+def _target(spec: RangeSpec, to: str, port: int | None, probe: tuple[str, int] = INTERNET_PROBE) -> tuple[str, int | None]:
     if to == "internet":
-        return INTERNET_PROBE[0], port or INTERNET_PROBE[1]
+        return probe[0], port or probe[1]
     if any(h.name == to for h in spec.hosts):
         return str(spec.host(to).address), port
     return to, port
@@ -49,7 +49,7 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         raise ValorError("range_not_running", f"VMs not running: {', '.join(stopped)}", hint="Re-apply the spec to start them.")
     stale = [h for h in wanted if vms[h].meta.get("spec") != spec_hash(spec)]
 
-    tests = effective_tests(spec)
+    tests = effective_tests(spec, pve.cfg.probe)
     by_src: dict[str, list[dict]] = {}
     for t in tests:
         by_src.setdefault(t["from"], []).append(t)
@@ -57,7 +57,7 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
     def run_src(src: str) -> list[dict]:
         out = []
         for t in by_src[src]:
-            ip, port = _target(spec, t["to"], t["port"])
+            ip, port = _target(spec, t["to"], t["port"], pve.cfg.probe)
             observed, detail = _probe(pve, vms[src].vmid, t["proto"], ip, port)
             out.append({**t, "target": f"{ip}{':' + str(port) if port else ''}", "observed": observed,
                         "detail": detail, "pass": observed == t["expect"]})

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from dataclasses import dataclass, field
-
-import yaml
 
 from .pve import PVE
 
@@ -93,18 +92,41 @@ def vlans_in_use(pve: PVE) -> dict[int, str]:
     return used
 
 
+def os_tag(os_name: str) -> str:
+    return "os-" + os_name.replace(".", "-")
+
+
 def templates(pve: PVE, catalog: dict) -> dict[str, dict]:
-    visible = {int(r["vmid"]): r for r in pve.resources() if r.get("template")}
+    """Templates by OS, found by tag in the template pool (never by fixed VMID).
+
+    A template on the range node wins over one elsewhere (linked clones need the same storage); among equals the
+    newest (highest VMID) wins. A legacy `vmid` in the catalog is used only if no tagged template exists.
+    """
+    visible = [r for r in pve.resources() if r.get("template") and r.get("type") == "qemu"]
     out = {}
     for os_name, entry in catalog.items():
-        vmid = int(entry["vmid"])
-        out[os_name] = {"vmid": vmid, "present": vmid in visible, "family": entry.get("family"),
+        # Without Pool.Audit the API omits `pool`; the token only sees templates its ACLs allow, so a hidden
+        # pool is accepted and a visible one must be VALOR's template pool.
+        found = [r for r in visible
+                 if "valor-template" in tag_list(r.get("tags")) and os_tag(os_name) in tag_list(r.get("tags"))
+                 and r.get("pool") in (None, "", pve.cfg.template_pool)]
+        found.sort(key=lambda r: (r.get("node") == pve.cfg.node, int(r["vmid"])), reverse=True)
+        vmid = int(found[0]["vmid"]) if found else None
+        if vmid is None and entry.get("vmid") and any(int(r["vmid"]) == int(entry["vmid"]) for r in visible):
+            vmid = int(entry["vmid"])
+        out[os_name] = {"vmid": vmid, "present": vmid is not None, "family": entry.get("family"),
                         "description": entry.get("description", "")}
     return out
 
 
+def template_ids(pve: PVE, catalog: dict | None = None) -> dict[str, int]:
+    tpls = templates(pve, catalog if catalog is not None else load_catalog(pve.cfg))
+    return {os_name: t["vmid"] for os_name, t in tpls.items() if t["present"]}
+
+
 def load_catalog(cfg) -> dict:
-    return yaml.safe_load(cfg.catalog_file.read_text())
+    with cfg.catalog_file.open("rb") as fh:
+        return tomllib.load(fh)
 
 
 def cluster_info(pve: PVE) -> dict:
@@ -123,7 +145,7 @@ def cluster_info(pve: PVE) -> dict:
                            "vlan_aware": bool(seg.get("bridge_vlan_aware")),
                            "usable_vlans": f"{cfg.vlan_min}-{cfg.vlan_max}"},
         "uplink_bridge": {"name": cfg.uplink_bridge, "present": cfg.uplink_bridge in bridges},
-        "reserved_networks": cfg.extra.get("reserved_networks", ["192.168.1.0/24", "10.10.10.0/24"]),
+        "reserved_networks": list(cfg.reserved_networks),
         "templates": templates(pve, load_catalog(cfg)),
         "default_os": cfg.default_os,
         "vlans_in_use": {str(k): v for k, v in sorted(vlans_in_use(pve).items())},

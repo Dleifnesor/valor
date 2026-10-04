@@ -1,0 +1,21 @@
+<!-- OwO hewwo! web/index.html is the ONE html page of the web UI (a single-page app) ^w^
+     Vite rewrites the script tag below to point at the built bundle in dist/. Everything you see is drawn by React
+     into the empty #root div. *wags tail* -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- UTF-8 text, a mobile-friendly viewport, and no-referrer: links to other sites never learn which VALOR page they
+         came from UwU -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- The little fox-tail... er, VALOR favicon, and the browser tab title >w< -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>VALOR</title>
+  </head>
+  <body>
+    <!-- #root: React draws the whole app in here; the module script starts it (src/main.tsx) OwO -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

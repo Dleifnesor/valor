@@ -63,7 +63,7 @@ def range_validate(spec: str) -> dict:
         s, _ = load_spec(spec, cfg.ranges_dir, cfg.default_os)
         res = validate_cluster(PVE(cfg), s)
         return {**res, "range": s.name, "spec_version": spec_hash(s)[:12],
-                "tests": [t["name"] for t in effective_tests(s)]}
+                "tests": [t["name"] for t in effective_tests(s, cfg.probe)]}
     except Exception as e:
         return _fail(e)
 
@@ -81,10 +81,11 @@ def range_plan(spec: str, show_policy: bool = False) -> dict:
             return {"ok": False, "error": "validation_failed", **v}
         p = make_plan(pve, s)
         p["warnings"] = v["warnings"]
-        p["tests"] = [t["name"] for t in effective_tests(s)]
+        p["tests"] = [t["name"] for t in effective_tests(s, cfg.probe)]
         if show_policy:
             ifmap = {seg.name: f"eth{i + 1}" for i, seg in enumerate(s.segments)}
-            p["policy_preview"] = render(s, ifmap, "eth0", build_egress=False, spec_id=spec_hash(s)[:12])
+            p["policy_preview"] = render(s, ifmap, "eth0", build_egress=False, spec_id=spec_hash(s)[:12],
+                                        reserved=cfg.reserved_networks)
         return {"ok": True, **p}
     except Exception as e:
         return _fail(e)

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .baseline import bundle, load_baseline, parse_results
-from .cluster import range_tag, range_vms, render_description
+from .cluster import range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
 from .netpolicy import render, router_script
 from .plan import Desired, desired_state, make_plan
@@ -119,7 +119,8 @@ def router_interfaces(pve: PVE, vmid: int, n_segments: int, spec: RangeSpec) -> 
 
 
 def load_router_policy(pve: PVE, spec: RangeSpec, vmid: int, ifmap, uplink, build_egress: bool) -> None:
-    rules = render(spec, ifmap, uplink, build_egress=build_egress, spec_id=spec_hash(spec)[:12])
+    rules = render(spec, ifmap, uplink, build_egress=build_egress, spec_id=spec_hash(spec)[:12],
+                   reserved=pve.cfg.reserved_networks)
     res = pve.script(vmid, router_script(rules), timeout=600)
     if not res.ok:
         raise ValorError("router_policy_failed", "loading the router's nftables policy failed", host=ROUTER,
@@ -169,7 +170,7 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
             if not v["ok"]:
                 raise ValorError("validation_failed", f"{len(v['errors'])} cluster check(s) failed", details=v["errors"],
                                  hint="Fix the spec (or ask an administrator for missing templates/bridges) and re-apply.")
-        desired = desired_state(cfg, spec)
+        desired = desired_state(cfg, spec, template_ids(pve))
         with steps.step("plan"):
             plan = make_plan(pve, spec, desired)
             if not plan["node"]["within_limit"]:

@@ -23,8 +23,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import yaml
-
 from .config import load_config
 
 IMPORT_DIR = Path("/var/lib/vz/import")
@@ -49,7 +47,20 @@ def require_root() -> None:
 
 
 def load_catalog(cfg) -> dict:
-    return yaml.safe_load(cfg.catalog_file.read_text())
+    from .cluster import load_catalog as _load
+    return _load(cfg)
+
+
+def template_vmid(cfg, os_name: str) -> int:
+    """The existing VALOR template for this OS (by tag, in the template pool), else the next free VMID >= 9000."""
+    tag = "os-" + os_name.replace(".", "-")
+    res = json.loads(run(["pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json"]).stdout)
+    for r in res:
+        tags = (r.get("tags") or "").replace(",", ";").split(";")
+        if r.get("template") and r.get("pool") == cfg.template_pool and tag in tags and "valor-template" in tags:
+            return int(r["vmid"])
+    used = {int(r["vmid"]) for r in res}
+    return next(v for v in range(9000, 10000) if v not in used)
 
 
 def vm_exists(vmid: int) -> bool:
@@ -150,7 +161,7 @@ def template_build(cfg, os_name: str, force: bool) -> None:
     if os_name not in cat:
         raise SystemExit(f"unknown os '{os_name}'. Known: {', '.join(cat)}")
     entry = cat[os_name]
-    vmid = int(entry["vmid"])
+    vmid = template_vmid(cfg, os_name)
     if vm_exists(vmid):
         if not force:
             raise SystemExit(f"VM {vmid} already exists (use --force to rebuild the template)")
@@ -207,8 +218,7 @@ def template_build(cfg, os_name: str, force: bool) -> None:
 
 def template_test(cfg, os_name: str) -> None:
     require_root()
-    entry = load_catalog(cfg)[os_name]
-    tpl = int(entry["vmid"])
+    tpl = template_vmid(cfg, os_name)
     test_id = tpl + 90
     if vm_exists(test_id):
         raise SystemExit(f"test VMID {test_id} is in use")
@@ -233,7 +243,7 @@ def template_test(cfg, os_name: str) -> None:
 def template_list(cfg) -> None:
     cat = load_catalog(cfg)
     for os_name, entry in cat.items():
-        vmid = int(entry["vmid"])
+        vmid = template_vmid(cfg, os_name)
         state = "missing"
         if vm_exists(vmid):
             state = "template" if "template: 1" in run(["qm", "config", str(vmid)]).stdout else "VM (not a template!)"

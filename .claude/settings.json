@@ -1,5 +1,7 @@
 {
-  "enabledMcpjsonServers": ["valor"],
+  "enabledMcpjsonServers": [
+    "valor"
+  ],
   "permissions": {
     "allow": [
       "mcp__valor__cluster_info",
@@ -16,7 +18,11 @@
       "Write(//srv/valor/baselines/**)",
       "Edit(//srv/valor/journals/*.notes.md)",
       "Write(//srv/valor/journals/*.notes.md)",
-      "Edit(//srv/valor/.claude/skills/proxmox-reference/known-issues.md)"
+      "Edit(//srv/valor/.claude/skills/proxmox-reference/known-issues.md)",
+      "Bash(.venv/bin/python -m pytest:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
     ],
     "ask": [
       "mcp__valor__range_apply",
@@ -25,8 +31,6 @@
     ],
     "deny": [
       "Read(//etc/valor/**)",
-      "Edit(//srv/valor/valor/**)",
-      "Write(//srv/valor/valor/**)",
       "Bash(sudo:*)",
       "Bash(qm:*)",
       "Bash(pvesh:*)",

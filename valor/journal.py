@@ -98,7 +98,7 @@ def write(cfg, pve: PVE, spec: RangeSpec, spec_path: Path | None = None) -> Path
         w("")
         w("| Test | Expect |")
         w("|---|---|")
-        for t in effective_tests(spec):
+        for t in effective_tests(spec, cfg.probe):
             w(f"| {t['name']} | {t['expect']} |")
     else:
         w(f"**{'PASS' if vr.get('ok') else 'FAIL'}** · tests {vs.get('tests_passed')}/{vs.get('tests_total')} · "

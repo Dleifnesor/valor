@@ -1,0 +1,9 @@
+# OwO *checks the padlock* appliance/valor-tls.service: a one-shot job that runs `valor-tls renew`! ^w^
+# The timer (valor-tls.timer) starts it daily; it renews the web certificate only when needed *wags tail*
+[Unit]
+Description=VALOR: renew the web certificate when needed
+
+# oneshot: run once and finish UwU
+[Service]
+Type=oneshot
+ExecStart=/opt/valor/bin/valor-tls renew
