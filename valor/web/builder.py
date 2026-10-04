@@ -38,9 +38,9 @@ class AiSettingsIn(_In):
     model: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9._:/-]*$")
     base_url: str = Field(default="", max_length=512)
     api_key: str | None = Field(default=None, max_length=512)
-    max_tokens: int = Field(default=4096, ge=256, le=32000)
+    max_tokens: int = Field(default=ai.DEFAULTS["max_tokens"], ge=1024, le=64000)
     daily_tokens_per_user: int = Field(default=400_000, ge=0, le=100_000_000)
-    timeout: int = Field(default=120, ge=10, le=600)
+    timeout: int = Field(default=ai.DEFAULTS["timeout"], ge=30, le=900)
 
 
 class Message(_In):
@@ -123,7 +123,7 @@ def test_ai(request: Request, s: Session = Depends(require("admin"))) -> dict:
         r = prov.complete("You are a connectivity check.", [{"role": "user", "content": "Reply with the word OK."}])
     except ValorError as e:
         s.audit("settings.ai.test", "fail", detail={"error": e.code})
-        raise ApiError(409 if e.code == "ai_not_configured" else 502, e.code, e.message)
+        raise ApiError(409 if e.code == "ai_not_configured" else 502, e.code, e.message, hint=e.hint)
     _record(s, st, r.input_tokens, r.output_tokens, True)
     s.audit("settings.ai.test", detail={"model": st["model"]})
     return {"ok": True, "seconds": round(time.time() - t0, 1), "model": st["model"], "reply": r.text[:200]}
@@ -221,8 +221,10 @@ def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"
     try:
         res = ai.build(prov, system, msgs, check)
     except ValorError as e:
-        _record(s, st, 0, 0, False)
-        raise ApiError(502 if e.code.startswith("ai_") else 400, e.code, e.message, hint=e.hint)
+        used = e.details if isinstance(e.details, dict) else {}
+        _record(s, st, int(used.get("input_tokens", 0)), int(used.get("output_tokens", 0)), False)
+        status = 422 if e.code == "ai_truncated" else 502 if e.code.startswith("ai_") else 400
+        raise ApiError(status, e.code, e.message, hint=e.hint)
     _record(s, st, res["input_tokens"], res["output_tokens"], not res["problems"])
     topo = None
     if res["yaml"] and not res["problems"]:
