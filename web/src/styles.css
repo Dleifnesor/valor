@@ -321,3 +321,6 @@ tr.clickable { cursor: pointer; }
 .chat-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); align-items: flex-end; }
 .chat-input textarea { flex: 1; resize: vertical; }
 .btn.example { text-align: left; white-space: normal; font-weight: 400; }
+.dropzone { border: 2px dashed var(--border-strong); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); cursor: pointer; font-size: 13px; }
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); color: var(--text); outline: none; }
+.dropzone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
