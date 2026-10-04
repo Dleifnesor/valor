@@ -138,10 +138,29 @@ class PVE:
     def resize(self, vmid: int, disk: str, size_gib: int) -> None:
         self.call(f"resize disk of VM {vmid}", self.vm(vmid).resize.put, disk=disk, size=f"{size_gib}G")
 
-    def power(self, vmid: int, action: str, timeout: int = 300) -> None:
+    def power(self, vmid: int, action: str, wait: int = 300, **params) -> None:
+        """params go to the API (e.g. shutdown: timeout=180, forceStop=1); wait bounds the task wait."""
         fn = getattr(self.vm(vmid).status, action).post
-        upid = self.call(f"{action} VM {vmid}", fn)
-        self.wait_task(upid, f"{action} VM {vmid}", timeout)
+        upid = self.call(f"{action} VM {vmid}", fn, **params)
+        self.wait_task(upid, f"{action} VM {vmid}", wait)
+
+    # ------------------------------------------------------------------ snapshots (disk only, no RAM state)
+    def snapshots(self, vmid: int) -> list[dict]:
+        return [s for s in self.call(f"list snapshots of VM {vmid}", self.vm(vmid).snapshot.get)
+                if s.get("name") != "current"]
+
+    def snapshot(self, vmid: int, name: str, description: str = "") -> None:
+        upid = self.call(f"snapshot VM {vmid}", self.vm(vmid).snapshot.post, snapname=name,
+                         description=description, vmstate=0)
+        self.wait_task(upid, f"snapshot {name} of VM {vmid}", 900)
+
+    def rollback(self, vmid: int, name: str, start: bool = True) -> None:
+        upid = self.call(f"roll back VM {vmid}", self.vm(vmid).snapshot(name).rollback.post, start=int(start))
+        self.wait_task(upid, f"roll back VM {vmid} to {name}", 900)
+
+    def delete_snapshot(self, vmid: int, name: str) -> None:
+        upid = self.call(f"delete snapshot of VM {vmid}", self.vm(vmid).snapshot(name).delete)
+        self.wait_task(upid, f"delete snapshot {name} of VM {vmid}", 900)
 
     def destroy(self, vmid: int) -> None:
         st = self.vm_status(vmid).get("status")

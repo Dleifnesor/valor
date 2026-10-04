@@ -5,18 +5,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import os
 import secrets
 import struct
 import threading
 import time
 from collections import deque
-from pathlib import Path
 from urllib.parse import quote
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from ..crypto import Box  # noqa: F401  (re-exported: secrets at rest)
 
 # RFC 9106 "second recommended option": t=3, m=64 MiB, p=4.
 _ph = PasswordHasher(time_cost=3, memory_cost=64 * 1024, parallelism=4)
@@ -114,45 +113,6 @@ def hash_token(value: str) -> str:
 
 def new_token() -> str:
     return secrets.token_urlsafe(32)
-
-
-# ---------------------------------------------------------------------- secrets at rest
-class Box:
-    """AES-256-GCM for secrets stored in the database (TOTP seeds, LDAP and SMTP passwords, webhook URLs).
-    The context string is bound as associated data, so a ciphertext can't be moved to another field."""
-
-    def __init__(self, key: bytes):
-        if len(key) != 32:
-            raise ValueError("secret key must be 32 bytes")
-        self._aead = AESGCM(key)
-
-    @classmethod
-    def from_file(cls, path: str | Path) -> "Box":
-        return cls(Path(path).read_bytes()[:32])
-
-    @staticmethod
-    def create_key_file(path: str | Path) -> None:
-        p = Path(path)
-        if p.exists():
-            return
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(secrets.token_bytes(32))
-
-    def seal(self, plaintext: bytes | str, context: str) -> bytes:
-        if isinstance(plaintext, str):
-            plaintext = plaintext.encode()
-        nonce = secrets.token_bytes(12)
-        return nonce + self._aead.encrypt(nonce, plaintext, context.encode())
-
-    def open(self, blob: bytes, context: str) -> bytes:
-        return self._aead.decrypt(blob[:12], blob[12:], context.encode())
-
-    def seal_text(self, text: str, context: str) -> str:
-        return base64.b64encode(self.seal(text, context)).decode()
-
-    def open_text(self, data: str, context: str) -> str:
-        return self.open(base64.b64decode(data), context).decode()
 
 
 # ---------------------------------------------------------------------- rate limiting

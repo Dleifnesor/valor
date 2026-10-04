@@ -25,3 +25,4 @@ packages = ["valor", "valor.web"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:ldap3.*"]

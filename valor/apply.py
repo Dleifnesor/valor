@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import credentials
 from .baseline import bundle, load_baseline, parse_results
 from .cluster import range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
@@ -75,6 +76,7 @@ def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int]) -> int:
     params: dict = {
         "cores": d.cores, "memory": d.memory, "onboot": 0, "tags": vm_tags(spec, d),
         "nameserver": " ".join(cfg.nameservers), "ciuser": cfg.guest_user, "ciupgrade": 0,
+        "vga": d.hw.get("display", "std"), "serial0": "socket",
     }
     pub = Path(cfg.ssh_public_key)
     if pub.exists():
@@ -127,6 +129,17 @@ def load_router_policy(pve: PVE, spec: RangeSpec, vmid: int, ifmap, uplink, buil
                          details=res.tail(), hint="Check the generated ruleset (valor plan --show-policy).")
 
 
+def set_login(pve: PVE, d: Desired, vmid: int, login: dict | None, steps: Steps) -> None:
+    """Console password for the guest user, passed on stdin (never on a command line or in the VM config)."""
+    if not login:
+        return
+    with steps.step("console login", d.host):
+        res = pve.exec(vmid, ["/usr/sbin/chpasswd"], input_data=f"{login['username']}:{login['password']}\n", timeout=60)
+        if not res.ok:
+            raise ValorError("login_failed", f"could not set the console password on {d.host}", host=d.host,
+                             details=res.err[-300:])
+
+
 def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps) -> list[dict]:
     cfg = pve.cfg
     host = spec.host(d.host)
@@ -170,6 +183,7 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
             if not v["ok"]:
                 raise ValorError("validation_failed", f"{len(v['errors'])} cluster check(s) failed", details=v["errors"],
                                  hint="Fix the spec (or ask an administrator for missing templates/bridges) and re-apply.")
+        login = credentials.ensure(cfg, spec.name)      # before desired_state: its version is part of the hashes
         desired = desired_state(cfg, spec, template_ids(pve))
         with steps.step("plan"):
             plan = make_plan(pve, spec, desired)
@@ -198,7 +212,8 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                 vmids[d.host] = a["vmid"]
                 if a["action"] == "update":
                     with steps.step("resize CPU/memory/disk and reboot", d.host):
-                        pve.update_config(a["vmid"], cores=d.cores, memory=d.memory)
+                        pve.update_config(a["vmid"], cores=d.cores, memory=d.memory, vga=d.hw.get("display", "std"),
+                                          serial0="socket")
                         cur = int(str(pve.vm_config(a["vmid"]).get("scsi0", "size=0G")).split("size=")[-1].rstrip("G") or 0)
                         if d.disk > cur:
                             pve.resize(a["vmid"], "scsi0", d.disk)
@@ -239,6 +254,7 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
 
             def converge(d: Desired):
                 vmid = vmids[d.host]
+                set_login(pve, d, vmid, login, steps)
                 roles = run_roles(pve, spec, d, vmid, steps)
                 base = run_baseline(pve, spec, d, vmid, steps)
                 stamp(pve, spec, d, vmid, d.conv_hash)
@@ -263,6 +279,7 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
 
         if router_conv or hosts:
             if router_conv:
+                set_login(pve, router, rvmid, login, steps)
                 report[ROUTER] = {"baseline": run_baseline(pve, spec, router, rvmid, steps)}
             with steps.step("router: final policy", ROUTER):
                 load_router_policy(pve, spec, rvmid, ifmap, uplink, build_egress=False)
