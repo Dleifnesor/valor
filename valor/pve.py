@@ -46,6 +46,9 @@ class PVE:
     def __init__(self, cfg):
         self.cfg = cfg
         self.node = cfg.node
+        if cfg.missing():
+            raise ValorError("not_configured", "VALOR is not configured: " + ", ".join(cfg.missing()) + " not set",
+                             hint="The installer writes /etc/valor/config.toml; re-run it on a Proxmox node.")
         try:
             tok = json.loads(Path(cfg.token_file).read_text())
         except PermissionError:

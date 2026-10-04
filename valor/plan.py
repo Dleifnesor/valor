@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .baseline import load_baseline
-from .cluster import VMState, load_catalog, range_vms
+from .cluster import VMState, load_catalog, range_vms, template_ids
 from .netpolicy import render
 from .pve import PVE
 from .roles import load_role
@@ -43,8 +43,14 @@ class Desired:
         return self.host
 
 
-def desired_state(cfg, spec: RangeSpec) -> list[Desired]:
-    catalog = load_catalog(cfg)
+def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = None) -> list[Desired]:
+    """template_ids: OS name -> template VMID (cluster.template_ids); without it, legacy catalog VMIDs are used."""
+    if template_ids is None:
+        template_ids = {k: int(v["vmid"]) for k, v in load_catalog(cfg).items() if v.get("vmid")}
+
+    def tpl(os_name: str) -> int:
+        return template_ids.get(os_name, -1)
+
     pub = Path(cfg.ssh_public_key).read_text().strip() if Path(cfg.ssh_public_key).exists() else ""
     baseline = load_baseline(cfg.baselines_dir, spec.baseline)
     base_digest = baseline.digest if baseline else None
@@ -53,13 +59,12 @@ def desired_state(cfg, spec: RangeSpec) -> list[Desired]:
 
     # Router: uplink first (eth0), then one NIC per segment in spec order.
     r = spec.router
-    nics = [{"bridge": cfg.uplink_bridge, "vlan": None, "ip": "dhcp", "gw": None}]
+    nics = [{"bridge": cfg.uplink_bridge, "vlan": cfg.uplink_vlan or None, "ip": "dhcp", "gw": None}]
     for s in spec.segments:
         nics.append({"bridge": cfg.segment_bridge, "vlan": s.vlan, "ip": f"{s.gateway}/{s.cidr.prefixlen}", "gw": None})
-    d = Desired(ROUTER, True, r.os, int(catalog[r.os]["vmid"]) if r.os in catalog else -1,
-                r.cores, r.memory, r.disk, nics)
+    d = Desired(ROUTER, True, r.os, tpl(r.os), r.cores, r.memory, r.disk, nics)
     ifmap = {s.name: f"eth{i + 1}" for i, s in enumerate(spec.segments)}
-    final_rules = render(spec, ifmap, "eth0", build_egress=False, spec_id="")
+    final_rules = render(spec, ifmap, "eth0", build_egress=False, spec_id="", reserved=cfg.reserved_networks)
     d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics, **common}
     d.hw_hash = _h(d.hw)
     d.conv_hash = _h({"hw": d.hw_hash, "policy": _h(final_rules), "baseline": base_digest, "proto": CONVERGE_PROTOCOL})
@@ -76,8 +81,8 @@ def desired_state(cfg, spec: RangeSpec) -> list[Desired]:
             except Exception:
                 digest = "missing"
             roles.append({"name": ref.name, "params": ref.params, "digest": digest})
-        d = Desired(h.name, False, h.os, int(catalog[h.os]["vmid"]) if h.os in catalog else -1,
-                    h.cores, h.memory, h.disk, nics, roles, h.segment, str(h.address))
+        d = Desired(h.name, False, h.os, tpl(h.os), h.cores, h.memory, h.disk, nics, roles, h.segment,
+                    str(h.address))
         d.hw = {"os": d.os, "template": d.template, "cores": d.cores, "memory": d.memory, "disk": d.disk, "nics": nics, **common}
         d.hw_hash = _h(d.hw)
         d.conv_hash = _h({"hw": d.hw_hash, "roles": roles, "baseline": base_digest, "proto": CONVERGE_PROTOCOL})
@@ -115,7 +120,7 @@ def _classify(d: Desired, vm: VMState | None, current_spec: str = "") -> tuple[s
 
 def make_plan(pve: PVE, spec: RangeSpec, desired: list[Desired] | None = None) -> dict:
     cfg = pve.cfg
-    desired = desired or desired_state(cfg, spec)
+    desired = desired or desired_state(cfg, spec, template_ids(pve))
     existing = {vm.host: vm for vm in range_vms(pve, spec.name) if vm.host}
     unknown = [vm for vm in range_vms(pve, spec.name) if not vm.host]
     actions = []

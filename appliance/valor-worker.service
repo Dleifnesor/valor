@@ -1,0 +1,43 @@
+[Unit]
+Description=VALOR job worker (runs engine builds one at a time)
+Documentation=https://github.com/Dleifnesor/valor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=valor
+Group=valor
+Environment=VALOR_CONFIG=/etc/valor/config.toml PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/valor/venv/bin/python -m valor.web.cli worker
+Restart=on-failure
+RestartSec=5
+# A build in progress finishes before the worker stops (it stops between jobs).
+TimeoutStopSec=45min
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/valor
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

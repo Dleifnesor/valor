@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 from .spec import RangeSpec
 
-# Destinations that never count as "internet": the home LAN, the cluster network, other
-# private ranges, link-local, loopback, multicast and reserved space.
+# Destinations that never count as "internet": private ranges, link-local, loopback, multicast and reserved
+# space. The cluster's own networks (reserved_networks in the config) are added, so a cluster whose LAN uses
+# public addresses is protected too.
 PRIVATE_V4 = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
               "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4"]
+
+
+def private_set(reserved=()) -> list[str]:
+    """PRIVATE_V4 plus reserved networks it does not already cover, without overlaps (nft interval sets reject
+    overlapping elements). Unchanged output when nothing new is added keeps existing policy hashes stable."""
+    base = [ipaddress.IPv4Network(n) for n in PRIVATE_V4]
+    extra = []
+    for r in reserved:
+        n = ipaddress.ip_network(r, strict=False)
+        if n.version == 4 and not any(n.subnet_of(b) for b in base):
+            extra.append(n)
+    if not extra:
+        return list(PRIVATE_V4)
+    return [str(n) for n in ipaddress.collapse_addresses(base + extra)]
 
 
 def _ports(ports: list) -> str:
@@ -15,8 +32,10 @@ def _ports(ports: list) -> str:
     return f"{{ {items} }}"
 
 
-def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress: bool, spec_id: str) -> str:
-    """ifmap: segment name -> interface name inside the router; uplink: interface name of the NAT uplink."""
+def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress: bool, spec_id: str,
+           reserved=()) -> str:
+    """ifmap: segment name -> interface name inside the router; uplink: interface name of the NAT uplink;
+    reserved: the cluster's own networks (never reachable from the range)."""
     seg_ifs = [ifmap[s.name] for s in spec.segments]
     lines: list[str] = []
     w = lines.append
@@ -29,7 +48,7 @@ def render(spec: RangeSpec, ifmap: dict[str, str], uplink: str, *, build_egress:
     w("  set private_v4 {")
     w("    type ipv4_addr")
     w("    flags interval")
-    w(f"    elements = {{ {', '.join(PRIVATE_V4)} }}")
+    w(f"    elements = {{ {', '.join(private_set(reserved))} }}")
     w("  }")
     w("")
     w("  chain input {")

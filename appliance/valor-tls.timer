@@ -1,0 +1,11 @@
+[Unit]
+Description=VALOR: check the web certificate daily
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1d
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
