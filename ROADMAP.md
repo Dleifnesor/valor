@@ -102,55 +102,55 @@ One command in a Proxmox node shell gives a hardened VALOR VM with a secure web 
 | [#14](https://github.com/Dleifnesor/valor/issues/14) Upgrade and uninstall | Keep data on upgrade; clean removal |
 | [#15](https://github.com/Dleifnesor/valor/issues/15) Range internet uplink without LAN DHCP | NAT transit through the VALOR VM |
 | [#16](https://github.com/Dleifnesor/valor/issues/16) Engine: remove cluster-specific defaults | Everything from the installer-written config |
-| [#17](https://github.com/Dleifnesor/valor/issues/17) Portability test: fresh nested Proxmox VE | Unattended install on a Proxmox VE VALOR has never seen |
+| [#17](https://github.com/Dleifnesor/valor/issues/17) Portability test: fresh nested Proxmox VE | Unattended install on a Proxmox VE VALOR has never seen — 🚧 nested Proxmox VE 9 on an isolated 10.0.0.0/24 test range (in progress) |
 | [#18](https://github.com/Dleifnesor/valor/issues/18) Docs: install guide and answers-file reference | Someone new can install it |
 
-### M2 · Chat builder and topology map ⬜ (due 18 Dec 2026)
+### M2 · Chat builder and topology map 🚧 (due 18 Dec 2026)
 
 Describe, see, approve, watch, review.
 
 | Issue | Goal |
 |---|---|
-| [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix |
-| [#20](https://github.com/Dleifnesor/valor/issues/20) Chat environment builder | Conversation -> range spec -> plan, refined iteratively |
+| [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix — ✅ Anthropic + OpenAI-compatible, key encrypted (live test waits for a provider key) |
+| [#20](https://github.com/Dleifnesor/valor/issues/20) Chat environment builder | Conversation -> range spec -> plan, refined iteratively — ✅ validate-and-fix loop, map preview, hand-off to plan → approve |
 | [#21](https://github.com/Dleifnesor/valor/issues/21) Plan approval for every build and destroy | The approved plan hash is the one that runs |
 | [#22](https://github.com/Dleifnesor/valor/issues/22) Topology map (React Flow), view-only | Router, segments, hosts and allowed flows |
 | [#23](https://github.com/Dleifnesor/valor/issues/23) Change overlay on the topology map | Create / update / replace / remove in color |
 | [#24](https://github.com/Dleifnesor/valor/issues/24) Live build progress | Streamed job events |
 | [#25](https://github.com/Dleifnesor/valor/issues/25) Results and journal views | Verification matrix, baseline, history |
-| [#26](https://github.com/Dleifnesor/valor/issues/26) AI usage dashboard | Tokens and cost per user, model, range |
+| [#26](https://github.com/Dleifnesor/valor/issues/26) AI usage dashboard | Tokens and cost per user, model, range — 🚧 tokens per user and day, daily budgets; cost per model/range to do |
 | [#27](https://github.com/Dleifnesor/valor/issues/27) H1-H4 metrics dashboard and the 10-prompt test suite | Evaluation built into the product |
 | [#28](https://github.com/Dleifnesor/valor/issues/28) Agent knowledge: skills inside the appliance | The development skills, shipped with releases |
 
-### M3 · Tenancy, secrets and access ⬜ (due 29 Jan 2027)
+### M3 · Tenancy, secrets and access 🚧 (due 29 Jan 2027)
 
 | Issue | Goal |
 |---|---|
 | [#29](https://github.com/Dleifnesor/valor/issues/29) Organizations, classes and roles | Admin, instructor, operator, student, viewer |
 | [#30](https://github.com/Dleifnesor/valor/issues/30) Quotas and reserved ranges per organization | Limits plus reserved VLAN/IP blocks |
 | [#31](https://github.com/Dleifnesor/valor/issues/31) Secrets in Vaultwarden/Bitwarden | No passwords in specs or chat logs |
-| [#32](https://github.com/Dleifnesor/valor/issues/32) Browser consoles with approval | Proxied; Proxmox never exposed |
-| [#33](https://github.com/Dleifnesor/valor/issues/33) WireGuard VPN per range | Per-user configs with QR codes |
+| [#32](https://github.com/Dleifnesor/valor/issues/32) Browser consoles with approval | Proxied; Proxmox never exposed — ✅ noVNC + serial in the browser for operators/admins, audited (no per-session approval, by decision) |
+| [#33](https://github.com/Dleifnesor/valor/issues/33) WireGuard VPN per range | Per-user configs with QR codes — ✅ keys encrypted, QR codes, live status, per-peer rotation, isolation tested |
 | [#34](https://github.com/Dleifnesor/valor/issues/34) Approval policies | Who may approve; optional two-person rule |
 
-### M4 · Windows, firewalls and more Linux ⬜ (due 26 Feb 2027)
+### M4 · Windows, firewalls and more Linux 🚧 (due 26 Feb 2027)
 
 | Issue | Goal |
 |---|---|
-| [#35](https://github.com/Dleifnesor/valor/issues/35) Windows Server and Active Directory | Redundant DCs, DNS, DHCP, member join |
-| [#36](https://github.com/Dleifnesor/valor/issues/36) Windows 10/11 clients | UEFI + TPM, domain join |
+| [#35](https://github.com/Dleifnesor/valor/issues/35) Windows Server and Active Directory | Redundant DCs, DNS, DHCP, member join — 🚧 forest + replica DC (2022/2025 Core), member join, IIS done and verified (8/8, baseline 46/46); a DHCP role is still to do |
+| [#36](https://github.com/Dleifnesor/valor/issues/36) Windows 10/11 clients | UEFI + TPM, domain join — ✅ Windows 11 (current evaluation) template; UEFI + TPM 2.0 |
 | [#37](https://github.com/Dleifnesor/valor/issues/37) Firewall appliances with several NICs | VyOS, pfSense, OPNsense |
-| [#39](https://github.com/Dleifnesor/valor/issues/39) More Linux distributions | Kali, Rocky, Alma, Security Onion |
+| [#39](https://github.com/Dleifnesor/valor/issues/39) More Linux distributions | Kali, Rocky, Alma, Security Onion — 🚧 Kali, Rocky 10, Alma 10 done (cloud images + Rocky/Alma ISO installs); Security Onion to do |
 | [#40](https://github.com/Dleifnesor/valor/issues/40) Template manager in the web UI | Builds, uploads, evaluation ISOs |
-| [#41](https://github.com/Dleifnesor/valor/issues/41) Roles and baselines for non-apt systems | dnf, Windows |
+| [#41](https://github.com/Dleifnesor/valor/issues/41) Roles and baselines for non-apt systems | dnf, Windows — ✅ dnf (Rocky/Alma) and PowerShell roles + windows-l1 baseline |
 
-### M5 · Multi-node and range lifecycle ⬜ (due 26 Mar 2027)
+### M5 · Multi-node and range lifecycle 🚧 (due 26 Mar 2027)
 
 | Issue | Goal |
 |---|---|
 | [#42](https://github.com/Dleifnesor/valor/issues/42) Multi-node ranges via Proxmox SDN | VXLAN, no switch configuration |
-| [#43](https://github.com/Dleifnesor/valor/issues/43) Snapshots and one-click reset | Back to known-good in seconds |
-| [#44](https://github.com/Dleifnesor/valor/issues/44) Per-student copies | Bulk create/reset/destroy for a class |
+| [#43](https://github.com/Dleifnesor/valor/issues/43) Snapshots and one-click reset | Back to known-good in seconds — ✅ automatic valor-clean after each verified build, reset with re-verification |
+| [#44](https://github.com/Dleifnesor/valor/issues/44) Per-student copies | Bulk create/reset/destroy for a class — ✅ blueprints: numbered or per-student copies with their own VLANs, networks and WireGuard peer |
 | [#45](https://github.com/Dleifnesor/valor/issues/45) Auto-expiry and power schedules | No forgotten ranges |
 | [#46](https://github.com/Dleifnesor/valor/issues/46) Backup and restore | Survive the loss of the VALOR VM |
 | [#47](https://github.com/Dleifnesor/valor/issues/47) Proxmox API failover | Keep working with a node down |
@@ -163,7 +163,7 @@ Describe, see, approve, watch, review.
 | [#49](https://github.com/Dleifnesor/valor/issues/49) Compliance reports | Evidence with "aligned with" wording |
 | [#50](https://github.com/Dleifnesor/valor/issues/50) Evaluation runs and capstone write-up | H1-H4 on the finished product |
 | [#51](https://github.com/Dleifnesor/valor/issues/51) Release packaging and license | Signed, checksummed releases |
-| [#52](https://github.com/Dleifnesor/valor/issues/52) Security review | Threat model, audits, ASVS L2 test |
+| [#52](https://github.com/Dleifnesor/valor/issues/52) Security review | Threat model, audits, ASVS L2 test — 🚧 route-level access, CSRF/origin and header tests; live port/TLS checks |
 
 ## Open questions
 

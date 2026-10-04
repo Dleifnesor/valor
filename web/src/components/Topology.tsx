@@ -70,6 +70,18 @@ function RouterNode({ data }: NodeProps<Node<Data>>) {
   );
 }
 
+function VpnNode({ data }: NodeProps<Node<Data>>) {
+  const n = data.raw;
+  return (
+    <div className="tnode vpn">
+      <Handles />
+      <div className="t-title">WireGuard</div>
+      <div className="t-sub">udp/{n.port} · {n.peers?.length ?? 0} peer{n.peers?.length === 1 ? "" : "s"}</div>
+      <div className="t-sub">reaches {n.reach?.join(", ")}</div>
+    </div>
+  );
+}
+
 function InternetNode() {
   return (
     <div className="tnode internet">
@@ -96,7 +108,8 @@ function SegmentNode({ data }: NodeProps<Node<Data>>) {
   );
 }
 
-const nodeTypes = { host: HostNode, router: RouterNode, internet: InternetNode, segment: SegmentNode };
+const nodeTypes = { host: HostNode, router: RouterNode, internet: InternetNode, segment: SegmentNode, vpn: VpnNode };
+const VPN_W = 190;
 
 function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
   const segs = topo.nodes.filter((n) => n.kind === "segment");
@@ -116,6 +129,12 @@ function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
     nodes.push({ id: rtr.id, type: "router", position: { x: -ROUTER_W / 2, y: 110 }, data: { raw: rtr },
       style: { width: ROUTER_W, height: 74 } });
     abs[rtr.id] = { x: -ROUTER_W / 2, y: 110, w: ROUTER_W };
+  }
+  const vpn = topo.nodes.find((n) => n.kind === "vpn");
+  if (vpn) {
+    const pos = { x: ROUTER_W / 2 + 90, y: 110 };
+    nodes.push({ id: vpn.id, type: "vpn", position: pos, data: { raw: vpn }, style: { width: VPN_W, height: 74 } });
+    abs[vpn.id] = { ...pos, w: VPN_W };
   }
   segs.forEach((s, i) => {
     const members = hosts.filter((h) => h.parent === s.id);
@@ -140,6 +159,13 @@ function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
   const edges: Edge[] = [];
   for (const e of topo.edges) {
     if (e.kind === "egress" || !abs[e.source] || !abs[e.target]) continue;   // internet access is a badge on the segment
+    if (e.kind === "vpn") {
+      edges.push({ id: e.id, source: e.source, target: e.target, sourceHandle: "ls", targetHandle: "rt", type: "straight",
+        label: e.label, animated: true, style: { strokeWidth: 2, stroke: "var(--ok)", strokeDasharray: "4 3" },
+        labelStyle: { fontFamily: "var(--mono)", fontSize: 11, fill: "var(--muted)" },
+        labelBgStyle: { fill: "var(--surface)" }, labelBgPadding: [4, 2], labelBgBorderRadius: 4 });
+      continue;
+    }
     if (e.kind === "uplink" || e.kind === "gateway") {
       edges.push({ id: e.id, source: e.source, target: e.target, sourceHandle: "b", targetHandle: "t",
         type: e.kind === "gateway" ? "smoothstep" : "straight", label: e.kind === "gateway" ? e.label : undefined,
@@ -215,7 +241,15 @@ export function TopologyMap({ topology, tall, onConsole }: {
           </div>
           <div className="card-body">
             <dl className="kv">
-              {selected.kind === "segment" ? (
+              {selected.kind === "vpn" ? (
+                <>
+                  <dt>Port</dt><dd className="mono">udp/{selected.port} on the router's uplink</dd>
+                  {selected.endpoint && <><dt>Endpoint</dt><dd className="mono">{selected.endpoint}</dd></>}
+                  <dt>Tunnel</dt><dd className="mono">{selected.cidr}</dd>
+                  <dt>Peers</dt><dd>{selected.peers?.join(", ")}</dd>
+                  <dt>Reach</dt><dd>{selected.reach?.join(", ")}</dd>
+                </>
+              ) : selected.kind === "segment" ? (
                 <>
                   <dt>VLAN</dt><dd>{selected.vlan}</dd>
                   <dt>Network</dt><dd className="mono">{selected.cidr}</dd>
@@ -236,7 +270,7 @@ export function TopologyMap({ topology, tall, onConsole }: {
                 </>
               )}
             </dl>
-            {onConsole && selected.kind !== "segment" && selected.status === "running" && (
+            {onConsole && selected.kind !== "segment" && selected.kind !== "vpn" && selected.status === "running" && (
               <button className="btn primary small" style={{ marginTop: 10 }}
                 onClick={() => onConsole(selected.id === "rtr" ? "rtr" : selected.id.replace(/^host:/, ""))}>
                 Open console

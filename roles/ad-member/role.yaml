@@ -1,0 +1,12 @@
+description: Join a Windows host to an Active Directory domain
+families: [windows]
+wait_for: [dc, dc2]
+params:
+  domain:
+    required: true
+    description: DNS name of the domain
+  dc:
+    required: true
+    description: Host name of a domain controller (its DNS server is used)
+  dc2:
+    description: Host name of a second domain controller (second DNS server)

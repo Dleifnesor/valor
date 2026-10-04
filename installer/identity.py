@@ -33,6 +33,11 @@ def roles(facts: Facts) -> dict[str, list[str]]:
         "ValorTemplateUser": ["VM.Audit", "VM.Clone"],
         "ValorStorage": ["Datastore.AllocateSpace", "Datastore.Audit"],
         "ValorNodeAudit": ["Sys.Audit"],
+        # ISO library on VALOR's ISO storage: add (AllocateTemplate), list (Audit), delete (Allocate - Proxmox
+        # demands it for deleting content; changing the storage's configuration needs it on /storage, not granted)
+        "ValorISO": ["Datastore.Allocate", "Datastore.AllocateTemplate", "Datastore.Audit"],
+        "ValorISOReader": ["Datastore.Audit"],
+        "ValorDownload": ["Sys.AccessNetwork"],                              # Proxmox fetches a URL for VALOR
     }
     if facts.privileges:
         for name, privs in want.items():
@@ -52,6 +57,12 @@ def acls(a: Answers, facts: Facts, bridge: str) -> list[tuple[str, str]]:
     uplink = f"/sdn/zones/localnetwork/{a.vm_bridge}"
     if uplink not in [p for p, _ in paths]:
         paths.append((uplink, "PVESDNUser"))
+    if a.iso_storage:
+        paths.append((f"/storage/{a.iso_storage}", "ValorISO"))
+        paths.append((f"/nodes/{facts.node}", "ValorDownload"))
+    for sid in a.iso_storages:
+        if sid != a.iso_storage and sid != a.range_storage:
+            paths.append((f"/storage/{sid}", "ValorISOReader"))
     return paths
 
 

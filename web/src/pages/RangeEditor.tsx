@@ -49,7 +49,19 @@ interface Catalog {
 }
 
 export function RangeEditor({ name, canEdit }: { name?: string; canEdit: boolean }) {
-  const [text, setText] = useState<string | null>(name ? null : EXAMPLE);
+  const [text, setText] = useState<string | null>(() => {
+    if (name) return null;
+    try {                                   // a spec handed over by the chat builder
+      const draft = sessionStorage.getItem("valor-editor-draft");
+      if (draft) {
+        sessionStorage.removeItem("valor-editor-draft");
+        return draft;
+      }
+    } catch {
+      /* no draft */
+    }
+    return EXAMPLE;
+  });
   const [check, setCheck] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);

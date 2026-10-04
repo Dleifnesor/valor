@@ -1,5 +1,5 @@
 description: nginx web server with a minimal site naming the host and range
-families: [debian]
+families: [debian, rhel]
 ports: [80]
 params:
   port:

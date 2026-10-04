@@ -26,7 +26,7 @@ from .templates import cpu_type
 
 STAGE = "/var/lib/valor-install"
 PAYLOAD_DIRS = ["valor", "appliance", "roles", "baselines", "templates", "ranges"]
-PAYLOAD_FILES = ["pyproject.toml", "README.md"]
+PAYLOAD_FILES = ["pyproject.toml", "README.md", ".claude/skills/range-build/spec-reference.md"]
 
 
 def payload() -> bytes:
@@ -78,7 +78,8 @@ def config_toml(a: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: st
         "resources": {"pool": a.pool_ranges, "template_pool": a.pool_templates, "storage": a.range_storage,
                       "segment_bridge": bridge, "uplink_bridge": a.vm_bridge, "uplink_vlan": a.vm_vlan,
                       "vmid_min": lo, "vmid_max": hi, "vlan_min": a.vlan_min, "vlan_max": a.vlan_max,
-                      "max_memory_fraction": 0.7, "reserved_networks": a.reserved_networks},
+                      "max_memory_fraction": 0.7, "reserved_networks": a.reserved_networks,
+                      "iso_storage": a.iso_storage, "iso_storages": a.iso_storages},
         "paths": {"content_dir": "/opt/valor/share", "data_dir": "/var/lib/valor/data",
                   "state_dir": "/var/lib/valor/state", "ssh_public_key": "/etc/valor/ssh/id_ed25519.pub",
                   "job_runner": "worker"},
@@ -223,6 +224,31 @@ def provision(a: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, s
             ui.ok("appliance setup finished")
             return
     raise SystemExit("appliance setup did not finish within 40 minutes; see /var/log/valor-setup.log in the VM")
+
+
+JOBS_DIR = "/var/lib/valor/state/jobs"
+
+
+def busy_jobs(facts: Facts, vmid: int) -> list[str]:
+    """Jobs running or queued in the VALOR VM (an upgrade restarts the worker, which first finishes its job)."""
+    code, out, _ = guest.script(facts.node, vmid, f"""
+for f in {JOBS_DIR}/*/job.json; do
+  [ -f "$f" ] && grep -qE '"state": "(running|queued)"' "$f" && basename "$(dirname "$f")"
+done
+true
+""", timeout=60)
+    return out.split() if code == 0 else []
+
+
+def wait_jobs(facts: Facts, vmid: int, timeout: float = 3 * 3600) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        busy = busy_jobs(facts, vmid)
+        if not busy:
+            return
+        ui.info(f"... waiting for {len(busy)} job(s): {', '.join(busy)}")
+        time.sleep(30)
+    raise SystemExit("VALOR jobs are still running; try the upgrade again later")
 
 
 def ca_pem(facts: Facts, vmid: int) -> str:

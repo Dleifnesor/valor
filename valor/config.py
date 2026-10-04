@@ -36,6 +36,8 @@ class Config:
     vlan_max: int = 3999
     max_memory_fraction: float = 0.7
     reserved_networks: tuple[str, ...] = ()     # never used by segments and never reachable from ranges
+    iso_storage: str = ""                       # ISO library: downloads and uploads go here
+    iso_storages: tuple[str, ...] = ()          # ISO storages VALOR may list (includes iso_storage)
     # Paths
     project_dir: str = "/srv/valor"
     content_dir: str = ""                       # roles/, baselines/, templates/ (default: project_dir)
@@ -92,7 +94,7 @@ class Config:
         return Path(self.state_dir) / "jobs"
 
 
-TUPLES = ("nameservers", "reserved_networks")
+TUPLES = ("nameservers", "reserved_networks", "iso_storages")
 
 
 def load_config(path: Path | None = None) -> Config:

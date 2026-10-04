@@ -1,0 +1,9 @@
+# *dons a tiny Windows hat* OwO roles/iis/role.yaml: metadata for iis, Microsoft's web server with a page naming
+# the host and range ^w^
+description: IIS web server with a page naming the host and range
+# Windows only UwU
+families: [windows]
+# Serves port 80 >w<
+ports: [80]
+# params: {} means it takes no settings at all OwO
+params: {}

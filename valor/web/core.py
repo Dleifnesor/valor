@@ -119,6 +119,7 @@ def stage(*allowed: str):
         if s.stage not in allowed:
             raise ApiError(403, "wrong_stage", "This step is not available right now.", stage=s.stage)
         return s
+    dep.valor_stage = allowed                       # read by the security tests (route -> required access)
     return dep
 
 
@@ -131,6 +132,7 @@ def require(role: str = "viewer", allow_password_change: bool = False):
         if ROLES[s.user["role"]] < ROLES[role]:
             raise ApiError(403, "forbidden", f"This needs the {role} role.")
         return s
+    dep.valor_role = role
     return dep
 
 

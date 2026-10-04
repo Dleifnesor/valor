@@ -44,6 +44,14 @@ def recover_interrupted(cfg) -> list[str]:
     return out
 
 
+DONE = {"power": "Range {name}: {action} done",
+        "snapshot": "Range {name}: snapshot {snap} taken",
+        "rollback": "Range {name} reset to {snap}",
+        "snapshot_delete": "Range {name}: snapshot {snap} deleted",
+        "rotate": "Range {name}: new login password set",
+        "wg_rotate": "Range {name}: new WireGuard keys for {peers}"}
+
+
 def _describe(job: dict, result: dict) -> tuple[str, str, str]:
     kind, target = job["kind"], job["target"]
     name = target.get("range") or str(target.get("spec", "")).removesuffix(".yaml")
@@ -57,13 +65,11 @@ def _describe(job: dict, result: dict) -> tuple[str, str, str]:
             sm = result.get("summary", {})
             return "success", f"Range {name} verified", \
                 f"Tests {sm.get('tests_passed')}/{sm.get('tests_total')}, baseline {sm.get('baseline_passed')}/{sm.get('baseline_total')}."
-        return "success", f"Range {name} destroyed", f"{len(result.get('removed', []))} VMs deleted."
-    if result.get("ok") is not False and kind in ("power", "snapshot", "rollback", "snapshot_delete", "rotate"):
-        done = {"power": f"Range {name}: {target.get('action')} done",
-                "snapshot": f"Range {name}: snapshot {target.get('name')} taken",
-                "rollback": f"Range {name} reset to {target.get('name')}",
-                "snapshot_delete": f"Range {name}: snapshot {target.get('name')} deleted",
-                "rotate": f"Range {name}: new login password set"}[kind]
+        if kind == "destroy":
+            return "success", f"Range {name} destroyed", f"{len(result.get('removed', []))} VMs deleted."
+    if result.get("ok") is not False and kind in DONE:
+        done = DONE[kind].format(name=name, action=target.get("action"), snap=target.get("name"),
+                                 peers=", ".join(target.get("peers") or []))
         extra = ""
         if kind == "rollback" and result.get("verify"):
             v = result["verify"]["summary"]
@@ -71,7 +77,7 @@ def _describe(job: dict, result: dict) -> tuple[str, str, str]:
         return "success", done, extra
     what = {"apply": "Build", "verify": "Verification", "destroy": "Teardown", "power": "Power action",
             "snapshot": "Snapshot", "rollback": "Reset", "snapshot_delete": "Snapshot deletion",
-            "rotate": "Password rotation"}.get(kind, kind)
+            "rotate": "Password rotation", "wg_rotate": "WireGuard key rotation"}.get(kind, kind)
     return "error", f"{what} of range {name} failed", \
         f"{result.get('error', 'error')}: {result.get('message', '')}" + (f"\nHint: {result['hint']}" if result.get("hint") else "")
 

@@ -31,3 +31,14 @@ def test_auto_tests_for_reference(ref_spec):
     assert ("web", "internet", 443, "open") in tests
     assert ("db", "internet", 443, "closed") in tests
     assert len(tests) == 6
+
+
+def test_build_egress_is_temporary_and_reverts():
+    from valor.netpolicy import REVERT_AFTER, router_script
+    final, build = "table inet valor { # FINAL\n}\n", "table inet valor { # BUILD\n}\n"
+    s = router_script(final, build)
+    saved = s.split("cat > /etc/nftables.conf.valor-new <<'VALOR_NFT_EOF'\n", 1)[1].split("VALOR_NFT_EOF", 1)[0]
+    assert "# FINAL" in saved and "# BUILD" not in saved                      # a reboot loads the final policy
+    assert "/run/valor-build.nft" in s and f"--on-active={REVERT_AFTER}" in s   # build rules: this boot, then revert
+    plain = router_script(final)
+    assert "systemctl stop valor-build-revert.timer" in plain and "BUILD" not in plain

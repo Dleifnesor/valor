@@ -42,3 +42,72 @@ description = "Debian 12 (bookworm), official generic cloud image"
 image_url = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
 checksums_url = "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
 checksum_type = "sha512"
+
+["rocky-10"]
+family = "rhel"
+description = "Rocky Linux 10, official GenericCloud image"
+cpu_min = "x86-64-v3"              # RHEL 10 family needs AVX2-class CPUs
+install_iso = "rocky-10-minimal"   # `install: iso` hosts: kickstart install from this ISO catalog entry
+image_url = "https://download.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2"
+checksums_url = "https://download.rockylinux.org/pub/rocky/10/images/x86_64/CHECKSUM"
+checksum_type = "sha256"
+
+["alma-10"]
+family = "rhel"
+description = "AlmaLinux 10, official GenericCloud image"
+cpu_min = "x86-64-v3"
+install_iso = "alma-10-minimal"
+image_url = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
+checksums_url = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM"
+checksum_type = "sha256"
+
+["kali"]
+family = "debian"
+description = "Kali Linux (rolling), official generic cloud image"
+checksums_url = "https://kali.download/cloud-images/current/SHA256SUMS"
+checksum_type = "sha256"
+image_base = "https://kali.download/cloud-images/current/"
+image_pattern = 'kali-linux-\d+\.\d+[a-z]?-cloud-genericcloud-amd64\.tar\.xz'
+archive = "tar.xz"                 # contains a raw disk image
+
+# Windows: built from installer ISOs in the ISO library (unattended setup + VirtIO guest tools + sysprep).
+# `iso` names an ISO catalog entry (templates/isos.toml); `edition` is a pattern for the image name in install.wim.
+["windows-server-2025"]
+family = "windows"
+description = "Windows Server 2025 Datacenter (Desktop Experience), evaluation"
+iso = "windows-server-2025-eval"
+edition = 'DATACENTER$'
+default_memory = 4096
+default_disk = 64
+
+["windows-server-2025-core"]
+family = "windows"
+description = "Windows Server 2025 Datacenter Server Core, evaluation"
+iso = "windows-server-2025-eval"
+edition = 'DATACENTERCORE$'
+default_memory = 2048
+default_disk = 64
+
+["windows-server-2022"]
+family = "windows"
+description = "Windows Server 2022 Datacenter (Desktop Experience), evaluation"
+iso = "windows-server-2022-eval"
+edition = 'DATACENTER$'
+default_memory = 4096
+default_disk = 64
+
+["windows-server-2022-core"]
+family = "windows"
+description = "Windows Server 2022 Datacenter Server Core, evaluation"
+iso = "windows-server-2022-eval"
+edition = 'DATACENTERCORE$'
+default_memory = 2048
+default_disk = 64
+
+["windows-11"]
+family = "windows"
+description = "Windows 11 Enterprise (current release), evaluation"
+iso = "windows-11-enterprise-eval"
+edition = 'Enterprise'
+default_memory = 4096
+default_disk = 64
