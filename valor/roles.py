@@ -89,19 +89,33 @@ run_container() {
     *) image="docker.io/library/$image" ;;
   esac
   container_engine
-  # On Rocky/Alma, SELinux keeps systemd from attaching a container's device filter when the container is started
-  # from the guest agent's context: start it from a transient systemd unit instead (container_runtime_t)
-  local via=()
-  [ "$VALOR_FAMILY" = rhel ] && via=(systemd-run --quiet --wait --pipe --collect -p KillMode=process)
   want=$(printf '%s\n' "$image" "$@" | sha256sum | cut -c1-16)
   cur=$(docker inspect -f '{{ index .Config.Labels "valor.settings" }}' "$name" 2>/dev/null || true)
+  local i
   if [ "$cur" != "$want" ]; then
     docker pull -q "$image" >/dev/null
-    docker rm -f "$name" >/dev/null 2>&1 || true
-    "${via[@]}" docker run -d --name "$name" --restart=always --label "valor.settings=$want" "$@" "$image" >/dev/null
+    for i in 1 2 3; do
+      docker rm -f "$name" >/dev/null 2>&1 || true
+      container_cmd run -d --name "$name" --restart=always --label "valor.settings=$want" "$@" "$image" >/dev/null && break
+      [ "$i" = 3 ] && return 1; sleep 5
+    done
     changed
   elif [ "$(docker inspect -f '{{ .State.Running }}' "$name")" != true ]; then
-    "${via[@]}" docker start "$name" >/dev/null; changed
+    for i in 1 2 3; do
+      container_cmd start "$name" >/dev/null && break
+      [ "$i" = 3 ] && return 1; sleep 5
+    done
+    changed
+  fi
+}
+container_cmd() {
+  # On Rocky/Alma, SELinux keeps systemd from attaching a container's device filter when the container is started
+  # from the guest agent's context: start it from a transient systemd unit instead. Callers retry: systemd refuses
+  # new units for a moment while it reconnects to D-Bus.
+  if [ "$VALOR_FAMILY" = rhel ]; then
+    systemd-run --quiet --wait --pipe --collect -p KillMode=process docker "$@"
+  else
+    docker "$@"
   fi
 }
 write_file() {

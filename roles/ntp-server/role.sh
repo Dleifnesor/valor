@@ -17,6 +17,9 @@ write_file "$CONF" 0644 < <(
   for a in $ALLOW; do echo "allow $a"; done
 ) || true
 systemctl enable -q "$SERVICE"
-if [ "$VALOR_CHANGED" = 1 ] || ! systemctl is-active -q "$SERVICE"; then systemctl restart "$SERVICE"; fi
+# chrony only opens UDP 123 when it starts with an allow line: restart it too when it runs without serving
+if [ "$VALOR_CHANGED" = 1 ] || ! systemctl is-active -q "$SERVICE" || ! ss -lunH "sport = :123" | grep . >/dev/null; then
+  systemctl restart "$SERVICE"; changed
+fi
 for i in $(seq 1 15); do ss -lunH "sport = :123" | grep . >/dev/null && exit 0; sleep 1; done
 echo "chrony does not listen on UDP 123" >&2; exit 1
