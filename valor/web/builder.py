@@ -17,7 +17,7 @@ from ..cluster import load_catalog, templates, vlans_in_use
 from ..errors import ValorError
 from ..pve import PVE
 from ..spec import normalize, parse_spec
-from ..validate import validate_cluster
+from ..validate import NO_BASELINE, validate_cluster
 from . import db, topology
 from .core import ApiError, Session, require
 from .ranges import _cfg, role_list
@@ -208,6 +208,7 @@ def reference_for(cfg, pve: PVE | None) -> str:
 def spec_check(cfg, pve: PVE | None, own_name: str = ""):
     """The validation the model's specs must pass (schema, unique name, the cluster)."""
     def check(text: str) -> list[str]:
+        check.warnings = []
         try:
             spec = normalize(parse_spec(text), cfg.default_os)
         except ValorError as e:
@@ -220,10 +221,15 @@ def spec_check(cfg, pve: PVE | None, own_name: str = ""):
         if pve is not None:
             try:
                 v = validate_cluster(pve, spec)
-                problems += [f"{e['location']}: {e['message']}" for e in v["errors"]]
+                problems += [f"{e['location']}: {e['message']}" + (f" ({e['hint']})" if e.get("hint") else "")
+                             for e in v["errors"]]
+                check.warnings = [w["message"] for w in v.get("warnings", [])]
             except ValorError as e:
                 problems.append(e.message)
+        elif spec.baseline == "none":
+            check.warnings = [NO_BASELINE]
         return problems
+    check.warnings = []
     return check
 
 
@@ -249,12 +255,14 @@ def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"
     if body.spec.strip() and msgs[-1]["role"] == "user":
         msgs[-1] = {"role": "user", "content": msgs[-1]["content"] +
                     f"\n\nThe current spec in the builder:\n```yaml\n{body.spec.strip()}\n```"}
-    res = run_ai(s, st, lambda: ai.build(prov, system, msgs, spec_check(cfg, pve, body.range)))
+    check = spec_check(cfg, pve, body.range)
+    res = run_ai(s, st, lambda: ai.build(prov, system, msgs, check))
     topo = None
     if res["yaml"] and not res["problems"]:
         topo = topology.build(normalize(parse_spec(res["yaml"]), cfg.default_os))
     s.audit("builder.chat", detail={"attempts": res["attempts"], "ok": not res["problems"],
                                     "tokens": res["input_tokens"] + res["output_tokens"]})
     return {"reply": res["reply"], "yaml": res["yaml"], "ok": not res["problems"], "problems": res["problems"],
-            "attempts": res["attempts"], "topology": topo,
+            "attempts": res["attempts"], "fixed": res["fixed"] if not res["problems"] else [],
+            "warnings": check.warnings if not res["problems"] else [], "topology": topo,
             "usage": {"input_tokens": res["input_tokens"], "output_tokens": res["output_tokens"]}}
