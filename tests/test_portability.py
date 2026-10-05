@@ -82,3 +82,38 @@ def test_topology_overlay(cfg, ref_spec):
     kinds = {e["kind"] for e in g["edges"]}
     assert {"uplink", "gateway", "policy"} <= kinds
     assert all(e["source"] in by and e["target"] in by for e in g["edges"])
+
+
+class AgentAPI:
+    """Agent requests that fail the way Proxmox reports them (proxmoxer puts the reason in .content)."""
+
+    def __init__(self, failures):
+        self.failures, self.calls = list(failures), 0
+
+    def __call__(self, **params):
+        self.calls += 1
+        if self.failures:
+            from proxmoxer.core import ResourceException
+            raise ResourceException(500, "Internal Server Error", self.failures.pop(0))
+        return {"pid": 7}
+
+
+@pytest.mark.parametrize("failures, resend, calls, ok", [
+    (["QEMU guest agent is not running"] * 2, False, 3, True),     # ping timed out: nothing was sent, retry
+    (["VM 5024 qga command 'guest-exec' failed - got timeout"], False, 1, False),   # may have run: never twice
+    (["VM 5024 qga command 'guest-file-open' failed - got timeout"], True, 2, True),  # safe to send again
+    (["QEMU guest agent is not running"] * 4, True, 4, False),     # gives up after AGENT_RETRIES
+    (["can't open file"], True, 1, False),                        # real errors are not retried
+])
+def test_agent_requests_survive_a_busy_guest(cfg, failures, resend, calls, ok):
+    from valor import pve as P
+    pve = PVE.__new__(PVE)
+    pve.cfg, waits = cfg, []
+    pve.wait_agent = lambda vmid, timeout=300: waits.append(vmid)
+    api = AgentAPI(failures)
+    if ok:
+        assert pve.agent_call(5024, "write file in VM 5024", api, resend=resend, file="x") == {"pid": 7}
+    else:
+        with pytest.raises(ValorError):
+            pve.agent_call(5024, "write file in VM 5024", api, resend=resend, file="x")
+    assert api.calls == calls and len(waits) == calls - 1 and P.AGENT_RETRIES == 3

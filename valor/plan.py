@@ -98,10 +98,11 @@ def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = No
                 digest = "missing"
             roles.append({"name": ref.name, "params": ref.params, "digest": digest})
         # Windows needs more than the Linux defaults; the catalog sets the floor (a template's disk can't shrink)
+        cores = max(h.cores, int(entry.get("default_cores", 0))) if windows else h.cores
         memory = max(h.memory, int(entry.get("default_memory", 0))) if windows else h.memory
         disk = max(h.disk, int(entry.get("default_disk", 0))) if windows else h.disk
         from_iso = h.install == "iso"
-        d = Desired(h.name, False, h.os, 0 if from_iso else tpl(h.os), h.cores, memory, disk, nics, roles, h.segment,
+        d = Desired(h.name, False, h.os, 0 if from_iso else tpl(h.os), cores, memory, disk, nics, roles, h.segment,
                     str(h.address), family=family)
         d.hw = {"os": d.os, "template": "iso" if from_iso else d.template, "cores": d.cores, "memory": d.memory,
                 "disk": d.disk, "nics": nics, **common, **({"family": family} if windows else {}),

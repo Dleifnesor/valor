@@ -30,6 +30,10 @@ class ExecResult:
         return text[-n:]
 
 
+AGENT_DOWN = "QEMU guest agent is not running"         # Proxmox's answer when its ping (3 s) gets no reply
+AGENT_RETRIES = 3
+
+
 def _api_error(e: Exception, what: str) -> ValorError:
     if isinstance(e, ResourceException):
         msg = f"{what}: HTTP {e.status_code} {e.status_message}"
@@ -271,16 +275,30 @@ class PVE:
         raise ValorError("agent_timeout", f"guest agent of VM {vmid} did not respond within {timeout}s",
                          hint="The VM may not have booted; check its console in the Proxmox UI.")
 
+    def agent_call(self, vmid: int, what: str, fn, resend: bool = False, **params):
+        """A guest-agent request. Proxmox pings the agent (3 s) before each command and sends nothing when the ping
+        fails, so a guest that is briefly too busy to answer (Windows on one core right after setup) is retried once
+        its agent answers again. Requests that are safe to send twice (resend) are also retried after a timeout."""
+        for attempt in range(AGENT_RETRIES + 1):
+            try:
+                return self.call(what, fn, **params)
+            except ValorError as e:
+                text = f"{e.message} {e.details}"
+                if attempt == AGENT_RETRIES or not (AGENT_DOWN in text or (resend and "got timeout" in text)):
+                    raise
+            self.wait_agent(vmid, 300)
+
     def exec(self, vmid: int, command: list[str], input_data: str | None = None, timeout: int = 900) -> ExecResult:
         params: dict = {"command": command}
         if input_data is not None:
             params["input-data"] = input_data
-        res = self.call(f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
+        res = self.agent_call(vmid, f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
         pid = res["pid"]
         end = time.time() + timeout
         delay = 0.5
         while time.time() < end:
-            st = self.call(f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get, pid=pid)
+            st = self.agent_call(vmid, f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get,
+                                 resend=True, pid=pid)
             if st.get("exited"):
                 return ExecResult(st.get("exitcode"), st.get("out-data", "") or "", st.get("err-data", "") or "")
             time.sleep(delay)
@@ -294,7 +312,8 @@ class PVE:
     def write_file(self, vmid: int, path: str, content: str) -> None:
         if len(content) > 60_000:
             raise ValorError("script_too_large", f"file for VM {vmid} exceeds the guest agent's 60 KiB limit")
-        self.call(f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, file=path, content=content)
+        self.agent_call(vmid, f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, resend=True,
+                        file=path, content=content)             # opened "wb": writing it again is harmless
 
     def ps(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
         """Run a PowerShell script as SYSTEM inside a Windows guest. The script goes to a temporary file over the

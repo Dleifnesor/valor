@@ -27,7 +27,7 @@ hosts:                          # 1-40
     address: 10.110.0.10        # inside the segment; .1 is the router (gateway)
     os: ubuntu-24.04            # optional; must have a template (cluster_info.templates). Linux: ubuntu-24.04,
                                 # debian-13, kali, rocky-10, alma-10. Windows: windows-server-2022(-core),
-                                # windows-server-2025(-core), windows-11 (memory/disk floors from the catalog)
+                                # windows-server-2025(-core), windows-11 (CPU/memory/disk floors from the catalog)
     cores: 1                    # 1-16
     memory: 1024                # MiB, 512-65536
     disk: 10                    # GiB, 8-500 (can grow later, never shrink)

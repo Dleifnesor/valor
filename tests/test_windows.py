@@ -49,6 +49,7 @@ def test_windows_desired_state(cfg, corp):
     dc1, pc1, web = ds["dc1"], ds["pc1"], ds["web"]
     assert dc1.family == "windows" and dc1.nics[0]["model"] == "e1000e" and dc1.hw["family"] == "windows"
     assert dc1.disk == 64 and dc1.memory == 2048 and pc1.memory == 4096          # catalog floors
+    assert pc1.cores == 2 and pc1.hw["cores"] == 2 and dc1.cores == 1            # Windows 11 needs two cores
     assert web.family == "debian" and "model" not in web.nics[0] and "family" not in web.hw   # Linux hashes unchanged
     assert ds["rtr"].family == "debian"
 
