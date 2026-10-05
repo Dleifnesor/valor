@@ -232,6 +232,8 @@ SPEC_RULES = """Rules for specs:
 - Keep a spec you were given and change only what the person asks for; always return the whole spec.
 - Deny by default: only add policy rules the environment needs, and say which flows you allowed.
 - Pick unused VLANs and private networks that avoid the networks listed under cluster facts.
+- Leave `baseline` out (or at ubuntu-l1): VALOR hardens Linux hosts with it and Windows hosts with windows-l1
+  automatically. Never set baseline to windows-l1, and only use 'none' when the person asks for no hardening.
 - If the request is unclear, make a sensible small choice and say what you assumed."""
 
 
@@ -317,13 +319,14 @@ def ask(provider: Provider, system: str, messages: list[dict]) -> dict:
 
 def build(provider: Provider, system: str, messages: list[dict], check) -> dict:
     """Ask the model; validate its spec with check(yaml) -> list of problems; ask for fixes (FIX_ROUNDS times).
-    Returns {reply, yaml, problems, attempts, input_tokens, output_tokens}."""
+    Returns {reply, yaml, problems, attempts, fixed (the problems the model corrected), input_tokens, output_tokens}."""
     convo = trim(messages)
     if not convo:
         raise ValorError("ai_no_message", "Say what environment you want.")
     used_in = used_out = 0
     reply = yaml_text = None
     problems: list[str] = []
+    fixed: list[str] = []                   # problems found in earlier attempts (the model corrected them)
     for attempt in range(1, FIX_ROUNDS + 2):
         r = provider.complete(system, convo)
         used_in += r.input_tokens
@@ -339,8 +342,12 @@ def build(provider: Provider, system: str, messages: list[dict], check) -> dict:
             problems = check(yaml_text)
         if not problems:
             break
+        fixed += problems
         convo = [*convo, {"role": "assistant", "content": r.text},
-                 {"role": "user", "content": "VALOR could not use that spec:\n" + "\n".join(f"- {p}" for p in problems)
-                  + "\nReply with the corrected complete spec in one ```yaml block."}]
-    return {"reply": reply, "yaml": yaml_text, "problems": problems, "attempts": attempt,
+                 {"role": "user", "content": "[Automatic check by VALOR - the person does not see this message or your "
+                  "previous answer.] VALOR could not use that spec:\n" + "\n".join(f"- {p}" for p in problems)
+                  + "\nWrite your answer to the person's request again, as if for the first time: a short explanation "
+                  "of the environment (do not apologize or mention this check), then the corrected complete spec in "
+                  "one ```yaml block."}]
+    return {"reply": reply, "yaml": yaml_text, "problems": problems, "attempts": attempt, "fixed": fixed,
             "input_tokens": used_in, "output_tokens": used_out}

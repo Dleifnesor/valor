@@ -93,3 +93,9 @@ def test_a_failing_host_closes_the_build_window(run, monkeypatch):
 def test_mac_from_net_config():
     assert A._mac("virtio=BC:24:11:AA:BB:CC,bridge=vmbr0,firewall=0") == "BC:24:11:AA:BB:CC"
     assert A._mac("virtio,bridge=vmbr0") is None and A._mac("") is None
+
+
+def test_disk_size_from_config():
+    assert A._disk_gib("valor-tank:base-5901-disk-1/vm-5024-disk-1,discard=on,size=64G,ssd=1") == 64   # once crashed
+    assert A._disk_gib("local-lvm:vm-1-disk-0,size=10G") == 10 and A._disk_gib("x:vm-1-disk-0,size=1T") == 1024
+    assert A._disk_gib("x:vm-1-disk-0,size=512M") == 0.5 and A._disk_gib("x:vm-1-disk-0") == 0 and A._disk_gib("") == 0

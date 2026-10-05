@@ -88,12 +88,15 @@ def chat(name: str, body: ChatIn, request: Request, s: Session = Depends(require
     if body.mode == "question":
         res = run_ai(s, st, lambda: ai.ask(prov, system, msgs))
     else:
-        res = run_ai(s, st, lambda: ai.build(prov, system, msgs, spec_check(cfg, pve, name)))
+        check = spec_check(cfg, pve, name)
+        res = run_ai(s, st, lambda: ai.build(prov, system, msgs, check))
 
     meta: dict = {"usage": {"input_tokens": res["input_tokens"], "output_tokens": res["output_tokens"]}}
     plan = None
     if body.mode != "question":
         meta["problems"] = res["problems"]
+        if not res["problems"]:
+            meta.update(fixed=res["fixed"], warnings=check.warnings)
         if res["yaml"] and not res["problems"]:
             drafts.save(cfg, name, res["yaml"], s.username, f"chat:{body.mode}")
             v = editing.view(cfg, name)

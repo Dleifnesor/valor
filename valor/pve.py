@@ -30,6 +30,11 @@ class ExecResult:
         return text[-n:]
 
 
+AGENT_DOWN = "QEMU guest agent is not running"         # Proxmox's answer when its ping (3 s) gets no reply
+AGENT_RETRIES = 3
+PS_START_WAIT = 300                                     # s: for a script whose start request timed out
+
+
 def _api_error(e: Exception, what: str) -> ValorError:
     if isinstance(e, ResourceException):
         msg = f"{what}: HTTP {e.status_code} {e.status_message}"
@@ -271,16 +276,33 @@ class PVE:
         raise ValorError("agent_timeout", f"guest agent of VM {vmid} did not respond within {timeout}s",
                          hint="The VM may not have booted; check its console in the Proxmox UI.")
 
+    def agent_call(self, vmid: int, what: str, fn, resend: bool = False, **params):
+        """A guest-agent request. Proxmox pings the agent (3 s) before each command and sends nothing when the ping
+        fails, so a guest that is briefly too busy to answer (Windows on one core right after setup) is retried once
+        its agent answers again. Requests that are safe to send twice (resend) are also retried after a timeout."""
+        for attempt in range(AGENT_RETRIES + 1):
+            try:
+                return self.call(what, fn, **params)
+            except ValorError as e:
+                text = f"{e.message} {e.details}"
+                if attempt == AGENT_RETRIES or not (AGENT_DOWN in text or (resend and "got timeout" in text)):
+                    raise
+            self.wait_agent(vmid, 300)
+
     def exec(self, vmid: int, command: list[str], input_data: str | None = None, timeout: int = 900) -> ExecResult:
         params: dict = {"command": command}
         if input_data is not None:
             params["input-data"] = input_data
-        res = self.call(f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
-        pid = res["pid"]
+        res = self.agent_call(vmid, f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
+        return self.exec_wait(vmid, res["pid"], timeout)
+
+    def exec_wait(self, vmid: int, pid: int, timeout: int = 900) -> ExecResult:
+        """Wait for a process the agent started and collect its output (the agent keeps it until it is read)."""
         end = time.time() + timeout
         delay = 0.5
         while time.time() < end:
-            st = self.call(f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get, pid=pid)
+            st = self.agent_call(vmid, f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get,
+                                 resend=True, pid=pid)
             if st.get("exited"):
                 return ExecResult(st.get("exitcode"), st.get("out-data", "") or "", st.get("err-data", "") or "")
             time.sleep(delay)
@@ -294,19 +316,46 @@ class PVE:
     def write_file(self, vmid: int, path: str, content: str) -> None:
         if len(content) > 60_000:
             raise ValorError("script_too_large", f"file for VM {vmid} exceeds the guest agent's 60 KiB limit")
-        self.call(f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, file=path, content=content)
+        self.agent_call(vmid, f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, resend=True,
+                        file=path, content=content)             # opened "wb": writing it again is harmless
+
+    def file_read(self, vmid: int, path: str) -> str | None:
+        """A small file's content through the agent; None when it cannot be read (e.g. it does not exist yet)."""
+        try:
+            return self.agent_call(vmid, f"read file in VM {vmid}", self.vm(vmid).agent("file-read").get, resend=True,
+                                   file=path).get("content", "")
+        except ValorError:
+            return None
 
     def ps(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
         """Run a PowerShell script as SYSTEM inside a Windows guest. The script goes to a temporary file over the
-        agent (it may carry secrets: never on a command line), runs with -File and is deleted afterwards."""
+        agent (it may carry secrets: never on a command line), runs with -File and is deleted afterwards.
+
+        Proxmox gives the agent 5 s to accept a command; a busy Windows guest (logon right after a reboot) can miss
+        that although it runs the command. Starting the script again could run it twice, so its first line records
+        its process ID, and after such a timeout VALOR follows that process instead."""
         import secrets as _s
         path = f"C:\\Windows\\Temp\\valor-{_s.token_hex(8)}.ps1"
-        self.write_file(vmid, path, "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
+        pidfile = path + ".pid"
+        self.write_file(vmid, path, f"Set-Content -LiteralPath '{pidfile}' -Value $PID -Encoding ascii\r\n"
+                        "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
         try:
-            return self.exec(vmid, ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                                    "-File", path], timeout=timeout)
+            try:
+                return self.exec(vmid, ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                        "-File", path], timeout=timeout)
+            except ValorError as e:
+                if "got timeout" not in f"{e.message} {e.details}":
+                    raise
+            end = time.time() + PS_START_WAIT
+            while time.time() < end:
+                pid = (self.file_read(vmid, pidfile) or "").strip()
+                if pid.isdigit():
+                    return self.exec_wait(vmid, int(pid), timeout)
+                time.sleep(5)
+            raise ValorError("agent_exec_lost", f"a command in VM {vmid} timed out and never started",
+                             hint="The guest was too busy to answer its agent. Apply the range again to retry.")
         finally:
             try:
-                self.exec(vmid, ["cmd.exe", "/c", "del", "/f", "/q", path], timeout=60)
+                self.exec(vmid, ["cmd.exe", "/c", "del", "/f", "/q", path, pidfile], timeout=60)
             except ValorError:
                 pass

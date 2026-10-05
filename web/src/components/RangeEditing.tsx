@@ -6,6 +6,7 @@ import { ErrorBox, Loading, Modal } from "./ui";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
 import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
+import { CheckNotes } from "../pages/Builder";
 
 // Editing a built range on its map. Map controls and the chat panel both change the range's draft; the draft is
 // drawn in the plan colors and built only through "Review plan" -> approve.
@@ -363,7 +364,7 @@ function YamlModal({ name, yaml, onClose, onSaved }: { name: string; yaml: strin
 type Mode = "question" | "plan" | "code";
 interface ChatMessage {
   id: number; ts: number; username: string; role: "user" | "assistant"; mode: Mode; content: string;
-  meta: { problems?: string[]; draft?: Record<string, number> | null; diff?: string; plan?: { summary: Record<string, number>; actions: { host: string; action: string; reasons: string[] }[] }; usage?: { input_tokens: number; output_tokens: number } };
+  meta: { problems?: string[]; fixed?: string[]; warnings?: string[]; draft?: Record<string, number> | null; diff?: string; plan?: { summary: Record<string, number>; actions: { host: string; action: string; reasons: string[] }[] }; usage?: { input_tokens: number; output_tokens: number } };
 }
 
 const MODES: { mode: Mode; label: string; hint: string; placeholder: string }[] = [
@@ -450,6 +451,7 @@ function ChatBubble({ m, onReview }: { m: ChatMessage; onReview: () => void }) {
     <div className="bubble assistant">
       <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
       {!!meta.problems?.length && <div className="alert warn small" style={{ marginTop: 8 }}>Not applied - the spec still has problems: {meta.problems.join("; ")}</div>}
+      <CheckNotes fixed={meta.fixed} warnings={meta.warnings} />
       {meta.draft && (
         <div className="row small" style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
           Draft: {Object.entries(meta.draft).map(([k, v]) => <span key={k} className={`badge c-${k}`}>{v} {k}</span>)}
