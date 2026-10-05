@@ -1,0 +1,9 @@
+description: >
+  Take this host's time from the range's time server (pair with ntp-server; allow udp/123 to it). On Windows the
+  setting overrides the domain hierarchy.
+families: [debian, rhel, windows]
+ports: []
+params:
+  server:
+    required: true
+    description: Host name of the time server (a host with the ntp-server role)

@@ -205,11 +205,14 @@ def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: d
                      f"[{e.get('family', 'debian')}]" for name, e in catalog.items() if name in present)
     role_lines = []
     for r in roles:
-        params = "; ".join(f"{k}{'' if not v.get('required') else ' (required)'}: {v.get('description', '').strip()}"
+        params = "; ".join(f"{k}{'' if not v.get('required') else ' (required)'}: {' '.join(v.get('description', '').split())}"
                            + (f" (default {v['default']!r})" if 'default' in v else "")
                            for k, v in (r.get("params") or {}).items())
-        role_lines.append(f"- {r['name']} [{', '.join(r.get('families') or ['debian'])}]: {r['description']}"
-                          + (f" | params: {params}" if params else ""))
+        ports = (f"TCP ports from its '{r['ports_param']}' param" if r.get("ports_param")
+                 else "TCP " + ", ".join(map(str, r["ports"])) if r.get("ports") else "")
+        role_lines.append(f"- {r['name']} [{', '.join(r.get('families') or ['debian'])}]"
+                          f"{' (generic)' if r.get('category') == 'generic' else ''}: {' '.join(r['description'].split())}"
+                          + (f" | serves: {ports}" if ports else "") + (f" | params: {params}" if params else ""))
     return f"""# Spec reference
 {spec_reference(cfg)}
 

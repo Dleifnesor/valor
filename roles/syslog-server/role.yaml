@@ -1,0 +1,9 @@
+description: >
+  Central log server (rsyslog) receiving syslog from range hosts on TCP and UDP 514, stored per host under
+  /var/log/remote/<host>/ - pair with syslog-client on the other hosts (allow tcp/514 to it)
+families: [debian, rhel]
+ports: [514]
+params:
+  allow_from:
+    default: ""
+    description: Hosts or segments that may send logs (default every private network)

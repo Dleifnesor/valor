@@ -1,0 +1,15 @@
+description: >
+  Windows-compatible file share (Samba/SMB) at /srv/share/<share>, for the user 'share' (random password stored on
+  the host in /root/.valor-samba-share) or, with guest, for anyone
+families: [debian, rhel]
+ports: [445]
+params:
+  share:
+    default: share
+    description: Share name
+  guest:
+    default: false
+    description: Allow access without a password
+  writable:
+    default: true
+    description: Allow writing to the share

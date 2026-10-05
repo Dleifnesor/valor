@@ -1,0 +1,26 @@
+description: >
+  Any container image as a service - Docker on Debian/Ubuntu/Kali, Podman on Rocky/Alma - restarted on boot, e.g.
+  image "redis:7" with publish "6379:6379"; images are pulled during the build (needs the build's internet access)
+families: [debian, rhel]
+ports_param: publish
+params:
+  image:
+    required: true
+    raw: true
+    pattern: '^[a-z0-9][a-z0-9._/:@-]{0,200}$'
+    description: Image reference, e.g. nginx:1.27, ghcr.io/org/app:tag (images without a registry come from Docker Hub)
+  name:
+    default: app
+    raw: true
+    pattern: '^[a-z0-9][a-z0-9_.-]{0,40}$'
+    description: Container name
+  publish:
+    default: ""
+    raw: true
+    pattern: '^[0-9]{1,5}:[0-9]{1,5}(/(tcp|udp))?$'
+    description: Published ports as host:container, space separated (e.g. "8080:80")
+  env:
+    default: ""
+    raw: true
+    pattern: '^[A-Za-z_][A-Za-z0-9_]*=[^ ]*$'
+    description: Environment as KEY=VALUE, space separated (values without spaces; never put secrets in a spec)
