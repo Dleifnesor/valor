@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import tempfile
 import threading
@@ -139,6 +140,14 @@ def _mac(net: str) -> str | None:
     """The MAC address in a Proxmox netN value ('virtio=BC:24:11:..,bridge=..')."""
     first = net.split(",", 1)[0]
     return first.split("=", 1)[1] if "=" in first else None
+
+
+def _disk_gib(disk: str) -> float:
+    """The size in a Proxmox disk value ('store:vm-1-disk-1,discard=on,size=64G,ssd=1'); 0 when it has none."""
+    m = re.search(r"(?:^|,)size=(\d+(?:\.\d+)?)([KMGT]?)(?:,|$)", disk or "")
+    if not m:
+        return 0
+    return float(m.group(1)) * {"": 2**-30, "K": 2**-20, "M": 2**-10, "G": 1, "T": 2**10}[m.group(2)]
 
 
 def create_vm(pve: PVE, spec: RangeSpec, d: Desired, taken: set[int], uplink_mac: str | None = None) -> int:
@@ -448,8 +457,7 @@ def apply(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                         pve.update_config(a["vmid"], cores=d.cores, memory=d.memory, vga=d.hw.get("display", "std"),
                                           serial0="socket", cpu=cpu)
                         disk = "sata0" if d.family == "windows" else "scsi0"
-                        cur = int(str(pve.vm_config(a["vmid"]).get(disk, "size=0G")).split("size=")[-1].rstrip("G") or 0)
-                        if d.disk > cur:
+                        if d.disk > _disk_gib(str(pve.vm_config(a["vmid"]).get(disk, ""))):
                             pve.resize(a["vmid"], disk, d.disk)
                         attach_iso(pve, a["vmid"], d.hw.get("iso"))
                         if pve.vm_status(a["vmid"]).get("status") == "running":
