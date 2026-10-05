@@ -32,6 +32,7 @@ class ExecResult:
 
 AGENT_DOWN = "QEMU guest agent is not running"         # Proxmox's answer when its ping (3 s) gets no reply
 AGENT_RETRIES = 3
+PS_START_WAIT = 300                                     # s: for a script whose start request timed out
 
 
 def _api_error(e: Exception, what: str) -> ValorError:
@@ -293,7 +294,10 @@ class PVE:
         if input_data is not None:
             params["input-data"] = input_data
         res = self.agent_call(vmid, f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
-        pid = res["pid"]
+        return self.exec_wait(vmid, res["pid"], timeout)
+
+    def exec_wait(self, vmid: int, pid: int, timeout: int = 900) -> ExecResult:
+        """Wait for a process the agent started and collect its output (the agent keeps it until it is read)."""
         end = time.time() + timeout
         delay = 0.5
         while time.time() < end:
@@ -315,17 +319,43 @@ class PVE:
         self.agent_call(vmid, f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, resend=True,
                         file=path, content=content)             # opened "wb": writing it again is harmless
 
+    def file_read(self, vmid: int, path: str) -> str | None:
+        """A small file's content through the agent; None when it cannot be read (e.g. it does not exist yet)."""
+        try:
+            return self.agent_call(vmid, f"read file in VM {vmid}", self.vm(vmid).agent("file-read").get, resend=True,
+                                   file=path).get("content", "")
+        except ValorError:
+            return None
+
     def ps(self, vmid: int, body: str, timeout: int = 900) -> ExecResult:
         """Run a PowerShell script as SYSTEM inside a Windows guest. The script goes to a temporary file over the
-        agent (it may carry secrets: never on a command line), runs with -File and is deleted afterwards."""
+        agent (it may carry secrets: never on a command line), runs with -File and is deleted afterwards.
+
+        Proxmox gives the agent 5 s to accept a command; a busy Windows guest (logon right after a reboot) can miss
+        that although it runs the command. Starting the script again could run it twice, so its first line records
+        its process ID, and after such a timeout VALOR follows that process instead."""
         import secrets as _s
         path = f"C:\\Windows\\Temp\\valor-{_s.token_hex(8)}.ps1"
-        self.write_file(vmid, path, "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
+        pidfile = path + ".pid"
+        self.write_file(vmid, path, f"Set-Content -LiteralPath '{pidfile}' -Value $PID -Encoding ascii\r\n"
+                        "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
         try:
-            return self.exec(vmid, ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                                    "-File", path], timeout=timeout)
+            try:
+                return self.exec(vmid, ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                        "-File", path], timeout=timeout)
+            except ValorError as e:
+                if "got timeout" not in f"{e.message} {e.details}":
+                    raise
+            end = time.time() + PS_START_WAIT
+            while time.time() < end:
+                pid = (self.file_read(vmid, pidfile) or "").strip()
+                if pid.isdigit():
+                    return self.exec_wait(vmid, int(pid), timeout)
+                time.sleep(5)
+            raise ValorError("agent_exec_lost", f"a command in VM {vmid} timed out and never started",
+                             hint="The guest was too busy to answer its agent. Apply the range again to retry.")
         finally:
             try:
-                self.exec(vmid, ["cmd.exe", "/c", "del", "/f", "/q", path], timeout=60)
+                self.exec(vmid, ["cmd.exe", "/c", "del", "/f", "/q", path, pidfile], timeout=60)
             except ValorError:
                 pass

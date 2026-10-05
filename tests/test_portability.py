@@ -117,3 +117,51 @@ def test_agent_requests_survive_a_busy_guest(cfg, failures, resend, calls, ok):
         with pytest.raises(ValorError):
             pve.agent_call(5024, "write file in VM 5024", api, resend=resend, file="x")
     assert api.calls == calls and len(waits) == calls - 1 and P.AGENT_RETRIES == 3
+
+
+class BusyWindows(PVE):
+    """ps() against a guest whose agent misses Proxmox's 5 s limit for starting the script, but runs it."""
+
+    def __init__(self, cfg, start_error, pid_after=1):
+        self.cfg, self.start_error, self.pid_after = cfg, start_error, pid_after
+        self.runs, self.reads, self.deleted, self.followed = [], 0, [], None
+
+    def write_file(self, vmid, path, content):
+        self.script = content
+
+    def exec(self, vmid, command, input_data=None, timeout=900):
+        if command[0] == "cmd.exe":
+            self.deleted = command[-2:]
+            return None
+        self.runs.append(command)
+        raise ValorError("proxmox_api", f"run command in VM {vmid}: HTTP 500", details={"content": self.start_error})
+
+    def file_read(self, vmid, path):
+        self.reads += 1
+        return "1868\r\n" if self.reads > self.pid_after else None
+
+    def exec_wait(self, vmid, pid, timeout=900):
+        self.followed = pid
+        from valor.pve import ExecResult
+        return ExecResult(0, "VALOR-OK", "")
+
+
+def test_a_timed_out_script_is_followed_not_started_twice(cfg, monkeypatch):
+    from valor import pve as P
+    monkeypatch.setattr(P.time, "sleep", lambda s: None)
+    w = BusyWindows(cfg, "VM 5024 qga command 'guest-exec' failed - got timeout")
+    res = w.ps(5024, "Write-Output 'VALOR-OK'")
+    assert res.out == "VALOR-OK" and w.followed == 1868 and len(w.runs) == 1        # never run a second time
+    assert w.script.startswith("Set-Content -LiteralPath 'C:\\Windows\\Temp\\valor-") and "$PID" in w.script.split("\r\n")[0]
+    assert w.deleted[0].endswith(".ps1") and w.deleted[1].endswith(".ps1.pid")       # both files cleaned up
+
+    other = BusyWindows(cfg, "VM 5024 is not running")
+    with pytest.raises(ValorError) as e:
+        other.ps(5024, "x")
+    assert e.value.code == "proxmox_api" and other.reads == 0                      # other errors: no recovery
+
+    monkeypatch.setattr(P, "PS_START_WAIT", 0)
+    lost = BusyWindows(cfg, "got timeout", pid_after=99)
+    with pytest.raises(ValorError) as e:
+        lost.ps(5024, "x")
+    assert e.value.code == "agent_exec_lost" and len(lost.runs) == 1
