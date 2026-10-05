@@ -114,3 +114,15 @@ def test_roles_reach_the_model(cfg):
     assert "- packages [debian, rhel] (generic):" in text and "TCP ports from its 'ports' param" in text
     assert "- nginx [debian, rhel]:" in text and "serves: TCP 80" in text
     assert "- custom-script [debian, rhel, windows] (generic)" in text
+
+
+def test_role_scripts_avoid_subshell_and_sigpipe_traps():
+    """`cmd | write_file` loses VALOR_CHANGED (subshell); `cmd | grep -q` can kill cmd with SIGPIPE under pipefail."""
+    from valor.roles import PRELUDE
+    for name in ROLES:
+        script = load_role(ROOT / "roles", name).script
+        for i, line in enumerate((script + PRELUDE).splitlines()):
+            if line.lstrip().startswith("#"):
+                continue
+            assert "| write_file" not in line, f"{name}:{i + 1}: pipe into write_file"
+            assert "| grep -q" not in line, f"{name}:{i + 1}: grep -q in a pipeline"

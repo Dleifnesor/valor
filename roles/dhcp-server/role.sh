@@ -40,4 +40,4 @@ dnsmasq --test >/dev/null 2>&1 || { dnsmasq --test; exit 1; }
 systemctl enable -q dnsmasq
 if [ "$VALOR_CHANGED" = 1 ] || ! systemctl is-active -q dnsmasq; then systemctl restart dnsmasq; fi
 sleep 1
-ss -lunH "sport = :67" | grep -q . || { echo "dnsmasq does not listen on UDP 67" >&2; journalctl -u dnsmasq -n 20 --no-pager >&2; exit 1; }
+ss -lunH "sport = :67" | grep . >/dev/null || { echo "dnsmasq does not listen on UDP 67" >&2; journalctl -u dnsmasq -n 20 --no-pager >&2; exit 1; }

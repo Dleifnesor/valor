@@ -5,7 +5,7 @@ UPSTREAM="${VALOR_PARAM_UPSTREAM:-pool.ntp.org}"
 pkg_install chrony
 if [ "$VALOR_FAMILY" = rhel ]; then CONF=/etc/chrony.conf; SERVICE=chronyd; firewall_open 123 udp
 else CONF=/etc/chrony/chrony.conf; SERVICE=chrony; fi
-{
+write_file "$CONF" 0644 < <(
   echo "# Managed by VALOR (range ${VALOR_RANGE}): time server for the range"
   for u in $UPSTREAM; do
     case "$u" in *pool*) echo "pool $u iburst" ;; *) echo "server $u iburst" ;; esac
@@ -15,8 +15,8 @@ else CONF=/etc/chrony/chrony.conf; SERVICE=chrony; fi
   echo "rtcsync"
   echo "local stratum 10"
   for a in $ALLOW; do echo "allow $a"; done
-} | write_file "$CONF" 0644 || true
+) || true
 systemctl enable -q "$SERVICE"
 if [ "$VALOR_CHANGED" = 1 ] || ! systemctl is-active -q "$SERVICE"; then systemctl restart "$SERVICE"; fi
-for i in $(seq 1 15); do ss -lunH "sport = :123" | grep -q . && exit 0; sleep 1; done
+for i in $(seq 1 15); do ss -lunH "sport = :123" | grep . >/dev/null && exit 0; sleep 1; done
 echo "chrony does not listen on UDP 123" >&2; exit 1

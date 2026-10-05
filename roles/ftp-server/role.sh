@@ -7,7 +7,7 @@ if [ "$VALOR_FAMILY" = rhel ]; then
     firewall-cmd -q --permanent --add-service=ftp; firewall-cmd -q --permanent --add-port=40000-40100/tcp
     firewall-cmd -q --reload; changed
   fi
-  if command -v getsebool >/dev/null 2>&1 && getsebool ftpd_full_access | grep -q off; then setsebool -P ftpd_full_access on; changed; fi
+  if command -v getsebool >/dev/null 2>&1 && getsebool ftpd_full_access | grep off >/dev/null; then setsebool -P ftpd_full_access on; changed; fi
 else
   CONF=/etc/vsftpd.conf; EMPTY=/var/run/vsftpd/empty
 fi

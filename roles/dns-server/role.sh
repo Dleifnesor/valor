@@ -36,21 +36,21 @@ CONF
 )
 ZONECONF="zone \"${ZONE}\" { type master; file \"${ZFILE}\"; };"
 if [ "$VALOR_FAMILY" = rhel ]; then
-  printf '// Managed by VALOR (range %s)\n%s\n%s\n' "$VALOR_RANGE" "$OPTS" "$ZONECONF" | write_file /etc/named.conf 0640 || true
+  write_file /etc/named.conf 0640 < <(printf '// Managed by VALOR (range %s)\n%s\n%s\n' "$VALOR_RANGE" "$OPTS" "$ZONECONF") || true
   chgrp named /etc/named.conf
 else
-  printf '// Managed by VALOR (range %s)\n%s\n' "$VALOR_RANGE" "$OPTS" | write_file "$OPTIONS" 0644 || true
-  printf '// Managed by VALOR (range %s)\n%s\n' "$VALOR_RANGE" "$ZONECONF" | write_file "$LOCAL" 0644 || true
+  write_file "$OPTIONS" 0644 < <(printf '// Managed by VALOR (range %s)\n%s\n' "$VALOR_RANGE" "$OPTS") || true
+  write_file "$LOCAL" 0644 < <(printf '// Managed by VALOR (range %s)\n%s\n' "$VALOR_RANGE" "$ZONECONF") || true
 fi
 
-{
+write_file "$ZFILE" 0644 < <(
   echo "; Managed by VALOR (range ${VALOR_RANGE})"
   echo "\$TTL 300"
   echo "@ IN SOA ns.${ZONE}. hostmaster.${ZONE}. ( 1 3600 600 86400 300 )"
   echo "@ IN NS ns.${ZONE}."
   echo "ns IN A ${VALOR_ADDRESS}"
   for hv in $VALOR_RANGE_HOSTS; do echo "${hv%%=*} IN A ${hv#*=}"; done
-} | write_file "$ZFILE" 0644 || true
+) || true
 chown "$OWNER" "$ZFILE"
 command -v restorecon >/dev/null 2>&1 && restorecon "$ZFILE"
 

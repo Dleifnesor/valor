@@ -10,7 +10,7 @@ id share >/dev/null 2>&1 || { useradd --system --no-create-home --shell /usr/sbi
 install -d -m 2775 -o share -g share "$DIR"
 if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
   dnf_install policycoreutils-python-utils
-  semanage fcontext -l | grep -q '^/srv/share(/.\*)?' || { semanage fcontext -a -t samba_share_t '/srv/share(/.*)?'; changed; }
+  semanage fcontext -l | grep '^/srv/share(/.\*)?' >/dev/null || { semanage fcontext -a -t samba_share_t '/srv/share(/.*)?'; changed; }
   restorecon -R /srv/share
 fi
 if systemctl is-active -q firewalld 2>/dev/null && ! firewall-cmd -q --query-service=samba; then
@@ -42,7 +42,7 @@ PWFILE=/root/.valor-samba-share
 if [ ! -s "$PWFILE" ]; then
   (umask 077; head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20 > "$PWFILE"; echo >> "$PWFILE")
 fi
-if ! pdbedit -L 2>/dev/null | grep -q '^share:'; then
+if ! pdbedit -L 2>/dev/null | grep '^share:' >/dev/null; then
   PW=$(head -n1 "$PWFILE"); printf '%s\n%s\n' "$PW" "$PW" | smbpasswd -s -a share >/dev/null; changed
 fi
 systemctl enable -q "$SERVICE"

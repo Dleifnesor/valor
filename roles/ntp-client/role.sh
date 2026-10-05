@@ -12,4 +12,4 @@ rtcsync
 CONF
 systemctl enable -q "$SERVICE"
 if [ "$VALOR_CHANGED" = 1 ] || ! systemctl is-active -q "$SERVICE"; then systemctl restart "$SERVICE"; fi
-chronyc -n sources | grep -q "${SERVER}"
+chronyc -n sources | grep -F "${SERVER}" >/dev/null

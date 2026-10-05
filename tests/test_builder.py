@@ -204,7 +204,7 @@ def test_cut_off_answers_and_defaults(env, monkeypatch):
     class Cut(Fake):
         def complete(self, system, messages):
             self.calls.append(1)
-            return ai.Reply("```yaml\nname: half", 900, 16384, truncated=True)
+            return ai.Reply("```yaml\nname: half", 900, self.max_tokens, truncated=True)
     cut = Cut([])
     with pytest.raises(ai.ValorError) as e:
         ai.build(cut, "S", [{"role": "user", "content": "x"}], lambda t: [])
@@ -221,7 +221,19 @@ def test_cut_off_answers_and_defaults(env, monkeypatch):
                     headers={"X-CSRF-Token": ome["csrf"]})
         assert r.status_code == 422 and r.json()["error"] == "ai_truncated" and "Max tokens" in r.json()["hint"]
         spent = db.connect(wcfg.db).execute("SELECT SUM(output_tokens) FROM ai_usage").fetchone()[0]
-        assert spent == 16384                                                 # cut-off answers still count
+        assert spent == ai.DEFAULTS["max_tokens"]                             # cut-off answers still count
+
+
+def test_a_full_context_window_is_not_blamed_on_max_tokens():
+    """A local model loaded with a small context fills it with the prompt and stops at once with "length"."""
+    p = ai.Provider("m", max_tokens=32768)
+    e = ai.cut_off(p, ai.Reply("", 30000, 2, truncated=True))
+    assert e.code == "ai_context_full" and "30,000" in e.message and "Context Length" in e.hint
+    assert ai.cut_off(p, ai.Reply("", 0, 0, truncated=True)).code == "ai_context_full"        # no usage, no text
+    assert ai.cut_off(p, ai.Reply("x" * 100, 900, 32768, truncated=True)).code == "ai_truncated"
+    assert ai.cut_off(p, ai.Reply("", 9, 5, truncated=True, context_full=True)).code == "ai_context_full"
+    assert ai.split_thinking("<think>plan it</think>The answer") == ("The answer", "plan it")
+    assert ai.split_thinking("no tags") == ("no tags", "")
 
 
 def test_cut_off_detected_on_the_wire(monkeypatch):
@@ -230,6 +242,11 @@ def test_cut_off_detected_on_the_wire(monkeypatch):
         if "anthropic" in url else [{"choices": [{"delta": {"content": "x"}, "finish_reason": "length"}]}]))
     assert ai.Anthropic("m", api_key="k").complete("S", []).truncated
     assert ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", []).truncated
+    monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout, stream: Stream(
+        [{"choices": [{"delta": {"reasoning_content": "hmm "}}]}, {"choices": [{"delta": {"content": "ok"}}]},
+         {"choices": [{"delta": {}, "finish_reason": "stop"}]}]))
+    r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
+    assert r.text == "ok" and r.reasoning == "hmm " and not r.truncated
 
 
 def test_connection_errors_say_what_to_check(monkeypatch):

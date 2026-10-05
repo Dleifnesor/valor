@@ -367,3 +367,4 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .scripts-review h3 { margin: 0 0 4px; font-size: 14px; }
 .scripts-review pre.script { max-height: 260px; overflow: auto; font-size: 12px; padding: 8px 10px; margin: 4px 0 10px;
   background: var(--code-bg, rgba(127,127,127,.08)); border-radius: 6px; white-space: pre; }
+.rule-item + .rule-item { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }

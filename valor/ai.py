@@ -22,7 +22,7 @@ from .errors import ValorError
 PROVIDERS = ("none", "anthropic", "openai")
 ANTHROPIC_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001")
 # max_tokens is a ceiling, not a cost (only generated tokens count): high enough that a large spec is never cut off
-DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max_tokens": 16384,
+DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max_tokens": 32768,
             "daily_tokens_per_user": 400_000, "timeout": 300}
 MAX_TURNS = 24
 MAX_CHARS = 60_000
@@ -35,7 +35,9 @@ class Reply:
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
-    truncated: bool = False             # the answer stopped at max_tokens
+    truncated: bool = False             # the answer stopped at a length limit (max_tokens or the context window)
+    reasoning: str = ""                 # the model's thinking, when the provider streams it separately
+    context_full: bool = False          # the provider said the context window, not max_tokens, ran out
 
 
 MAX_TOTAL = 1140             # seconds for one answer, under the web proxy's 20 minutes for a chat request
@@ -46,12 +48,16 @@ class Provider:
     for minutes still work, while a stuck server is noticed."""
     name = "none"
 
-    def __init__(self, model: str, api_key: str = "", base_url: str = "", max_tokens: int = 16384, timeout: int = 300):
+    def __init__(self, model: str, api_key: str = "", base_url: str = "", max_tokens: int = DEFAULTS["max_tokens"],
+                 timeout: int = 300):
         self.model, self.api_key, self.base_url = model, api_key, base_url.rstrip("/")
         self.max_tokens, self.timeout = max_tokens, timeout
 
     def complete(self, system: str, messages: list[dict]) -> Reply:   # pragma: no cover - interface
         raise NotImplementedError
+
+    def context_length(self) -> int | None:
+        return None
 
     def _events(self, url: str, headers: dict, body: dict):
         """POST with stream=true; yields the JSON payload of every server-sent event."""
@@ -125,7 +131,7 @@ class Anthropic(Provider):
     URL = "https://api.anthropic.com/v1/messages"
 
     def complete(self, system: str, messages: list[dict]) -> Reply:
-        text, tin, tout, stop = [], 0, 0, None
+        text, thinking, tin, tout, stop = [], [], 0, 0, None
         for ev in self._events(self.base_url + "/v1/messages" if self.base_url else self.URL,
                                {"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
                                 "content-type": "application/json"},
@@ -136,12 +142,15 @@ class Anthropic(Provider):
                 tin = int(((ev.get("message") or {}).get("usage") or {}).get("input_tokens", 0))
             elif kind == "content_block_delta" and (ev.get("delta") or {}).get("type") == "text_delta":
                 text.append(ev["delta"].get("text", ""))
+            elif kind == "content_block_delta" and (ev.get("delta") or {}).get("type") == "thinking_delta":
+                thinking.append(ev["delta"].get("thinking", ""))
             elif kind == "message_delta":
                 stop = (ev.get("delta") or {}).get("stop_reason") or stop
                 tout = int((ev.get("usage") or {}).get("output_tokens", tout))
             elif kind == "error":
                 raise ValorError("ai_error", f"the AI provider reported an error: {json.dumps(ev.get('error'))[:300]}")
-        return Reply("".join(text), tin, tout, truncated=stop == "max_tokens")
+        return Reply("".join(text), tin, tout, truncated=stop in ("max_tokens", "model_context_window_exceeded"),
+                     reasoning="".join(thinking), context_full=stop == "model_context_window_exceeded")
 
 
 class OpenAICompatible(Provider):
@@ -164,17 +173,33 @@ class OpenAICompatible(Provider):
             body.pop("stream_options")      # servers that don't know it: no token counts, but an answer
             return self._read(self._events(self.base_url + "/chat/completions", headers, body))
 
+    def context_length(self) -> int | None:
+        """The context window the server loaded the model with, when it says (LM Studio's REST API does)."""
+        root = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
+        headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        try:
+            r = requests.get(f"{root}/api/v0/models/{self.model}", headers=headers, timeout=10)
+            info = r.json() if r.ok else {}
+        except (requests.RequestException, ValueError):
+            return None
+        n = info.get("loaded_context_length") or info.get("max_context_length")
+        return int(n) if isinstance(n, int) else None
+
     @staticmethod
     def _read(events) -> Reply:
-        text, tin, tout, finish = [], 0, 0, None
+        text, thinking, tin, tout, finish = [], [], 0, 0, None
         for ev in events:
             for ch in ev.get("choices") or []:
-                text.append((ch.get("delta") or {}).get("content") or "")
+                delta = ch.get("delta") or {}
+                text.append(delta.get("content") or "")
+                # reasoning models behind LM Studio, vLLM, llama.cpp: separate field (name varies by server)
+                thinking.append(delta.get("reasoning_content") or delta.get("reasoning") or "")
                 finish = ch.get("finish_reason") or finish
             u = ev.get("usage") or {}
             if u:
                 tin, tout = int(u.get("prompt_tokens", tin)), int(u.get("completion_tokens", tout))
-        return Reply("".join(text), tin, tout, truncated=finish == "length")
+        content, inline = split_thinking("".join(text))
+        return Reply(content, tin, tout, truncated=finish == "length", reasoning="".join(thinking) + inline)
 
 
 def provider_from(settings: dict, api_key: str) -> Provider:
@@ -307,6 +332,34 @@ def trim(messages: list[dict]) -> list[dict]:
     return out
 
 
+THINK = re.compile(r"<think>(.*?)(?:</think>|$)", re.S)
+
+
+def split_thinking(text: str) -> tuple[str, str]:
+    """(answer, reasoning): models such as Qwen and DeepSeek put their reasoning inline in <think> tags."""
+    found = THINK.findall(text)
+    return THINK.sub("", text).strip() if found else text, "\n".join(found)
+
+
+def cut_off(provider: Provider, r: Reply) -> ValorError:
+    """Why an answer stopped early. Servers say "length" both for max_tokens and for a full context window (a local
+    model loaded with a small context fills it with VALOR's prompt and stops at once), so tell them apart."""
+    details = {"input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
+    early = r.output_tokens < provider.max_tokens * 0.9 if r.output_tokens else not (r.text or r.reasoning)
+    if r.context_full or early:
+        size = f" (VALOR's request is {r.input_tokens:,} tokens)" if r.input_tokens else ""
+        need = max(32768, (r.input_tokens or 0) + 16384)
+        return ValorError("ai_context_full",
+                          f"the model stopped after {r.output_tokens:,} tokens because its context window is full{size}",
+                          hint=f"Give the model a larger context window: in LM Studio load it with a Context Length of "
+                               f"at least {need:,} (or pick a model that supports it). Raising 'Max tokens per answer' "
+                               "does not help here.", details=details)
+    thought = f", {len(r.reasoning) // 4:,} of them thinking" if len(r.reasoning) > 400 else ""
+    return ValorError("ai_truncated", f"the model's answer was cut off at {provider.max_tokens:,} tokens{thought}",
+                      hint="Raise 'Max tokens per answer' in Settings -> AI provider (it is a ceiling: only the tokens "
+                           "the model writes count).", details=details)
+
+
 def ask(provider: Provider, system: str, messages: list[dict]) -> dict:
     """One answer, no spec (question mode)."""
     convo = trim(messages)
@@ -314,9 +367,7 @@ def ask(provider: Provider, system: str, messages: list[dict]) -> dict:
         raise ValorError("ai_no_message", "Ask something.")
     r = provider.complete(system, convo)
     if r.truncated:
-        raise ValorError("ai_truncated", f"the model's answer was cut off at {provider.max_tokens} tokens",
-                         hint="Raise 'Max tokens per answer' in Settings -> AI provider.",
-                         details={"input_tokens": r.input_tokens, "output_tokens": r.output_tokens})
+        raise cut_off(provider, r)
     return {"reply": r.text.strip(), "problems": [], "input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
 
 
@@ -335,9 +386,7 @@ def build(provider: Provider, system: str, messages: list[dict], check) -> dict:
         used_in += r.input_tokens
         used_out += r.output_tokens
         if r.truncated:                 # asking again would be cut off at the same place
-            raise ValorError("ai_truncated", f"the model's answer was cut off at {provider.max_tokens} tokens",
-                             hint="Raise 'Max tokens per answer' in Settings -> AI provider.",
-                             details={"input_tokens": used_in, "output_tokens": used_out})
+            raise cut_off(provider, r)
         yaml_text, reply = extract_yaml(r.text)
         if yaml_text is None:
             problems = ["the answer contains no ```yaml block with the spec"]

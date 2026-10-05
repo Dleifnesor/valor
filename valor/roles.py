@@ -56,7 +56,7 @@ selinux_port() {
   # selinux_port TYPE PORT: allow a service type on a non-standard TCP port when SELinux is enforcing
   command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ] || return 0
   dnf_install policycoreutils-python-utils
-  semanage port -l | awk -v t="$1" '$1==t' | grep -qw "$2" || { semanage port -a -t "$1" -p tcp "$2" 2>/dev/null || semanage port -m -t "$1" -p tcp "$2"; VALOR_CHANGED=1; }
+  semanage port -l | awk -v t="$1" '$1==t' | grep -w "$2" >/dev/null || { semanage port -a -t "$1" -p tcp "$2" 2>/dev/null || semanage port -m -t "$1" -p tcp "$2"; VALOR_CHANGED=1; }
 }
 firewall_open() {
   # firewall_open PORT [tcp|udp]: open a port in firewalld if it runs (Rocky/Alma); no-op elsewhere
@@ -67,7 +67,7 @@ firewall_open() {
 wait_port() {
   # wait_port PORT [SECONDS]: wait until something listens on TCP PORT
   local i
-  for i in $(seq 1 "${2:-60}"); do ss -ltnH "sport = :$1" | grep -q . && return 0; sleep 1; done
+  for i in $(seq 1 "${2:-60}"); do ss -ltnH "sport = :$1" | grep . >/dev/null && return 0; sleep 1; done
   echo "nothing listens on TCP port $1" >&2; return 1
 }
 container_engine() {
@@ -89,19 +89,25 @@ run_container() {
     *) image="docker.io/library/$image" ;;
   esac
   container_engine
+  # On Rocky/Alma, SELinux keeps systemd from attaching a container's device filter when the container is started
+  # from the guest agent's context: start it from a transient systemd unit instead (container_runtime_t)
+  local via=()
+  [ "$VALOR_FAMILY" = rhel ] && via=(systemd-run --quiet --wait --pipe --collect -p KillMode=process)
   want=$(printf '%s\n' "$image" "$@" | sha256sum | cut -c1-16)
   cur=$(docker inspect -f '{{ index .Config.Labels "valor.settings" }}' "$name" 2>/dev/null || true)
   if [ "$cur" != "$want" ]; then
     docker pull -q "$image" >/dev/null
     docker rm -f "$name" >/dev/null 2>&1 || true
-    docker run -d --name "$name" --restart=always --label "valor.settings=$want" "$@" "$image" >/dev/null
+    "${via[@]}" docker run -d --name "$name" --restart=always --label "valor.settings=$want" "$@" "$image" >/dev/null
     changed
   elif [ "$(docker inspect -f '{{ .State.Running }}' "$name")" != true ]; then
-    docker start "$name" >/dev/null; changed
+    "${via[@]}" docker start "$name" >/dev/null; changed
   fi
 }
 write_file() {
-  # write_file PATH MODE  (content on stdin); only touches the file when content differs
+  # write_file PATH MODE  (content on stdin); only touches the file when content differs.
+  # Feed it with a heredoc or < <(cmd), never `cmd | write_file`: a pipeline runs it in a subshell and the change
+  # would not count (VALOR_CHANGED), so services would not restart.
   local path="$1" mode="${2:-0644}" tmp
   tmp=$(mktemp)
   cat > "$tmp"

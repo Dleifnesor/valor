@@ -33,14 +33,14 @@ password_encryption = 'scram-sha-256'
 CONFEOF
 
 HBA="${CONF}/pg_hba.conf"
-{
+write_file "$HBA" 0640 < <(
   awk '/^# BEGIN VALOR/{skip=1} !skip{print} /^# END VALOR/{skip=0}' "$HBA"
   echo "# BEGIN VALOR (managed by the VALOR postgresql role)"
   for src in ${VALOR_PARAM_ALLOW_FROM:-}; do
     echo "host    all    all    ${src}    scram-sha-256"
   done
   echo "# END VALOR"
-} | write_file "$HBA" 0640 || true
+) || true
 chown postgres:postgres "$HBA" "${CONF}/conf.d/50-valor.conf"
 
 systemctl enable -q postgresql
