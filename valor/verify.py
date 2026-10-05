@@ -123,6 +123,11 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
                 used.add(bid)
                 emit("baseline", host=host, passed=sum(r["after"] == "pass" for r in rows), total=len(rows))
 
+    try:
+        comp = compliance.report(pve.cfg.baselines_dir, spec, base, results, family)
+    except ValorError as e:
+        comp = {"error": e.message}
+
     t_pass = sum(r["pass"] for r in results)
     b_rows = [r for rows in base.values() for r in rows]
     b_pass = sum(r["after"] == "pass" for r in b_rows)
@@ -133,7 +138,10 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         "baseline_passed": b_pass, "baseline_total": len(b_rows),
         "baseline_claim": (f"aligned with common CIS Level 1 themes (baseline {', '.join(sorted(b for b in used if b))}); "
                            "not a certification") if baseline else None,
+        **({"compliance": {f: {k: v[k] for k in ("passed", "partial", "failed")} for f, v in comp["frameworks"].items()}}
+           if comp and "frameworks" in comp else {}),
     }
     return {"range": spec.name, "spec": spec_hash(spec)[:12], "ok": t_pass == len(results) and b_pass == len(b_rows),
             "summary": summary, "tests": results, "baseline": base, "stale_hosts": stale,
+            **({"compliance": comp} if comp else {}),
             "seconds": round(time.time() - t0, 1)}

@@ -1,0 +1,138 @@
+id: windows-moderate
+title: >
+  Windows hardening for compliance frameworks (NIST SP 800-171, NIST SP 800-53 Low/Moderate, PCI DSS, HIPAA) -
+  windows-l1 plus account lockout, password history and complexity, notices, screen lock, audit policy and time sync
+# Results are reported as "aligned with" the frameworks' requirements - never as an assessment or certification.
+# On domain controllers the account policies are set on the domain (they apply to domain accounts).
+claim: aligned-with
+families: [windows]
+extends: windows-l1
+controls:
+  - id: account-lockout
+    area: Accounts
+    title: Accounts locked for 30 minutes after 5 failed logons
+    reference: "Microsoft Learn: net accounts /lockoutthreshold /lockoutduration; Set-ADDefaultDomainPasswordPolicy"
+    applies_to: all
+    check: |
+      if ($IsDC) {
+        $p = Get-ADDefaultDomainPasswordPolicy
+        $p.LockoutThreshold -ge 1 -and $p.LockoutThreshold -le 5 -and $p.LockoutDuration.TotalMinutes -ge 30
+      } else {
+        $a = net accounts
+        $t = [int](($a | Select-String 'Lockout threshold') -replace '\D', '')
+        $d = [int](($a | Select-String 'Lockout duration') -replace '\D', '')
+        $t -ge 1 -and $t -le 5 -and $d -ge 30
+      }
+    fix: |
+      if ($IsDC) {
+        Get-ADDomain | Set-ADDefaultDomainPasswordPolicy -LockoutThreshold 5 -LockoutDuration 00:30:00 -LockoutObservationWindow 00:30:00
+      } else {
+        net accounts /lockoutthreshold:5 | Out-Null
+        net accounts /lockoutduration:30 /lockoutwindow:30 | Out-Null
+      }
+
+  - id: password-history
+    area: Accounts
+    title: The last 24 passwords cannot be reused
+    reference: "Microsoft Learn: net accounts /uniquepw; Set-ADDefaultDomainPasswordPolicy -PasswordHistoryCount"
+    applies_to: all
+    check: |
+      if ($IsDC) { (Get-ADDefaultDomainPasswordPolicy).PasswordHistoryCount -ge 24 }
+      else { [int]((net accounts | Select-String 'Length of password history') -replace '\D', '') -ge 24 }
+    fix: |
+      if ($IsDC) { Get-ADDomain | Set-ADDefaultDomainPasswordPolicy -PasswordHistoryCount 24 }
+      else { net accounts /uniquepw:24 | Out-Null }
+
+  - id: password-complexity
+    area: Accounts
+    title: Passwords must meet complexity requirements
+    reference: "Microsoft Learn: Password must meet complexity requirements; secedit /export /configure"
+    applies_to: all
+    check: |
+      if ($IsDC) { (Get-ADDefaultDomainPasswordPolicy).ComplexityEnabled }
+      else {
+        $f = "$env:TEMP\valor-secpol.inf"
+        secedit /export /cfg $f /areas SECURITYPOLICY | Out-Null
+        $ok = [bool](Select-String -Path $f -Pattern '^PasswordComplexity\s*=\s*1')
+        Remove-Item $f -Force -ErrorAction SilentlyContinue
+        $ok
+      }
+    fix: |
+      if ($IsDC) { Get-ADDomain | Set-ADDefaultDomainPasswordPolicy -ComplexityEnabled $true }
+      else {
+        $f = "$env:TEMP\valor-secpol.inf"; $db = "$env:TEMP\valor-secpol.sdb"
+        secedit /export /cfg $f /areas SECURITYPOLICY | Out-Null
+        (Get-Content $f) -replace '^PasswordComplexity\s*=.*', 'PasswordComplexity = 1' | Set-Content $f -Encoding Unicode
+        secedit /configure /db $db /cfg $f /areas SECURITYPOLICY | Out-Null
+        Remove-Item $f, $db -Force -ErrorAction SilentlyContinue
+      }
+
+  - id: logon-banner
+    area: Access
+    title: Authorized-use notice shown before interactive logons
+    reference: "Microsoft Learn: Interactive logon: Message title/text for users attempting to log on"
+    applies_to: all
+    check: |
+      $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+      [bool]$p.LegalNoticeCaption -and "$($p.LegalNoticeText)" -like 'Authorized use only*'
+    fix: |
+      $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+      Set-ItemProperty $k -Name LegalNoticeCaption -Value 'Authorized use only'
+      Set-ItemProperty $k -Name LegalNoticeText -Value 'Authorized use only. Activity on this system is monitored and recorded; using it means you consent.'
+
+  - id: screen-lock
+    area: Access
+    title: Sessions lock after 15 minutes of inactivity
+    reference: "Microsoft Learn: Interactive logon: Machine inactivity limit (InactivityTimeoutSecs)"
+    applies_to: all
+    check: |
+      $v = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name InactivityTimeoutSecs -ErrorAction SilentlyContinue).InactivityTimeoutSecs
+      $v -ge 1 -and $v -le 900
+    fix: |
+      Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name InactivityTimeoutSecs -Value 900 -Type DWord
+
+  - id: audit-policy
+    area: Auditing
+    title: Account, group, lockout, privileged-logon, policy-change, privilege-use and process-creation events audited
+    reference: "Microsoft Learn: auditpol /set /subcategory (advanced audit policy)"
+    applies_to: all
+    check: |
+      $want = [ordered]@{ 'User Account Management' = 'SF'; 'Security Group Management' = 'S'; 'Account Lockout' = 'F'
+        'Special Logon' = 'S'; 'Audit Policy Change' = 'S'; 'Sensitive Privilege Use' = 'SF'; 'Process Creation' = 'S' }
+      $ok = $true
+      foreach ($k in $want.Keys) {
+        $s = (auditpol /get /subcategory:"$k" /r | ConvertFrom-Csv).'Inclusion Setting'
+        if ($want[$k] -match 'S' -and $s -notmatch 'Success') { $ok = $false }
+        if ($want[$k] -match 'F' -and $s -notmatch 'Failure') { $ok = $false }
+      }
+      $ok
+    fix: |
+      $want = [ordered]@{ 'User Account Management' = 'SF'; 'Security Group Management' = 'S'; 'Account Lockout' = 'F'
+        'Special Logon' = 'S'; 'Audit Policy Change' = 'S'; 'Sensitive Privilege Use' = 'SF'; 'Process Creation' = 'S' }
+      foreach ($k in $want.Keys) {
+        if ($want[$k] -match 'S') { auditpol /set /subcategory:"$k" /success:enable | Out-Null }
+        if ($want[$k] -match 'F') { auditpol /set /subcategory:"$k" /failure:enable | Out-Null }
+      }
+
+  - id: security-log-size
+    area: Auditing
+    title: Security event log holds at least 192 MB
+    reference: "Microsoft Learn: wevtutil set-log /ms"
+    applies_to: all
+    check: |
+      (Get-WinEvent -ListLog Security).MaximumSizeInBytes -ge 196608KB
+    fix: |
+      wevtutil sl Security /ms:201326592 | Out-Null
+
+  - id: time-sync
+    area: Time
+    title: Windows Time service running (domain members follow the domain hierarchy)
+    reference: "Microsoft Learn: Windows Time service (w32time), w32tm"
+    applies_to: all
+    check: |
+      $s = Get-Service w32time
+      $s.Status -eq 'Running' -and $s.StartType -eq 'Automatic'
+    fix: |
+      Set-Service w32time -StartupType Automatic
+      Start-Service w32time
+      w32tm /resync /nowait | Out-Null
