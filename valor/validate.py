@@ -13,6 +13,7 @@ from .roles import load_role, role_env
 from .spec import RangeSpec
 
 HOST_FAMILIES = ("debian", "rhel", "windows")
+NO_BASELINE = "baseline 'none': no hardening (compliance controls) on any host"
 
 
 def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
@@ -77,7 +78,7 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
     try:
         baseline = load_baseline(cfg.baselines_dir, spec.baseline)
         if baseline is None:
-            warnings.append({"location": "baseline", "message": "baseline 'none': no compliance controls will be applied"})
+            warnings.append({"location": "baseline", "message": NO_BASELINE})
     except ValorError as e:
         err("baseline", e.message, e.hint)
 
@@ -111,6 +112,11 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
                         err(f"hosts.{hi}.roles.{ri}.params.{pname}", f"'{target}' is not a host of this range")
             except ValorError as e:
                 err(f"hosts.{hi}.roles.{ri}", e.message, e.hint)
+    if baseline is not None and (getattr(baseline, "families", None) or ["debian"]) == ["windows"]:
+        err("baseline", f"'{spec.baseline}' is the Windows baseline; `baseline` names the range's Linux baseline",
+            "Use ubuntu-l1 (the default, or leave the line out): Windows hosts get windows-l1 automatically. "
+            "'none' would turn hardening off for every host.")
+        baseline = None
     if baseline is not None:
         bfam = getattr(baseline, "families", None) or ["debian"]
         for os_name in sorted(used_os):

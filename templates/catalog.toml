@@ -109,5 +109,6 @@ family = "windows"
 description = "Windows 11 Enterprise (current release), evaluation"
 iso = "windows-11-enterprise-eval"
 edition = 'Enterprise'
+default_cores = 2
 default_memory = 4096
 default_disk = 64
