@@ -17,6 +17,7 @@ from pathlib import Path
 import requests
 from urllib.parse import urlparse
 
+from . import compliance
 from .errors import ValorError
 
 PROVIDERS = ("none", "anthropic", "openai")
@@ -238,8 +239,12 @@ def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: d
         role_lines.append(f"- {r['name']} [{', '.join(r.get('families') or ['debian'])}]"
                           f"{' (generic)' if r.get('category') == 'generic' else ''}: {' '.join(r['description'].split())}"
                           + (f" | serves: {ports}" if ports else "") + (f" | params: {params}" if params else ""))
+    frameworks = compliance.reference(Path(cfg.baselines_dir))
     return f"""# Spec reference
 {spec_reference(cfg)}
+
+# Compliance frameworks (compliance.frameworks)
+{frameworks or '- (none available)'}
 
 # Available operating systems (templates on this cluster)
 {oses or '- (none built yet)'}
@@ -261,7 +266,11 @@ SPEC_RULES = """Rules for specs:
 - Deny by default: only add policy rules the environment needs, and say which flows you allowed.
 - Pick unused VLANs and private networks that avoid the networks listed under cluster facts.
 - Leave `baseline` out (or at ubuntu-l1): VALOR hardens Linux hosts with it and Windows hosts with windows-l1
-  automatically. Never set baseline to windows-l1, and only use 'none' when the person asks for no hardening.
+  automatically. Never set a Windows profile as baseline, and only use 'none' when the person asks for no hardening.
+- Compliance: when the person wants a framework, set `compliance.frameworks` and `baseline: linux-moderate`, list the
+  segments holding the regulated data in `compliance.scope` (no internet there), add a log server (syslog-server
+  role) with syslog-client on the other Linux hosts and a time server (ntp-server, ntp-client elsewhere). Say the
+  range is "aligned with" the framework's technical requirements, never "compliant" or "certified".
 - If the request is unclear, make a sensible small choice and say what you assumed."""
 
 

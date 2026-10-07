@@ -151,6 +151,23 @@ class Access(_Strict):
     wireguard: WireGuard | None = None
 
 
+FRAMEWORKS = ("nist-800-171", "nist-800-53-moderate", "nist-800-53-low", "pci-dss", "hipaa", "cis-l1")
+
+
+class Compliance(_Strict):
+    frameworks: list[Literal[FRAMEWORKS]] = Field(default_factory=list, max_length=len(FRAMEWORKS),
+                                                  description="frameworks the range is built toward and reported on")
+    scope: list[str] = Field(default_factory=list, max_length=16,
+                             description="segments holding the regulated data (CUI, cardholder data, ePHI)")
+
+    @field_validator("frameworks")
+    @classmethod
+    def _unique(cls, v: list) -> list:
+        if len(set(v)) != len(v):
+            raise ValueError("each framework only once")
+        return v
+
+
 class RangeSpec(_Strict):
     apiVersion: Literal["valor/v1"] = API_VERSION
     name: str = Field(pattern=NAME)
@@ -163,6 +180,7 @@ class RangeSpec(_Strict):
     tests: list[Test] = Field(default_factory=list)
     auto_tests: bool = True
     access: Access | None = None
+    compliance: Compliance | None = None
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "RangeSpec":
@@ -220,6 +238,10 @@ class RangeSpec(_Strict):
                     errs.append(f"access.wireguard.network {wg.network} overlaps segment {s.name} ({s.cidr})")
             if len(wg.peers) > wg.network.num_addresses - 3:
                 errs.append(f"access.wireguard.network {wg.network} is too small for {len(wg.peers)} peers")
+        if self.compliance:
+            for s in self.compliance.scope:
+                if s not in segs:
+                    errs.append(f"compliance.scope: unknown segment '{s}'")
         for i, t in enumerate(self.tests):
             if t.from_ not in hosts:
                 errs.append(f"tests[{i}]: 'from' must be a host, got '{t.from_}'")
@@ -272,8 +294,9 @@ def normalize(spec: RangeSpec, default_os: str) -> RangeSpec:
 
 def canonical(spec: RangeSpec) -> str:
     data = spec.model_dump(mode="json", by_alias=True)
-    if data.get("access") is None:              # added later: leaving it out keeps older specs' hashes unchanged
-        data.pop("access", None)
+    for key in ("access", "compliance"):        # added later: leaving them out keeps older specs' hashes unchanged
+        if data.get(key) is None:
+            data.pop(key, None)
     for h in data["hosts"]:
         if h.get("iso") is None:
             h.pop("iso", None)

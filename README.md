@@ -86,7 +86,8 @@ authentication is set up at the first sign-in. Unattended installs, every settin
   to plan and approve. The provider key is encrypted, never shown again, and budgets limit tokens per user.
 - **Tests**: `tests/test_security.py` checks that every API route has a reviewed access level, that sign-in is
   required everywhere, and that every state change needs the CSRF token, the same origin and a JSON body.
-- **Compliance claims**: results are "aligned with common CIS Level 1 themes", never "compliant" or "certified".
+- **Compliance claims**: results are "aligned with" common CIS Level 1 themes or the selected frameworks' technical
+  requirements (NIST SP 800-171, NIST SP 800-53, PCI DSS, HIPAA), never "compliant" or "certified".
 
 ## Range specs, roles and baselines
 

@@ -368,3 +368,16 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .scripts-review pre.script { max-height: 260px; overflow: auto; font-size: 12px; padding: 8px 10px; margin: 4px 0 10px;
   background: var(--code-bg, rgba(127,127,127,.08)); border-radius: 6px; white-space: pre; }
 .rule-item + .rule-item { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
+
+/* compliance report */
+details.framework { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+details.framework > summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+ul.evidence { margin: 0; padding: 0; list-style: none; }
+ul.evidence li.bad { color: var(--bad); }
+@media (max-width: 640px) {        /* phones: requirement and status on one line, the evidence below */
+  table.compliance thead { display: none; }
+  table.compliance tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); }
+  table.compliance td { border: 0; padding: 0 4px; }
+  table.compliance td:last-child { grid-column: 1 / -1; }
+}
