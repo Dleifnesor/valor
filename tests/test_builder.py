@@ -96,15 +96,21 @@ def test_wire_formats(monkeypatch):
         sent.update(url=url, headers=headers, body=json, timeout=timeout, stream=stream)
         if "anthropic" in url:
             return Stream([{"type": "message_start", "message": {"usage": {"input_tokens": 12}}},
-                           {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "O"}},
-                           {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "K"}},
+                           {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                           {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "O"}},
+                           {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "K"}},
+                           {"type": "content_block_stop", "index": 0},
                            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}])
         return Stream([{"choices": [{"delta": {"content": "O"}}]}, {"choices": [{"delta": {"content": "K"}, "finish_reason": "stop"}]},
                        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2}}])
     monkeypatch.setattr(ai.requests, "post", post)
     r = ai.Anthropic("claude-sonnet-5-5", api_key="k").complete("SYS", [{"role": "user", "content": "hi"}])
     assert sent["url"] == "https://api.anthropic.com/v1/messages" and sent["headers"]["x-api-key"] == "k"
-    assert sent["headers"]["anthropic-version"] == "2023-06-01" and sent["body"]["system"] == "SYS"
+    assert sent["headers"]["anthropic-version"] == "2023-06-01"
+    assert sent["body"]["system"] == [{"type": "text", "text": "SYS", "cache_control": {"type": "ephemeral"}}]
+    assert sent["body"]["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert sent["body"]["output_config"] == {"effort": "high"} and sent["body"]["fallbacks"] == "default"
+    assert sent["headers"]["anthropic-beta"] == "server-side-fallback-2026-07-01"
     assert sent["body"]["stream"] is True and sent["stream"] is True and sent["timeout"] == (10, 300)
     assert sent["body"]["model"] == "claude-sonnet-5-5" and (r.text, r.input_tokens, r.output_tokens) == ("OK", 12, 3)
     r = ai.OpenAICompatible("llama", api_key="t", base_url="http://10.0.0.5:8000/v1/").complete("SYS", [{"role": "user", "content": "hi"}])

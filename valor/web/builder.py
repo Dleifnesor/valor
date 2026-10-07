@@ -153,9 +153,13 @@ def usage(s: Session = Depends(require("admin"))) -> dict:
 
 
 def _record(s: Session, st: dict, tin: int, tout: int, ok: bool) -> None:
-    s.conn.execute("INSERT INTO ai_usage(ts, username, provider, model, input_tokens, output_tokens, ok) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (time.time(), s.username, st["provider"], st.get("model", ""),
-                                                    tin, tout, int(ok)))
+    record_usage(s.conn, s.username, st, tin, tout, ok)
+
+
+def record_usage(conn, username: str, st: dict, tin: int, tout: int, ok: bool) -> None:
+    conn.execute("INSERT INTO ai_usage(ts, username, provider, model, input_tokens, output_tokens, ok) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?)", (time.time(), username, st["provider"], st.get("model", ""),
+                                                  tin, tout, int(ok)))
 
 
 @router.get("/builder")
