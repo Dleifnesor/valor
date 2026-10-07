@@ -1,0 +1,18 @@
+description: >
+  DHCP server (dnsmasq) for its own segment - for extra clients such as ISO-installed or attacker VMs (range hosts keep
+  their fixed addresses). Hands out the segment gateway as router.
+families: [debian, rhel]
+ports: []
+params:
+  range_start:
+    default: ""
+    description: First address to lease (default the network's .100)
+  range_end:
+    default: ""
+    description: Last address to lease (default the network's .199)
+  lease:
+    default: 12h
+    description: Lease time (dnsmasq format, e.g. 1h, 12h, 7d)
+  dns:
+    default: ""
+    description: DNS servers to hand out, addresses or host names (default VALOR's nameservers)

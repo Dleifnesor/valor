@@ -1,0 +1,9 @@
+description: >
+  OWASP Juice Shop - a deliberately insecure web shop for security training (container); keep it in an isolated
+  segment
+families: [debian, rhel]
+ports_param: port
+params:
+  port:
+    default: 3000
+    description: TCP port it is published on

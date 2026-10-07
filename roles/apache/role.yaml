@@ -1,0 +1,7 @@
+description: Apache HTTP server (apache2 / httpd) with a minimal site naming the host and range
+families: [debian, rhel]
+ports_param: port
+params:
+  port:
+    default: 80
+    description: TCP port Apache listens on

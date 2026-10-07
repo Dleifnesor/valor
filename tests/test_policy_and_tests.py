@@ -42,3 +42,32 @@ def test_build_egress_is_temporary_and_reverts():
     assert "/run/valor-build.nft" in s and f"--on-active={REVERT_AFTER}" in s   # build rules: this boot, then revert
     plain = router_script(final)
     assert "systemctl stop valor-build-revert.timer" in plain and "BUILD" not in plain
+
+
+def test_verify_looks_again_before_calling_an_open_port_closed(cfg, ref_spec, monkeypatch):
+    """A service on a VM the build just (re)started may not listen yet: open tests are retried, closed ones not."""
+    from valor import verify as V
+    from valor.cluster import VMState
+    from valor.spec import ROUTER, spec_hash
+    spec = ref_spec.model_copy(update={"baseline": "none"})
+    hosts = [ROUTER, *(h.name for h in spec.hosts)]
+    vms = [VMState(100 + i, f"{spec.name}-{h}", "running", [], {"host": h, "spec": spec_hash(spec)})
+           for i, h in enumerate(hosts)]
+    monkeypatch.setattr(V, "range_vms", lambda pve, name: vms)
+    monkeypatch.setattr(V, "load_catalog", lambda c: {})
+    monkeypatch.setattr(V, "effective_tests", lambda s, probe: [
+        {"name": "late service", "from": hosts[1], "to": hosts[2], "proto": "tcp", "port": 80, "expect": "open"},
+        {"name": "never", "from": hosts[1], "to": hosts[2], "proto": "tcp", "port": 81, "expect": "open"},
+        {"name": "isolated", "from": hosts[1], "to": hosts[2], "proto": "tcp", "port": 22, "expect": "closed"}])
+    calls: dict[int, int] = {}
+
+    def probe(pve, vmid, proto, ip, port, family="debian"):
+        calls[port] = calls.get(port, 0) + 1
+        return ("open", "connected") if port == 80 and calls[port] == 2 else ("closed", "refused")
+    monkeypatch.setattr(V, "_probe", probe)
+    monkeypatch.setattr(V.time, "sleep", lambda s: None)
+    pve = type("P", (), {"cfg": cfg})()
+    r = {t["name"]: t for t in V.verify(pve, spec)["tests"]}
+    assert r["late service"]["pass"] and calls[80] == 2
+    assert not r["never"]["pass"] and calls[81] == 1 + V.OPEN_RETRIES
+    assert r["isolated"]["pass"] and calls[22] == 1

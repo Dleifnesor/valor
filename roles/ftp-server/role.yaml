@@ -1,0 +1,9 @@
+description: >
+  FTP server (vsftpd) for local users (on Linux hosts the range login 'valor') and, optionally, anonymous read-only
+  downloads; passive data ports 40000-40100 - allow tcp 21 and 40000-40100 in the policy
+families: [debian, rhel]
+ports: [21]
+params:
+  anonymous:
+    default: false
+    description: Allow anonymous read-only access (files in /srv/ftp)

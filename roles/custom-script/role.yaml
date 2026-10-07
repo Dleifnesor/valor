@@ -1,0 +1,21 @@
+description: >
+  Your own install/configuration script for anything no other role covers - bash on Linux (as root), PowerShell on
+  Windows (as SYSTEM). The plan shows it in full before anything runs. Write it idempotent: it runs again whenever the
+  host converges.
+category: generic
+families: [debian, rhel, windows]
+ports_param: ports
+params:
+  script:
+    required: true
+    raw: true
+    max_length: 20000
+    description: >
+      The script. Bash runs with set -euo pipefail and VALOR's helpers (pkg_install, write_file PATH MODE <<EOF,
+      firewall_open PORT [udp], wait_port PORT, run_container NAME IMAGE [options], changed); PowerShell runs with
+      $ErrorActionPreference = 'Stop' and Changed, Open-TcpPort, Wait-Port, Wait-Until, Write-RebootRequired
+  ports:
+    raw: true
+    pattern: '^[0-9]{1,5}$'
+    default: ""
+    description: TCP ports the script's services listen on; opened in the host firewall and waited for

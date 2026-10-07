@@ -1,0 +1,14 @@
+description: >
+  Time server (chrony) for the range: serves NTP on UDP 123 to range hosts, and keeps serving its own clock when the
+  range has no internet - allow udp/123 to it in the policy; pair with ntp-client
+families: [debian, rhel]
+ports: []
+params:
+  allow_from:
+    default: ""
+    description: Hosts or segments that may ask for the time (default every private network)
+  upstream:
+    default: ""
+    description: Upstream NTP servers or pools, space separated (default pool.ntp.org)
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9.-]{0,100}$'

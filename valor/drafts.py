@@ -135,7 +135,7 @@ def _set_vpn_reach(data: dict, segment: str, reach: bool | None, old_names: list
     wg["reach"] = current
 
 
-def apply_ops(spec: RangeSpec, ops: list[dict], role_ports: dict[str, list] | None = None,
+def apply_ops(spec: RangeSpec, ops: list[dict], role_ports=None,
               alloc: dict | None = None) -> dict:
     """Map edits on a spec: hosts, services (roles), segments and traffic rules. alloc: what is taken elsewhere
     (VLANs, networks, the VLAN range) for new segments. Returns the new spec as data (validate with parse_spec)."""
@@ -254,7 +254,8 @@ def apply_ops(spec: RangeSpec, ops: list[dict], role_ports: dict[str, list] | No
             if any(r["name"] == role for r in host.get("roles", [])):
                 raise ValorError("role_exists", f"{host['name']} already runs {role}")
             host.setdefault("roles", []).append({"name": role, "params": op.get("params") or {}})
-            ports = (role_ports or {}).get(role) or []
+            ports = (role_ports(role, op.get("params") or {}) if callable(role_ports)
+                     else (role_ports or {}).get(role)) or []
             for src in op.get("allow_from") or []:
                 if src not in segs and src not in hosts:
                     raise ValorError("unknown_endpoint", f"'{src}' is neither a segment nor a host")

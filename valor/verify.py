@@ -53,6 +53,9 @@ def _wireguard_check(pve: PVE, router_vmid: int, wg) -> dict:
             "detail": f"listening: {listening}; peers configured: {known}/{len(wg.peers)}", "pass": ok}
 
 
+OPEN_RETRIES, OPEN_RETRY_DELAY = 2, 15
+
+
 def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
     t0 = time.time()
     vms = {vm.host: vm for vm in range_vms(pve, spec.name)}
@@ -79,6 +82,13 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         for t in by_src[src]:
             ip, port = _target(spec, t["to"], t["port"], pve.cfg.probe)
             observed, detail = _probe(pve, vms[src].vmid, t["proto"], ip, port, family[src])
+            # a service may still be starting (a VM the build just started or rebooted): look again before
+            # calling an open port closed. A closed result is never retried - a probe cannot connect by mistake.
+            for _ in range(OPEN_RETRIES):
+                if observed == t["expect"] or t["expect"] != "open":
+                    break
+                time.sleep(OPEN_RETRY_DELAY)
+                observed, detail = _probe(pve, vms[src].vmid, t["proto"], ip, port, family[src])
             out.append({**t, "target": f"{ip}{':' + str(port) if port else ''}", "observed": observed,
                         "detail": detail, "pass": observed == t["expect"]})
             emit("test", name=t["name"], passed=observed == t["expect"])
