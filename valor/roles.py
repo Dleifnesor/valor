@@ -71,7 +71,17 @@ wait_port() {
   echo "nothing listens on TCP port $1" >&2; return 1
 }
 container_engine() {
-  # Docker on Debian/Ubuntu/Kali, Podman (with its docker command) on Rocky/Alma
+  # Docker on Debian/Ubuntu/Kali, Podman (with its docker command) on Rocky/Alma. Published ports reach containers
+  # through IP forwarding: mark the host so the baseline's ip-forwarding-disabled control exempts it.
+  if [ ! -f /etc/valor/container-host ]; then
+    install -d /etc/valor
+    echo "runs containers (VALOR container roles): IP forwarding stays on" > /etc/valor/container-host; changed
+  fi
+  if [ "$(sysctl -n net.ipv4.ip_forward)" != 1 ]; then
+    sed -i '/^net.ipv4.ip_forward/d' /etc/sysctl.d/60-valor-baseline.conf 2>/dev/null || true
+    echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/61-valor-containers.conf
+    sysctl -q -w net.ipv4.ip_forward=1; changed
+  fi
   if [ "$VALOR_FAMILY" = rhel ]; then
     pkg_install -- podman podman-docker
     touch /etc/containers/nodocker

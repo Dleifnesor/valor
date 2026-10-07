@@ -1,4 +1,5 @@
 # Role: container - idempotent. Params: VALOR_PARAM_IMAGE, _NAME, _PUBLISH, _ENV
+# Published ports need IP forwarding: container_engine keeps it on and marks the host (the baseline exempts it)
 IMAGE="${VALOR_PARAM_IMAGE:-}"; NAME="${VALOR_PARAM_NAME:-app}"
 [[ "$IMAGE" =~ ^[a-z0-9][a-z0-9._/:@-]*$ ]] || { echo "invalid image '$IMAGE'" >&2; exit 1; }
 [[ "$NAME" =~ ^[a-z0-9][a-z0-9_.-]*$ ]] || { echo "invalid container name '$NAME'" >&2; exit 1; }

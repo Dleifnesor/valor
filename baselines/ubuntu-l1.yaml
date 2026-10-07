@@ -99,13 +99,17 @@ controls:
 
   - id: ip-forwarding-disabled
     area: Kernel
-    title: IP forwarding disabled (not a router)
+    title: IP forwarding disabled (not a router; container hosts are exempt - their engine forwards to containers)
     theme: CIS Level 1 - network parameters (host only)
     reference: "Linux kernel networking/ip-sysctl: ip_forward, conf/all/forwarding"
     applies_to: non-router
+    # /etc/valor/container-host is written by the container roles: published ports need forwarding into the
+    # container network, like a router (the exemption is shown in the control's title)
     check: |
+      [ -f /etc/valor/container-host ] && exit 0
       [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ] && [ "$(sysctl -n net.ipv6.conf.all.forwarding)" = 0 ] && grep -qs '^net.ipv4.ip_forward = 0' /etc/sysctl.d/60-valor-baseline.conf
     fix: |
+      [ -f /etc/valor/container-host ] && exit 0
       f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
       grep -v -E '^net.ipv(4.ip_forward|6.conf.all.forwarding)' "$f" > "$f.new"
       printf 'net.ipv4.ip_forward = 0\nnet.ipv6.conf.all.forwarding = 0\n' >> "$f.new"; mv "$f.new" "$f"

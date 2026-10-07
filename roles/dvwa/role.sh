@@ -1,4 +1,5 @@
 # Role: dvwa - idempotent. Params: VALOR_PARAM_PORT
+# Published ports need IP forwarding: container_engine keeps it on and marks the host (the baseline exempts it)
 PORT="${VALOR_PARAM_PORT:-80}"
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "invalid port '$PORT'" >&2; exit 1; }
 firewall_open "$PORT"
