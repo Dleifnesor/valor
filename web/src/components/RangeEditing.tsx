@@ -6,7 +6,7 @@ import { ErrorBox, Loading, Modal } from "./ui";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
 import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
-import { ChatLog, Mode, useChat } from "./ChatFeed";
+import { BuilderInfo, ChatLog, Mode, ProviderPick, useChat } from "./ChatFeed";
 
 // Editing a built range on its map. Map controls and the chat panel both change the range's draft; the draft is
 // drawn in the plan colors and built only through "Review plan" -> approve.
@@ -371,12 +371,13 @@ const MODES: { mode: Mode; label: string; hint: string; placeholder: string }[] 
 function RangeChat({ name, chatId, onView, onReview, onClose }: {
   name: string; chatId?: number; onView: (v: View) => void; onReview: () => void; onClose: () => void;
 }) {
-  const info = useApi<{ configured: boolean; model: string }>("/api/builder");
+  const info = useApi<BuilderInfo>("/api/builder");
   const list = useApi<{ chats: ChatSummary[] }>(`/api/chats?range=${encodeURIComponent(name)}`);
   const [current, setCurrent] = useState<number | null>(chatId ?? null);
   const [mode, setMode] = useState<Mode>("question");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [pick, setPick] = useState("");                  // the provider for a new conversation ("" = the default)
   const [err, setErr] = useState<ApiError | null>(null);
   const refreshMap = () => get<View>(`/api/ranges/${name}/draft`).then(onView).catch(() => undefined);
   const ctl = useChat(current, (m) => { if (m.meta.draft_changed) refreshMap(); });
@@ -393,7 +394,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
     setSending(true); setErr(null);
     try {
       if (!ctl.chat) {
-        const c = await post<{ id: number }>("/api/chats", { kind: "range", range: name });
+        const c = await post<{ id: number }>("/api/chats", { kind: "range", range: name, ...(pick ? { provider: pick } : {}) });
         await post(`/api/chats/${c.id}/messages`, { message: msg, mode: as });
         setCurrent(c.id);
         list.reload();
@@ -420,7 +421,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
         <button className="btn ghost small" onClick={onClose} aria-label="Close chat">✕</button>
       </div>
       {info.data && !info.data.configured ? (
-        <div className="card-body muted">The chat needs an AI provider: an administrator can connect one in Settings → AI provider.</div>
+        <div className="card-body muted">The chat needs an AI provider: an administrator can connect one in Settings → AI providers.</div>
       ) : (
         <>
           <div className="seg-control" role="tablist">
@@ -429,6 +430,12 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
             ))}
           </div>
           <div className="muted small" style={{ padding: "0 12px" }}>{def.hint}</div>
+          {info.data && info.data.providers.length > 1 && (
+            <label className="provider-row small">Model
+              <ProviderPick info={info.data} value={chat ? chat.provider : pick} disabled={readonly || sending || ctl.busy}
+                onChange={(id) => chat ? ctl.setProvider(id).catch((e) => setErr(e as ApiError)) : setPick(id)} />
+            </label>
+          )}
           {mode === "code" && chat && !readonly && (
             <label className="allow-all small">
               <input type="checkbox" checked={chat.allow_all} onChange={(e) => {

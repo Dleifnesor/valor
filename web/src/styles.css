@@ -422,5 +422,7 @@ ul.evidence li.bad { color: var(--bad); }
 ol.asked { margin: 8px 0 0; padding-left: 18px; }
 .allow-all { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; }
 .chat-pick { max-width: 210px; margin: 0 6px; font-size: 13px; }
+.provider-pick { max-width: 240px; font-size: 13px; }
+.provider-row { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; }
 .seg-control.compact { margin: 0; }
 .seg-control.compact button { padding: 3px 10px; }

@@ -88,7 +88,8 @@ def start(app, monkeypatch, fake):
     adm, op = client(app), client(app)
     adm.__enter__(), op.__enter__()
     ame, _ = enroll(adm, "admin")
-    adm.put("/api/settings/ai", json={"provider": "anthropic", "api_key": "k"}, headers={"X-CSRF-Token": ame["csrf"]})
+    adm.put("/api/settings/ai", json={"providers": [{"name": "Claude", "provider": "anthropic", "api_key": "k"}]},
+            headers={"X-CSRF-Token": ame["csrf"]})
     monkeypatch.setattr(ai, "provider_from", lambda st, key: fake)
     me, _ = enroll(op, "olivia")
     return adm, {"X-CSRF-Token": ame["csrf"]}, op, {"X-CSRF-Token": me["csrf"]}
@@ -385,3 +386,30 @@ def test_refusals_and_questions(monkeypatch):
     assert text == "Hi" and qs == [{"id": 1, "header": "", "question": "A?", "options": ["x", "y"], "multiple": True,
                                     "recommended": None}]
     assert ai.extract_questions("```questions\n: [bad\n```")[0] is None
+
+
+def test_a_chat_uses_its_own_provider(lab, monkeypatch):
+    app, wcfg, cfg, pve = lab
+    fake = Script([f"Built it.\n```yaml\n{GOOD}```"] * 4)
+    adm, ah, op, h = start(app, monkeypatch, fake)
+    used = []
+    monkeypatch.setattr(ai, "provider_from", lambda st, key: used.append((st["name"], st["provider"], key)) or fake)
+    claude = adm.get("/api/settings/ai").json()["providers"][0]
+    r = adm.put("/api/settings/ai", json={"providers": [claude, {"name": "OpenRouter", "provider": "openrouter",
+                                                                  "model": "qwen/qwen3.8-27b", "api_key": "sk-or-1"}]}, headers=ah)
+    claude, orr = r.json()["providers"]
+    assert claude["default"] and not orr["default"]
+    assert op.post("/api/chats", json={"kind": "builder", "provider": "nope"}, headers=h).status_code == 400
+    chat = op.post("/api/chats", json={"kind": "builder", "provider": orr["id"]}, headers=h).json()
+    assert chat["provider"] == orr["id"]
+    wait(op, chat["id"], say(op, h, chat["id"], "a web lab", "build"))
+    assert used[-1] == ("OpenRouter", "openrouter", "sk-or-1")
+    assert op.patch(f"/api/chats/{chat['id']}", json={"provider": "nope"}, headers=h).status_code == 400
+    assert op.patch(f"/api/chats/{chat['id']}", json={"provider": ""}, headers=h).json()["provider"] is None
+    wait(op, chat["id"], say(op, h, chat["id"], "again", "build"))
+    assert used[-1] == ("Claude", "anthropic", "k")                       # "" = the default
+    op.patch(f"/api/chats/{chat['id']}", json={"provider": orr["id"]}, headers=h)
+    adm.put("/api/settings/ai", json={"providers": [claude]}, headers=ah)  # its provider is removed
+    wait(op, chat["id"], say(op, h, chat["id"], "once more", "build"))
+    assert used[-1][0] == "Claude"                                        # falls back to the default
+    op.__exit__(None, None, None), adm.__exit__(None, None, None)

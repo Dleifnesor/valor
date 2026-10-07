@@ -161,6 +161,60 @@ def test_streaming_edge_cases(monkeypatch):
     assert (r.text, r.reasoning) == ("It isn’t café", "web → db — ok")     # UTF-8, not mojibake
 
 
+def test_openrouter_on_the_wire(monkeypatch):
+    sent = {}
+
+    def post(url, headers, json, timeout, stream):
+        sent.update(url=url, headers=headers, body=json)
+        return Stream([{"choices": [{"delta": {"reasoning": "think"}}]}, {"choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}]},
+                       {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2}}])
+    monkeypatch.setattr(ai.requests, "post", post)
+    p = ai.provider_from({"provider": "openrouter", "model": "qwen/qwen3.8-27b", "base_url": "http://ignored/v1"}, "sk-or-1")
+    r = p.complete("S", [{"role": "user", "content": "hi"}])
+    assert sent["url"] == "https://openrouter.ai/api/v1/chat/completions" and sent["headers"]["authorization"] == "Bearer sk-or-1"
+    assert sent["headers"]["X-Title"] == "VALOR" and sent["body"]["model"] == "qwen/qwen3.8-27b"
+    assert (r.text, r.reasoning, r.input_tokens) == ("OK", "think", 9)
+    # an error after the stream started is an error, not an empty answer
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([
+        {"choices": [{"delta": {"content": "half"}}]},
+        {"error": {"code": "server_error", "message": "Provider disconnected unexpectedly"},
+         "choices": [{"delta": {"content": ""}, "finish_reason": "error"}]}]))
+    with pytest.raises(ai.ValorError) as e:
+        p.complete("S", [])
+    assert e.value.code == "ai_error" and "Provider disconnected" in e.value.message
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(status=402, error={"message": "can only afford 9000"}))
+    with pytest.raises(ai.ValorError) as e:
+        p.complete("S", [])
+    assert e.value.code == "ai_credits" and "Max tokens" in e.value.hint and "9000" in e.value.message
+
+    class Models:
+        ok = True
+
+        def json(self):
+            return {"data": [{"id": "other", "context_length": 8192}, {"id": "qwen/qwen3.8-27b", "context_length": 1000000}]}
+    monkeypatch.setattr(ai.requests, "get", lambda url, timeout: Models() if url == "https://openrouter.ai/api/v1/models" else None)
+    assert p.context_length() == 1000000
+    full = ai.cut_off(p, ai.Reply("", 30000, 2, truncated=True))
+    assert full.code == "ai_context_full" and "OpenRouter" in full.hint and "LM Studio" not in full.hint
+
+
+def test_one_provider_from_earlier_versions_is_migrated(env):
+    app, wcfg = env
+    box = app.state.box
+    conn = db.connect(wcfg.db)
+    db.put_setting(conn, "ai", {"provider": "openai", "model": "qwen/qwen3.8-27b", "base_url": "http://192.168.1.67:1234/v1",
+                                "api_key": box.seal_text("lm-token", "ai:api_key"), "max_tokens": 64000,
+                                "daily_tokens_per_user": 1234, "timeout": 500})
+    prov, st = builder.resolve(conn, box)
+    assert prov.api_key == "lm-token" and prov.base_url == "http://192.168.1.67:1234/v1" and prov.timeout == 500
+    assert (st["name"], st["max_tokens"], st["daily_tokens_per_user"]) == ("Local model server", 64000, 1234)
+    stored = db.get_setting(conn, "ai")
+    assert stored["default"] == stored["providers"][0]["id"] and "lm-token" not in json.dumps(stored)
+    assert builder.resolve(conn, box)[0].api_key == "lm-token"            # stored in the new form, key re-sealed
+    db.put_setting(conn, "ai", {"provider": "none"})
+    assert builder.ai_settings(conn, box)["providers"] == []
+
+
 def test_context_length_is_the_loaded_one(monkeypatch):
     class Info:
         ok = True
@@ -198,17 +252,23 @@ def test_settings_and_chat(env, tmp_path, monkeypatch):
         ask = {"messages": [{"role": "user", "content": "a web server and a client that may browse it"}]}
         assert op.post("/api/builder/chat", json=ask, headers=oh).status_code == 409          # no provider yet
         assert op.get("/api/settings/ai").status_code == 403
-        bad = adm.put("/api/settings/ai", json={"provider": "openai", "model": "m", "base_url": "http://example.com/v1"}, headers=ah)
-        assert bad.status_code == 400
-        ok = adm.put("/api/settings/ai", json={"provider": "openai", "model": "m", "base_url": "http://192.168.1.50:8000/v1"}, headers=ah)
-        assert ok.status_code == 200
-        r = adm.put("/api/settings/ai", json={"provider": "anthropic", "api_key": "sk-ant-SECRET", "daily_tokens_per_user": 5000}, headers=ah)
-        assert r.status_code == 200 and r.json()["api_key"] == builder.MASK and r.json()["model"] == "claude-sonnet-5-5"
+        lm = {"name": "LM Studio", "provider": "openai", "model": "m", "base_url": "http://example.com/v1"}
+        assert adm.put("/api/settings/ai", json={"providers": [lm]}, headers=ah).status_code == 400   # http to a public name
+        lm["base_url"] = "http://192.168.1.50:8000/v1"
+        cl = {"name": "Claude", "provider": "anthropic", "api_key": "sk-ant-SECRET", "default": True}
+        r = adm.put("/api/settings/ai", json={"providers": [lm, cl], "daily_tokens_per_user": 5000}, headers=ah)
+        assert r.status_code == 200, r.text
+        lm_out, cl_out = r.json()["providers"]
+        assert cl_out["api_key"] == builder.MASK and cl_out["model"] == "claude-sonnet-5-5" and cl_out["default"]
+        assert not lm_out["default"] and lm_out["api_key"] == "" and lm_out["id"] != cl_out["id"]
         raw = db.connect(wcfg.db).execute("SELECT value FROM settings WHERE key='ai'").fetchone()[0]
         assert "sk-ant-SECRET" not in raw
-        r = adm.put("/api/settings/ai", json={"provider": "anthropic", "api_key": builder.MASK, "daily_tokens_per_user": 5000}, headers=ah)
-        assert r.status_code == 200 and json.loads(db.connect(wcfg.db).execute(
-            "SELECT value FROM settings WHERE key='ai'").fetchone()[0])["api_key"]               # key kept
+        r = adm.put("/api/settings/ai", json={"providers": [lm_out, cl_out], "daily_tokens_per_user": 5000}, headers=ah)
+        stored = json.loads(db.connect(wcfg.db).execute("SELECT value FROM settings WHERE key='ai'").fetchone()[0])
+        assert r.status_code == 200 and stored["providers"][1]["api_key"] and stored["default"] == cl_out["id"]  # key kept
+        for bad in ([lm_out, {**cl_out, "id": None, "name": "lm studio"}],                  # names are unique
+                    [{"name": "OR", "provider": "openrouter", "model": "qwen/qwen3.8-27b"}]):  # OpenRouter needs a key
+            assert adm.put("/api/settings/ai", json={"providers": bad}, headers=ah).status_code == 400
 
         fake = Fake([f"Named it taken.\n```yaml\n{GOOD.replace('name: chatlab', 'name: taken')}```",
                      f"Renamed.\n```yaml\n{GOOD}```"])
@@ -229,7 +289,10 @@ def test_settings_and_chat(env, tmp_path, monkeypatch):
         assert "ad-dc" in system and "access:" in system and "taken" in system              # roles, reference, facts
         assert "The current spec in the builder" in msgs[-1]["content"]
         assert "already exists" in fake.calls[1][1][-1]["content"]
-        assert op.get("/api/builder").json() == {"configured": True, "provider": "anthropic", "model": "claude-sonnet-5-5"}
+        info = op.get("/api/builder").json()
+        assert info["configured"] and info["default"] == cl_out["id"] and "api_key" not in json.dumps(info)
+        assert [(p["name"], p["provider"], p["model"]) for p in info["providers"]] == [
+            ("LM Studio", "openai", "m"), ("Claude", "anthropic", "claude-sonnet-5-5")]
         u = adm.get("/api/settings/ai/usage").json()["users"]
         assert u[0]["username"] == "olivia" and u[0]["input"] == 2000 and u[0]["today"] == 2400
         fake.replies = [f"No hardening.\n```yaml\n{GOOD}baseline: none\n```"]
@@ -241,12 +304,12 @@ def test_settings_and_chat(env, tmp_path, monkeypatch):
         over = op.post("/api/builder/chat", json=ask, headers=oh)
         assert over.status_code == 429 and over.json()["error"] == "ai_budget"
         builder._rate.clear()
-        adm.put("/api/settings/ai", json={"provider": "anthropic", "api_key": builder.MASK, "daily_tokens_per_user": 0}, headers=ah)
+        adm.put("/api/settings/ai", json={"providers": [lm_out, cl_out], "daily_tokens_per_user": 0}, headers=ah)
         fake.replies = [f"```yaml\n{GOOD}```"] * 20
         codes = [op.post("/api/builder/chat", json=ask, headers=oh).status_code for _ in range(builder.RATE[0] + 1)]
         assert codes[-1] == 429 and codes[0] == 200
         audit = db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='settings.ai'").fetchone()[0]
-        assert audit == 4
+        assert audit == 3
 
 
 def test_cut_off_answers_and_defaults(env, monkeypatch):
@@ -264,8 +327,9 @@ def test_cut_off_answers_and_defaults(env, monkeypatch):
     builder._rate.clear()
     with client(app) as adm, client(app) as op:
         ame, _ = enroll(adm, "admin")
-        assert adm.get("/api/settings/ai").json()["max_tokens"] == ai.DEFAULTS["max_tokens"]
-        adm.put("/api/settings/ai", json={"provider": "anthropic", "api_key": "k"}, headers={"X-CSRF-Token": ame["csrf"]})
+        adm.put("/api/settings/ai", json={"providers": [{"name": "Claude", "provider": "anthropic", "api_key": "k"}]},
+                headers={"X-CSRF-Token": ame["csrf"]})
+        assert adm.get("/api/settings/ai").json()["providers"][0]["max_tokens"] == ai.DEFAULTS["max_tokens"]
         ome, _ = enroll(op, "olivia")
         monkeypatch.setattr(ai, "provider_from", lambda st, key: Cut([]))
         r = op.post("/api/builder/chat", json={"messages": [{"role": "user", "content": "big lab"}]},

@@ -29,7 +29,7 @@ from ..pve import PVE
 from ..spec import ROUTER, normalize, parse_spec
 from ..validate import validate_cluster
 from . import db, editing, topology
-from .builder import _settings, record_usage, reference_for, spec_check, start_ai
+from .builder import ai_settings, record_usage, reference_for, resolve, spec_check, start_ai
 from .core import ApiError, Session, require
 from .ranges import _cfg, _load, _name, _plan_hash
 
@@ -47,12 +47,14 @@ class ChatIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["builder", "range"]
     range: str | None = Field(default=None, max_length=15)
+    provider: str | None = Field(default=None, max_length=32)      # an AI provider's id (default: the default one)
 
 
 class PatchIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, max_length=120)
     allow_all: bool | None = None
+    provider: str | None = Field(default=None, max_length=32)      # "" = the default provider
 
 
 class MessageIn(BaseModel):
@@ -71,7 +73,13 @@ class DecideIn(BaseModel):
 def _chat_row(r, extra: dict | None = None) -> dict:
     st = json.loads(r["state"] or "{}")
     return {"id": r["id"], "owner": r["owner"], "kind": r["kind"], "range": r["range"], "title": r["title"],
-            "created": r["created"], "updated": r["updated"], "allow_all": bool(st.get("allow_all")), **(extra or {})}
+            "created": r["created"], "updated": r["updated"], "allow_all": bool(st.get("allow_all")),
+            "provider": st.get("provider") or None, **(extra or {})}
+
+
+def _known_provider(request: Request, s: Session, pid: str | None) -> None:
+    if pid and pid not in {p["id"] for p in ai_settings(s.conn, request.app.state.box)["providers"]}:
+        raise ApiError(400, "invalid_chat", "There is no such AI provider.")
 
 
 def _msg_row(r) -> dict:
@@ -130,9 +138,11 @@ def create_chat(body: ChatIn, request: Request, s: Session = Depends(require("op
         if not body.range:
             raise ApiError(400, "invalid_chat", "A range chat needs the range's name.")
         _load(_cfg(request), _name(body.range))
+    _known_provider(request, s, body.provider)
     now = time.time()
-    cur = s.conn.execute("INSERT INTO chats(owner, kind, range, created, updated) VALUES (?, ?, ?, ?, ?)",
-                         (s.username, body.kind, body.range if body.kind == "range" else None, now, now))
+    cur = s.conn.execute("INSERT INTO chats(owner, kind, range, created, updated, state) VALUES (?, ?, ?, ?, ?, ?)",
+                         (s.username, body.kind, body.range if body.kind == "range" else None, now, now,
+                          json.dumps({"provider": body.provider} if body.provider else {})))
     s.audit("chat.create", target=body.range or "builder", detail={"chat": cur.lastrowid})
     return _chat_row(s.conn.execute("SELECT * FROM chats WHERE id = ?", (cur.lastrowid,)).fetchone())
 
@@ -155,9 +165,12 @@ def get_chat(chat_id: int, request: Request, s: Session = Depends(require("viewe
 
 
 @router.patch("/chats/{chat_id}")
-def patch_chat(chat_id: int, body: PatchIn, s: Session = Depends(require("operator"))) -> dict:
+def patch_chat(chat_id: int, body: PatchIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
     c = _get_chat(s, chat_id, write=True)
     st = json.loads(c["state"] or "{}")
+    if body.provider is not None:
+        _known_provider(request, s, body.provider)
+        st["provider"] = body.provider or None
     if body.allow_all is not None:
         st["allow_all"] = body.allow_all
         s.audit("chat.allow_all", target=c["range"] or "builder", detail={"chat": chat_id, "on": body.allow_all})
@@ -208,7 +221,7 @@ def send(chat_id: int, body: MessageIn, request: Request, s: Session = Depends(r
         raise ApiError(409, "chat_busy", "The assistant is still working on this chat (or waiting for your approval).")
     if c["kind"] == "range":
         _load(_cfg(request), _name(c["range"]))
-    start_ai(request, s)                         # rate limit, provider configured, daily budget
+    start_ai(request, s, json.loads(c["state"] or "{}").get("provider"))    # rate limit, provider, daily budget
     now = time.time()
     u = s.conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', ?, ?)",
                        (chat_id, now, body.mode, body.message)).lastrowid
@@ -353,10 +366,8 @@ class Feed:
         self.conn.execute(f"UPDATE chat_messages SET {', '.join(sets)} WHERE id = ?", (*args, self.id))
 
 
-def _provider(app, conn):
-    st = _settings(conn)
-    key = app.state.box.open_text(st["api_key"], "ai:api_key") if st.get("api_key") else ""
-    prov = ai.provider_from(st, key)
+def _provider(app, conn, chat):
+    prov, st = resolve(conn, app.state.box, json.loads(chat["state"] or "{}").get("provider"))
     prov.max_total = ai.TURN_MAX_TOTAL           # a slow local model may think for a long time
     return prov, st
 
@@ -369,7 +380,7 @@ def _run(app, chat_id: int, msg_id: int, username: str, resume: bool, ev: thread
         feed = Feed(conn, msg_id, ev)
         chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
         msg = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
-        prov, st = _provider(app, conn)
+        prov, st = _provider(app, conn, chat)
         turn = Turn(app, conn, chat, msg, username, prov, st, feed)
         content, status = turn.run(resume)
         feed.close()

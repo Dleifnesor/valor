@@ -26,7 +26,28 @@ export interface Message {
 }
 export interface Chat {
   id: number; owner: string; kind: "builder" | "range"; range: string | null; title: string; created: number;
-  updated: number; allow_all: boolean; readonly?: boolean; spec?: string; topology?: Topology | null; messages: Message[];
+  updated: number; allow_all: boolean; provider?: string | null; readonly?: boolean; spec?: string;
+  topology?: Topology | null; messages: Message[];
+}
+/** The AI providers chats may use (GET /api/builder): no secrets. */
+export interface ProviderInfo { id: string; name: string; provider: string; model: string }
+export interface BuilderInfo { configured: boolean; default: string; providers: ProviderInfo[] }
+
+/** Which provider a chat uses: a picker when there are several, else the model's name. "" = the default. */
+export function ProviderPick({ info, value, onChange, disabled }: {
+  info: BuilderInfo; value: string | null | undefined; onChange: (id: string) => void; disabled?: boolean;
+}) {
+  const current = info.providers.find((p) => p.id === value) ?? info.providers.find((p) => p.id === info.default);
+  if (info.providers.length < 2) return <span className="muted small">{current?.model}</span>;
+  return (
+    <select className="provider-pick" value={current?.id ?? ""} disabled={disabled} aria-label="AI provider"
+      title={current ? `${current.name}: ${current.model}` : ""}
+      onChange={(e) => onChange(e.target.value === info.default ? "" : e.target.value)}>
+      {info.providers.map((p) => (
+        <option key={p.id} value={p.id}>{p.name}{p.id === info.default ? " (default)" : ""} - {p.model}</option>
+      ))}
+    </select>
+  );
 }
 
 const LIVE = ["running"];
@@ -86,8 +107,13 @@ export function useChat(chatId: number | null, onSettled?: (m: Message) => void)
     const r = await patch<Chat>(`/api/chats/${chat.id}`, { allow_all: on });
     setChat((c) => c && { ...c, allow_all: r.allow_all });
   };
+  const setProvider = async (id: string) => {
+    if (!chat) return;
+    const r = await patch<Chat>(`/api/chats/${chat.id}`, { provider: id });
+    setChat((c) => c && { ...c, provider: r.provider });
+  };
   const busy = !!chat?.messages.some((m) => m.status === "running" || m.status === "waiting");
-  return { chat, setChat, error, setError, load, send, decide, stop, setAllowAll, busy };
+  return { chat, setChat, error, setError, load, send, decide, stop, setAllowAll, setProvider, busy };
 }
 
 /** A fold that is open while live and closes once when it stops being live (the person can open it again). */

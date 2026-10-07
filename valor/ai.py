@@ -22,7 +22,8 @@ from urllib.parse import urlparse
 from . import compliance
 from .errors import ValorError
 
-PROVIDERS = ("none", "anthropic", "openai")
+PROVIDERS = ("anthropic", "openai", "openrouter")
+KIND_NAMES = {"anthropic": "Anthropic", "openai": "An OpenAI-compatible server", "openrouter": "OpenRouter"}
 ANTHROPIC_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001")
 # max_tokens is a ceiling, not a cost (only generated tokens count): high enough that a large spec is never cut off
 DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max_tokens": 32768,
@@ -122,7 +123,7 @@ class Provider:
 
     def _silent(self, where: str) -> ValorError:
         return ValorError("ai_unreachable", f"{where} sent nothing for {self.timeout} s",
-                          hint="The model may be loading or very slow: raise the timeout in Settings -> AI provider, "
+                          hint="The model may be loading or very slow: raise the timeout in Settings -> AI providers, "
                                "or use a smaller model.")
 
     @staticmethod
@@ -142,6 +143,10 @@ class Provider:
             raise ValorError("ai_auth", "the AI provider rejected the API key", hint="An administrator can update it in Settings.")
         if r.status_code == 429:
             raise ValorError("ai_rate_limited", "the AI provider is rate limiting VALOR; try again in a minute")
+        if r.status_code == 402:                # OpenRouter: the credits cannot cover max_tokens of this model
+            raise ValorError("ai_credits", f"the AI provider wants more credits for this request {detail}".strip(),
+                             hint="Add credits, or lower 'Max tokens per answer' for this provider in Settings -> "
+                                  "AI providers (the provider reserves the whole maximum up front).")
         raise ValorError("ai_error", f"the AI provider answered HTTP {r.status_code} {detail}".strip(),
                          details={"status": r.status_code, "detail": detail})
 
@@ -215,7 +220,7 @@ class Anthropic(Provider):
             cat = (refusal or {}).get("category") if isinstance(refusal, dict) else None
             raise ValorError("ai_refused", "the model declined this request" + (f" ({cat})" if cat else ""),
                              hint="Rephrase the request (say it is an isolated training lab), or pick another model in "
-                                  "Settings -> AI provider.", details={"input_tokens": tin, "output_tokens": tout})
+                                  "Settings -> AI providers.", details={"input_tokens": tin, "output_tokens": tout})
         raw, calls = [], []
         for i in sorted(blocks):
             b = blocks[i]
@@ -255,11 +260,12 @@ def anthropic_messages(messages: list[dict]) -> list[dict]:
 
 class OpenAICompatible(Provider):
     name = "openai"
+    extra_headers: dict = {}
 
     def complete(self, system: str, messages: list[dict], tools: list[dict] | None = None, on_delta=None) -> Reply:
         if not self.base_url:
             raise ValorError("ai_not_configured", "the OpenAI-compatible provider needs a base URL")
-        headers = {"content-type": "application/json"}
+        headers = {"content-type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         body = {"model": self.model, "max_tokens": self.max_tokens, "stream": True,
@@ -299,6 +305,11 @@ class OpenAICompatible(Provider):
         calls: dict[int, dict] = {}
         split = ThinkSplitter(on_delta or (lambda kind, text: None))
         for ev in events:
+            if ev.get("error"):                 # a failure after the stream started (OpenRouter, vLLM) arrives as an event
+                err = ev["error"]
+                msg = str(err.get("message") or err.get("code") or err) if isinstance(err, dict) else str(err)
+                raise ValorError("ai_error", f"the model provider reported an error in the middle of the answer: {msg[:300]}",
+                                 hint="Usually temporary: send the message again, or pick another model or provider.")
             for ch in ev.get("choices") or []:
                 delta = ch.get("delta") or {}
                 piece = delta.get("content") or ""
@@ -329,6 +340,26 @@ class OpenAICompatible(Provider):
             content, tool_calls = text_tool_calls(content)
         return Reply(content, tin, tout, truncated=finish == "length", reasoning="".join(thinking) + inline,
                      tool_calls=tool_calls)
+
+
+class OpenRouter(OpenAICompatible):
+    """OpenRouter: one key for many hosted models, through its OpenAI-compatible API."""
+    name = "openrouter"
+    BASE_URL = "https://openrouter.ai/api/v1"
+    extra_headers = {"X-Title": "VALOR"}                # the app name in the account's activity list
+
+    def __init__(self, model: str, api_key: str = "", base_url: str = "", **kw):
+        super().__init__(model, api_key, self.BASE_URL, **kw)
+
+    def context_length(self) -> int | None:
+        """The model's context window from OpenRouter's public model list."""
+        try:
+            r = requests.get(f"{self.BASE_URL}/models", timeout=15)
+            models = r.json().get("data", []) if r.ok else []
+        except (requests.RequestException, ValueError, AttributeError):
+            return None
+        n = next((m.get("context_length") for m in models if isinstance(m, dict) and m.get("id") == self.model), None)
+        return int(n) if isinstance(n, int) else None
 
 
 def _args(text: str) -> dict | None:
@@ -419,8 +450,10 @@ def provider_from(settings: dict, api_key: str) -> Provider:
         return Anthropic(**args)
     if kind == "openai":
         return OpenAICompatible(**args)
+    if kind == "openrouter":
+        return OpenRouter(**args)
     raise ValorError("ai_not_configured", "No AI provider is connected.",
-                     hint="An administrator can connect one in Settings -> AI provider.")
+                     hint="An administrator can connect one in Settings -> AI providers.")
 
 
 # ---------------------------------------------------------------------- prompt
@@ -664,14 +697,16 @@ def cut_off(provider: Provider, r: Reply) -> ValorError:
     if r.context_full or early:
         size = f" (VALOR's request is {r.input_tokens:,} tokens)" if r.input_tokens else ""
         need = max(32768, (r.input_tokens or 0) + 16384)
+        hint = (f"Pick a model with a larger context window or answer limit (at least {need:,} tokens) on OpenRouter."
+                if provider.name == "openrouter" else
+                f"Give the model a larger context window: in LM Studio load it with a Context Length of at least "
+                f"{need:,} (or pick a model that supports it). Raising 'Max tokens per answer' does not help here.")
         return ValorError("ai_context_full",
                           f"the model stopped after {r.output_tokens:,} tokens because its context window is full{size}",
-                          hint=f"Give the model a larger context window: in LM Studio load it with a Context Length of "
-                               f"at least {need:,} (or pick a model that supports it). Raising 'Max tokens per answer' "
-                               "does not help here.", details=details)
+                          hint=hint, details=details)
     thought = f", {len(r.reasoning) // 4:,} of them thinking" if len(r.reasoning) > 400 else ""
     return ValorError("ai_truncated", f"the model's answer was cut off at {provider.max_tokens:,} tokens{thought}",
-                      hint="Raise 'Max tokens per answer' in Settings -> AI provider (it is a ceiling: only the tokens "
+                      hint="Raise 'Max tokens per answer' in Settings -> AI providers (it is a ceiling: only the tokens "
                            "the model writes count).", details=details)
 
 

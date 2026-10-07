@@ -3,7 +3,7 @@ import { ApiError, post, put } from "../api";
 import { go, useApi } from "../hooks";
 import { ErrorBox, Loading } from "../components/ui";
 import { TopologyMap } from "../components/Topology";
-import { Chat, ChatLog, useChat } from "../components/ChatFeed";
+import { BuilderInfo, Chat, ChatLog, ProviderPick, useChat } from "../components/ChatFeed";
 
 // Chat builder: describe an environment; the AI asks what it needs to know (clickable question cards), writes the
 // range spec, VALOR validates it and shows it on the map. Conversations are saved (Chats page) and can be continued.
@@ -17,13 +17,14 @@ const EXAMPLES = [
 ];
 
 export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number | null }) {
-  const info = useApi<{ configured: boolean; provider: string; model: string }>("/api/builder");
+  const info = useApi<BuilderInfo>("/api/builder");
   const ctl = useChat(chatId);
   const { chat } = ctl;
   const [input, setInput] = useState("");
   const [err, setErr] = useState<ApiError | null>(null);
   const [showYaml, setShowYaml] = useState(false);
   const [sending, setSending] = useState(false);
+  const [pick, setPick] = useState("");                  // the provider for a new conversation ("" = the default)
 
   if (info.loading && !info.data) return <Loading />;
   if (!info.data?.configured) {
@@ -31,8 +32,8 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
       <section className="card"><div className="card-body">
         <h2 style={{ marginTop: 0 }}>The chat builder is off</h2>
         <p className="muted">
-          It needs an AI provider (Anthropic's Claude, or an OpenAI-compatible endpoint such as a model server on your
-          network). {isAdmin ? <>Connect one in <button className="link" onClick={() => go("settings")}>Settings → AI provider</button>.</>
+          It needs an AI provider (Anthropic's Claude, OpenRouter, or an OpenAI-compatible endpoint such as a model server
+          on your network). {isAdmin ? <>Connect one in <button className="link" onClick={() => go("settings")}>Settings → AI providers</button>.</>
             : "Ask an administrator to connect one in Settings."}
         </p>
         <p className="muted">You can always write a spec yourself: <button className="link" onClick={() => go("ranges/new")}>New range</button>.</p>
@@ -46,7 +47,7 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
     setSending(true); setErr(null);
     try {
       if (!chat) {
-        const c = await post<Chat>("/api/chats", { kind: "builder" });
+        const c = await post<Chat>("/api/chats", { kind: "builder", ...(pick ? { provider: pick } : {}) });
         await post(`/api/chats/${c.id}/messages`, { message: text.trim(), mode: "build" });
         go(`builder/${c.id}`);
       } else {
@@ -81,7 +82,8 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
       <section className="card builder-chat">
         <div className="card-head">
           <h2 className="grow">{chat?.title || "Describe the environment"}</h2>
-          <span className="muted small">{info.data.model}</span>
+          <ProviderPick info={info.data} value={chat ? chat.provider : pick} disabled={readonly || sending || ctl.busy}
+            onChange={(id) => chat ? ctl.setProvider(id).catch((e) => setErr(e as ApiError)) : setPick(id)} />
           <button className="btn ghost small" onClick={() => go("chats")}>All chats</button>
           {chat && <button className="btn ghost small" onClick={() => go("builder")}>New conversation</button>}
         </div>
