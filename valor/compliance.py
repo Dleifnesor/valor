@@ -23,6 +23,11 @@ def _load(path: str, mtime: float) -> dict:
     return yaml.safe_load(Path(path).read_text())
 
 
+def spec_frameworks() -> tuple[str, ...]:
+    from .spec import FRAMEWORKS
+    return FRAMEWORKS
+
+
 def mapping(baselines_dir: Path) -> dict:
     path = baselines_dir / "frameworks" / "frameworks.yaml"
     if not path.is_file():

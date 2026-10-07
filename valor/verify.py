@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import windows
+from . import compliance, windows
 from .baseline import baseline_for, bundle, load_baseline, parse_results
 from .cluster import load_catalog, range_vms
 from .errors import ValorError
@@ -51,6 +51,13 @@ def _wireguard_check(pve: PVE, router_vmid: int, wg) -> dict:
             "from": ROUTER, "to": "wireguard", "proto": "udp", "port": wg.port, "expect": "open",
             "origin": "access", "target": f"wg0 udp/{wg.port}", "observed": "open" if ok else "closed",
             "detail": f"listening: {listening}; peers configured: {known}/{len(wg.peers)}", "pass": ok}
+
+
+def _aligned(spec: RangeSpec) -> str:
+    fws = [f for f in (spec.compliance.frameworks if spec.compliance else []) if f != "cis-l1"]
+    if not fws:
+        return "common CIS Level 1 themes"
+    return f"the technical requirements VALOR covers of {', '.join(fws)}"
 
 
 OPEN_RETRIES, OPEN_RETRY_DELAY = 2, 15
@@ -136,7 +143,7 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
         "tests_passed": t_pass, "tests_total": len(results),
         "isolation_passed": sum(r["pass"] for r in closed), "isolation_total": len(closed),
         "baseline_passed": b_pass, "baseline_total": len(b_rows),
-        "baseline_claim": (f"aligned with common CIS Level 1 themes (baseline {', '.join(sorted(b for b in used if b))}); "
+        "baseline_claim": (f"aligned with {_aligned(spec)} (baseline {', '.join(sorted(b for b in used if b))}); "
                            "not a certification") if baseline else None,
         **({"compliance": {f: {k: v[k] for k in ("passed", "partial", "failed")} for f, v in comp["frameworks"].items()}}
            if comp and "frameworks" in comp else {}),

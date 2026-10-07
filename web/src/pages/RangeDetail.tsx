@@ -25,6 +25,7 @@ interface Detail {
     summary: Record<string, any>;
     tests: { name: string; from: string; target: string; expect: string; observed: string; detail: string; pass: boolean }[];
     baseline: Record<string, { control: string; title: string; area: string; after: string }[]>;
+    compliance?: ComplianceReport | { error: string };
   };
   last_apply: null | { ok: boolean; started: string; seconds: number; error?: string; message?: string };
   logins: boolean;
@@ -223,7 +224,87 @@ function Verification({ data }: { data: Detail }) {
           </table>
         </div>
       )}
+      {v.compliance && <Compliance report={v.compliance} />}
     </div>
+  );
+}
+
+interface Evidence { kind: "control" | "design"; title: string; pass: boolean; host?: string; control?: string; check?: string; detail?: string }
+interface Requirement { id: string; title: string; status: "pass" | "partial" | "fail"; evidence: Evidence[]; no_evidence_on?: string[] }
+interface ComplianceReport {
+  claim: string;
+  frameworks: Record<string, { title: string; about: string; requirements: Requirement[]; passed: number; partial: number;
+    failed: number; not_covered: { id: string; title: string }[] }>;
+}
+
+const STATUS_BADGE = { pass: "ok", partial: "warn", fail: "bad" } as const;
+
+/** Verification evidence per framework requirement (baseline controls on each host + design checks). */
+function Compliance({ report }: { report: ComplianceReport | { error: string } }) {
+  if ("error" in report) return <div className="alert warn small">Compliance report unavailable: {report.error}</div>;
+  return (
+    <div className="stack">
+      <h3 style={{ margin: "8px 0 0" }}>Compliance frameworks</h3>
+      <div className="muted small">Results are {report.claim}.</div>
+      {Object.entries(report.frameworks).map(([id, f]) => (
+        <details key={id} className="framework" open>
+          <summary>
+            <b>{f.title}</b>
+            <span className="badge ok">{f.passed} pass</span>
+            {f.partial > 0 && <span className="badge warn">{f.partial} partial</span>}
+            {f.failed > 0 && <span className="badge bad">{f.failed} fail</span>}
+            {f.not_covered.length > 0 && <span className="badge">{f.not_covered.length} not covered</span>}
+          </summary>
+          <div className="muted small">{f.about}</div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Requirement</th><th>Status</th><th>Evidence</th></tr></thead>
+              <tbody>
+                {f.requirements.map((r) => (
+                  <tr key={r.id}>
+                    <td><span className="mono">{r.id}</span> <span className="muted">{r.title}</span></td>
+                    <td><span className={`badge ${STATUS_BADGE[r.status]}`}>{r.status}</span></td>
+                    <td className="small">
+                      <Evidences items={r.evidence} />
+                      {!!r.no_evidence_on?.length && <div className="muted">No evidence on {r.no_evidence_on.join(", ")}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {f.not_covered.length > 0 && (
+            <details className="check-notes">
+              <summary>Not covered by VALOR ({f.not_covered.length}) - organizational or outside a lab build</summary>
+              <ul>{f.not_covered.map((n) => <li key={n.id}><span className="mono">{n.id}</span> {n.title}</li>)}</ul>
+            </details>
+          )}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function Evidences({ items }: { items: Evidence[] }) {
+  // one line per control (hosts grouped) or design check
+  const groups = new Map<string, { title: string; pass: boolean; hosts: string[]; detail?: string }>();
+  for (const e of items) {
+    const key = e.kind === "control" ? `c:${e.control}` : `d:${e.check}`;
+    const g = groups.get(key) ?? { title: e.title, pass: true, hosts: [], detail: e.detail };
+    g.pass = g.pass && e.pass;
+    if (e.host) g.hosts.push(e.pass ? e.host : `${e.host} (fail)`);
+    groups.set(key, g);
+  }
+  return (
+    <ul className="evidence">
+      {[...groups.values()].map((g, i) => (
+        <li key={i} className={g.pass ? "" : "bad"}>
+          {g.pass ? "✓" : "✗"} {g.title}
+          {g.hosts.length > 0 && <span className="muted"> - {g.hosts.join(", ")}</span>}
+          {g.detail && <span className="muted"> - {g.detail}</span>}
+        </li>
+      ))}
+    </ul>
   );
 }
 

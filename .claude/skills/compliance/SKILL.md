@@ -5,8 +5,12 @@ description: How VALOR's compliance baseline works and how to change it - contro
 
 # Compliance baseline
 
-The MVP ships one baseline: `baselines/ubuntu-l1.yaml` - an Ubuntu/Debian hardening baseline **aligned with
-common CIS Level 1 themes**. It is a reproducible starting point, **not** a certified benchmark implementation.
+Baseline profiles in `baselines/`: `ubuntu-l1` (Linux, **aligned with common CIS Level 1 themes**) and `windows-l1`;
+`linux-moderate` and `windows-moderate` extend them (`extends:`) with the controls the compliance frameworks need
+(lockout, password policy, notices, idle logout, audit rules, time sync). A Linux profile names its Windows
+counterpart (`windows:`). `baselines/frameworks/frameworks.yaml` maps control ids and design checks to framework
+requirement ids (NIST SP 800-171, NIST SP 800-53 Low/Moderate, PCI DSS, HIPAA, CIS themes); `valor/compliance.py`
+builds the per-framework report. These are reproducible starting points, **not** certified implementations.
 Always report results as "aligned with", never "compliant with" or "certified".
 
 ## Structure of a control
