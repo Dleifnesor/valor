@@ -81,7 +81,7 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
     <div className="builder">
       <section className="card builder-chat">
         <div className="card-head">
-          <h2 className="grow">{chat?.title || "Describe the environment"}</h2>
+          <h2 className="grow" title={chat?.title}>{chat?.title || "Describe the environment"}</h2>
           <ProviderPick info={info.data} value={chat ? chat.provider : pick} disabled={readonly || sending || ctl.busy}
             onChange={(id) => chat ? ctl.setProvider(id).catch((e) => setErr(e as ApiError)) : setPick(id)} />
           <button className="btn ghost small" onClick={() => go("chats")}>All chats</button>

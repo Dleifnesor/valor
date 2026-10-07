@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get, patch, post } from "../api";
 import { Topology } from "../types";
+import { Modal } from "./ui";
 
 // Saved chats (chat builder and range chats). A turn runs on the server; while it runs the assistant message is
 // polled and its steps form a live feed: reasoning, text, tool calls with their output, VALOR's checks. Finished
@@ -234,42 +235,133 @@ function Approvals({ m, steps, decide, readonly }: { m: Message; steps: Step[]; 
 
 type Decide = (m: Message, d: Record<string, "approve" | "deny">, allowAll?: boolean) => Promise<void>;
 
-/** Clickable answers to the model's questions; the answers go back as one message. */
-export function QuestionCards({ questions, onAnswer, disabled }: { questions: Question[]; onAnswer: (text: string) => void; disabled?: boolean }) {
-  const [picked, setPicked] = useState<Record<number, string[]>>(() =>
+type Picks = Record<number, string[]>;
+type Others = Record<number, string>;
+
+const chosen = (q: Question, picked: Picks, other: Others) =>
+  [...(picked[q.id] ?? []), ...(other[q.id]?.trim() ? [other[q.id].trim()] : [])];
+
+/** The model's questions: a dialog asks them one at a time (it opens by itself once per answer; "Answer" opens it
+ * again with the choices kept). The answers go back as one message. */
+export function QuestionCards({ id, questions, onAnswer, disabled }: {
+  id: number; questions: Question[]; onAnswer: (text: string) => void; disabled?: boolean;
+}) {
+  const [picked, setPicked] = useState<Picks>(() =>
     Object.fromEntries(questions.map((q) => [q.id, q.recommended ? [q.recommended] : []])));
-  const [other, setOther] = useState<Record<number, string>>({});
-  const toggle = (q: Question, o: string) => setPicked((p) => {
-    const cur = p[q.id] ?? [];
-    return { ...p, [q.id]: q.multiple ? (cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o]) : [o] };
-  });
-  const answer = () => onAnswer("Answers:\n" + questions.map((q) => {
-    const parts = [...(picked[q.id] ?? []), ...(other[q.id]?.trim() ? [other[q.id].trim()] : [])];
-    return `${q.id}. ${q.question} -> ${parts.length ? parts.join(", ") : "(no preference - use your default)"}`;
-  }).join("\n"));
+  const [other, setOther] = useState<Others>({});
+  const [answered, setAnswered] = useState<Set<number>>(new Set());   // answered or confirmed by the person
+  const seen = `valor-asked-${id}`;
+  const [open, setOpen] = useState(() => { try { return !sessionStorage.getItem(seen); } catch { return true; } });
+  const close = () => { setOpen(false); try { sessionStorage.setItem(seen, "1"); } catch { /* shown again next time */ } };
+  const send = () => {
+    close();
+    onAnswer("Answers:\n" + questions.map((q) => {
+      const parts = chosen(q, picked, other);
+      return `${q.id}. ${q.question} -> ${parts.length ? parts.join(", ") : "(no preference - use your default)"}`;
+    }).join("\n"));
+  };
+  const skip = () => { close(); onAnswer("Use your defaults for these questions and go ahead."); };
+  const n = questions.length;
   return (
     <div className="questions">
-      {questions.map((q) => (
-        <fieldset key={q.id} className="question" disabled={disabled}>
-          <legend>{q.header && <span className="badge">{q.header}</span>} {q.question}</legend>
-          <div className="options">
-            {q.options.map((o) => (
-              <label key={o} className={(picked[q.id] ?? []).includes(o) ? "option on" : "option"}>
-                <input type={q.multiple ? "checkbox" : "radio"} name={`q${q.id}`} checked={(picked[q.id] ?? []).includes(o)}
-                  onChange={() => toggle(q, o)} />
-                {o}{q.recommended === o && <span className="muted small"> (suggested)</span>}
-              </label>
-            ))}
-            <input className="other" placeholder={q.options.length ? "Other…" : "Your answer"} value={other[q.id] ?? ""}
-              onChange={(e) => setOther({ ...other, [q.id]: e.target.value })} />
-          </div>
-        </fieldset>
-      ))}
-      <div className="row" style={{ gap: 8 }}>
-        <button className="btn small primary" disabled={disabled} onClick={answer}>Send answers</button>
-        <button className="btn small" disabled={disabled} onClick={() => onAnswer("Use your defaults for these questions and go ahead.")}>Skip - use your defaults</button>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <span className="small">{n} question{n === 1 ? "" : "s"} before the assistant goes on{answered.size ? ` (${answered.size} answered)` : ""}.</span>
+        <button className="btn small primary" disabled={disabled} onClick={() => setOpen(true)}>Answer</button>
+        <button className="btn small" disabled={disabled} onClick={skip}>Skip - use your defaults</button>
       </div>
+      {open && !disabled && <QuestionDialog questions={questions} picked={picked} setPicked={setPicked} other={other}
+        setOther={setOther} answered={answered} confirm={(qid) => setAnswered((a) => new Set(a).add(qid))}
+        onSend={send} onSkip={skip} onClose={close} />}
     </div>
+  );
+}
+
+function QuestionDialog({ questions, picked, setPicked, other, setOther, answered, confirm, onSend, onSkip, onClose }: {
+  questions: Question[]; picked: Picks; setPicked: (p: Picks) => void; other: Others; setOther: (o: Others) => void;
+  answered: Set<number>; confirm: (id: number) => void; onSend: () => void; onSkip: () => void; onClose: () => void;
+}) {
+  const [i, setI] = useState(() => Math.max(0, questions.findIndex((x) => !answered.has(x.id))));  // length = review
+  const review = i >= questions.length;
+  const q = questions[Math.min(i, questions.length - 1)];
+  const next = () => { if (!review) confirm(q.id); setI(i + 1); };    // moving on accepts what is selected
+  const choose = (o: string) => {
+    confirm(q.id);
+    const cur = picked[q.id] ?? [];
+    setPicked({ ...picked, [q.id]: q.multiple ? (cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o]) : [o] });
+    if (!q.multiple) {
+      setOther({ ...other, [q.id]: "" });
+      const at = i;
+      window.setTimeout(() => setI((n) => (n === at ? n + 1 : n)), 180);   // one answer: on to the next question
+    }
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName)) return;
+      const k = Number(e.key);
+      if (!review && k >= 1 && k <= q.options.length) choose(q.options[k - 1]);
+      else if (e.key === "Enter") { e.preventDefault(); if (review) onSend(); else next(); }
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  });
+  return (
+    <Modal title="The assistant asks" onClose={onClose} footer={
+      <>
+        <button className="btn ghost" onClick={onSkip}>Skip - use your defaults</button>
+        <span className="grow" />
+        {i > 0 && <button className="btn" onClick={() => setI(i - 1)}>Back</button>}
+        {review ? <button className="btn primary" onClick={onSend}>Send answers</button>
+          : <button className="btn primary" onClick={next}>{i === questions.length - 1 ? "Review" : "Next"}</button>}
+      </>
+    }>
+      <div className="qw-chips" role="tablist" aria-label="Questions">
+        {questions.map((x, j) => {
+          const done = answered.has(x.id);
+          return (
+            <button key={x.id} role="tab" aria-selected={j === i} className={`qw-chip${j === i ? " on" : ""}${done ? " done" : ""}`}
+              onClick={() => setI(j)}>{done ? "✓ " : ""}{x.header || `Question ${j + 1}`}</button>
+          );
+        })}
+        <button role="tab" aria-selected={review} className={`qw-chip${review ? " on" : ""}`} onClick={() => setI(questions.length)}>Review</button>
+      </div>
+      {review ? (
+        <ol className="qw-review">
+          {questions.map((x, j) => (
+            <li key={x.id}>
+              <button className="link" onClick={() => setI(j)}>{x.question}</button>
+              <div className="muted small">{chosen(x, picked, other).join(", ") || "No preference - the assistant decides"}</div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <>
+          <div>
+            <div className="muted small">Question {i + 1} of {questions.length}{q.multiple ? " - choose any" : ""}</div>
+            <div className="qw-question">{q.question}</div>
+          </div>
+          <div className="qw-options">
+            {q.options.map((o, k) => {
+              const on = (picked[q.id] ?? []).includes(o);
+              return (
+                <button key={o} type="button" className={`qw-option${on ? " on" : ""}`} aria-pressed={on} onClick={() => choose(o)}>
+                  <span className="qw-key">{k + 1}</span>
+                  <span className="grow">{o}</span>
+                  {q.recommended === o && <span className="badge">Recommended</span>}
+                </button>
+              );
+            })}
+            <input className="qw-other" value={other[q.id] ?? ""}
+              placeholder={q.options.length ? "Other - type your own answer" : "Your answer"}
+              onChange={(e) => {
+                confirm(q.id);
+                setOther({ ...other, [q.id]: e.target.value });
+                if (!q.multiple && e.target.value) setPicked({ ...picked, [q.id]: [] });
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); next(); } }} />
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -335,7 +427,7 @@ export function AssistantMessage({ m, last, readonly, decide, stop, onAnswer, on
       )}
       {meta.diff && <Diff text={meta.diff} />}
       {meta.questions && (last && !readonly && m.status === "done"
-        ? <QuestionCards questions={meta.questions} onAnswer={onAnswer} disabled={busy} />
+        ? <QuestionCards id={m.id} questions={meta.questions} onAnswer={onAnswer} disabled={busy} />
         : <ol className="asked small muted">{meta.questions.map((q) => <li key={q.id}>{q.question}</li>)}</ol>)}
       {meta.usage && !live && <div className="usage muted">{(meta.usage.input_tokens + meta.usage.output_tokens).toLocaleString()} tokens</div>}
     </div>

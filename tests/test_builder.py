@@ -57,6 +57,15 @@ def test_repair_yaml_quotes_a_colon_in_a_plain_value():
     qs, rest = ai.extract_questions("Before I build:\n```questions\n- question: Which OS: Ubuntu or Rocky?\n"
                                     "  options: [Ubuntu, Rocky]\n```")
     assert (qs[0]["question"], qs[0]["options"], rest) == ("Which OS: Ubuntu or Rocky?", ["Ubuntu", "Rocky"], "Before I build:")
+    # the opening fence dropped (Mistral wrote "down:questions"), or a yaml fence around the questions
+    listed = "- header: OS\n  question: Which OS?\n  options: [Ubuntu, Rocky]\n  recommended: Ubuntu\n- question: How many clients?\n"
+    for text, intro in ((f"A few choices are worth pinning down:questions\n{listed}```", "A few choices are worth pinning down:"),
+                        (f"Before I build:\n```yaml\n{listed}```", "Before I build:"),
+                        (f"Please answer these questions\n{listed}", "Please answer these questions")):
+        qs, rest = ai.extract_questions(text)
+        assert [q["question"] for q in qs] == ["Which OS?", "How many clients?"] and qs[0]["recommended"] == "Ubuntu"
+        assert rest == intro
+    assert ai.extract_questions("Steps:\n- question: one\n\nThen more text.")[0] is None    # not a trailing list
     for bad in ("a: b: c\nd: [e\n", "a: [b: c\n", "description: 'quoted': x\n"):
         assert ai.repair_yaml(bad) == bad                  # what it cannot make parse stays as the model wrote it
 

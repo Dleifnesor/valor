@@ -605,15 +605,34 @@ def range_prompt(mode: str, ref: str, spec_yaml: str, live: dict) -> str:
 {ref}"""
 
 
+QUESTION_ITEM = re.compile(r"^-[ \t]+(?:header|question)[ \t]*:", re.M)
+# what is left of a mangled opening fence before such a list: "```questions", "```yaml", "...below:questions"
+QUESTIONS_LABEL = re.compile(r"(?:```[ \t]*(?:questions|ya?ml)?|(?<=[^\w\s])questions|(?:^|\n)[ \t]*questions)[ \t]*\Z")
+
+
 def extract_questions(text: str) -> tuple[list[dict] | None, str]:
-    """(the questions of the last ```questions block, normalized; the text without the block)."""
+    """(the questions of the last ```questions block, normalized; the text without the block). A list of questions
+    that ends the answer counts too when the model dropped or mangled the opening fence (seen with Mistral)."""
     blocks = QUESTIONS_BLOCK.findall(text)
-    if not blocks:
+    if blocks:
+        out = _questions(blocks[-1])
+        return (None, text) if out is None else ((out or None), QUESTIONS_BLOCK.sub("", text).strip())
+    m = QUESTION_ITEM.search(text)
+    if not m:
         return None, text
-    try:
-        data = yaml.safe_load(repair_yaml(blocks[-1]))
-    except yaml.YAMLError:
+    body = re.sub(r"\n[ \t]*```[ \t]*\Z", "", text[m.start():].rstrip())
+    out = _questions(body) if "```" not in body else None
+    if not out:
         return None, text                       # shown as written
+    return out, QUESTIONS_LABEL.sub("", text[:m.start()].rstrip()).rstrip()
+
+
+def _questions(block: str) -> list[dict] | None:
+    """The normalized questions of a questions block (None: not YAML)."""
+    try:
+        data = yaml.safe_load(repair_yaml(block))
+    except yaml.YAMLError:
+        return None
     if isinstance(data, dict):
         data = data.get("questions")
     out = []
@@ -631,7 +650,7 @@ def extract_questions(text: str) -> tuple[list[dict] | None, str]:
                     "recommended": rec if rec in options else None})
         if len(out) == MAX_QUESTIONS:
             break
-    return (out or None), QUESTIONS_BLOCK.sub("", text).strip()
+    return out
 
 
 def extract_yaml(text: str) -> tuple[str | None, str]:

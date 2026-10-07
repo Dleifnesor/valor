@@ -318,6 +318,9 @@ tr.clickable { cursor: pointer; }
 .builder { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 16px; align-items: start; }
 @media (max-width: 1000px) { .builder { grid-template-columns: 1fr; } }
 .builder-chat { display: flex; flex-direction: column; }
+.builder-chat > .card-head { flex-wrap: wrap; gap: 8px 12px; }
+.builder-chat > .card-head h2 { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.builder-chat > .card-head .provider-pick { flex: 1 1 140px; max-width: 280px; min-width: 0; }
 .chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
 .bubble { padding: 10px 12px; border-radius: 10px; max-width: 92%; line-height: 1.45; }
 .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; }
@@ -420,6 +423,21 @@ ul.evidence li.bad { color: var(--bad); }
 .question .option input { margin: 0; }
 .question .other { flex: 1; min-width: 140px; font-size: 13px; }
 ol.asked { margin: 8px 0 0; padding-left: 18px; }
+.qw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.qw-chip { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 14px;
+  padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.qw-chip.done { color: var(--text); }
+.qw-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.qw-question { font-size: 16px; font-weight: 600; margin-top: 2px; }
+.qw-options { display: flex; flex-direction: column; gap: 8px; }
+.qw-option { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.qw-option:hover { border-color: var(--border-strong); }
+.qw-option.on { border-color: var(--accent); background: var(--accent-soft); }
+.qw-key { font-size: 11px; min-width: 18px; text-align: center; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--muted); }
+.qw-other { width: 100%; }
+.qw-review { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 10px; }
 .allow-all { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; }
 .chat-pick { max-width: 210px; margin: 0 6px; font-size: 13px; }
 .provider-pick { max-width: 240px; font-size: 13px; }
