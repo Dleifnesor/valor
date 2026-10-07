@@ -35,32 +35,52 @@ class Baseline:
     families: list[str]
     controls: list[Control]
     digest: str
+    windows: str = "windows-l1"      # the profile Windows hosts get when this is the range's (Linux) baseline
 
 
-def load_baseline(baselines_dir: Path, name: str) -> Baseline | None:
+def load_baseline(baselines_dir: Path, name: str, _seen: tuple = ()) -> Baseline | None:
+    """A baseline profile. `extends: <profile>` starts from that profile's controls (a control with the same id
+    replaces the inherited one); the digest covers the whole chain, so a parent change re-converges the hosts."""
     if name == "none":
         return None
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", name):
         raise ValorError("baseline_invalid", f"invalid baseline name '{name}'")
+    if name in _seen:
+        raise ValorError("baseline_invalid", f"baseline '{name}' extends itself")
     path = baselines_dir / f"{name}.yaml"
     if not path.is_file():
-        avail = sorted(p.stem for p in baselines_dir.glob("*.yaml"))
-        raise ValorError("baseline_missing", f"baseline '{name}' does not exist", hint=f"Available: {', '.join(avail)}")
+        raise ValorError("baseline_missing", f"baseline '{name}' does not exist",
+                         hint=f"Available: {', '.join(available(baselines_dir))}")
     text = path.read_text()
     raw = yaml.safe_load(text)
-    controls = [Control(**c) for c in raw["controls"]]
+    own = [Control(**c) for c in raw.get("controls") or []]
+    digest_src = text
+    if raw.get("extends"):
+        parent = load_baseline(baselines_dir, raw["extends"], (*_seen, name))
+        mine = {c.id for c in own}
+        own = [c for c in parent.controls if c.id not in mine] + own
+        digest_src = parent.digest + text
     return Baseline(raw["id"], raw["title"], raw.get("claim", "aligned-with"), raw.get("families", ["debian"]),
-                    controls, hashlib.sha256(text.encode()).hexdigest()[:16])
+                    own, hashlib.sha256(digest_src.encode()).hexdigest()[:16], raw.get("windows", WINDOWS_BASELINE))
+
+
+def available(baselines_dir: Path) -> list[str]:
+    return sorted(p.stem for p in baselines_dir.glob("*.yaml"))
 
 
 WINDOWS_BASELINE = "windows-l1"
 
 
 def baseline_for(baselines_dir: Path, spec_baseline: str, family: str) -> Baseline | None:
-    """The baseline a host gets: the spec's (Linux) baseline, or windows-l1 for Windows hosts; none means none."""
+    """The baseline a host gets: the spec's (Linux) baseline, or that profile's Windows counterpart (windows-l1
+    unless the profile names another) for Windows hosts; none means none."""
     if spec_baseline == "none":
         return None
-    return load_baseline(baselines_dir, WINDOWS_BASELINE if family == "windows" else spec_baseline)
+    if family == "windows":
+        linux = load_baseline(baselines_dir, spec_baseline)
+        return load_baseline(baselines_dir, linux.windows if linux and "windows" not in linux.families
+                             else WINDOWS_BASELINE)
+    return load_baseline(baselines_dir, spec_baseline)
 
 
 def _fn(cid: str) -> str:

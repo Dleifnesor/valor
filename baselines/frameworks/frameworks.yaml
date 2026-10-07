@@ -1,0 +1,189 @@
+# Compliance frameworks VALOR can build toward, and which of their requirements VALOR's evidence supports.
+#
+# - `controls` maps baseline control ids (baselines/*.yaml) to requirement ids per framework family.
+# - `design` maps checks of the range's design (router policy, segments, roles) to requirement ids.
+# - A requirement passes when every piece of evidence for it passes on every host it applies to; host-level
+#   requirements that only some hosts have evidence for are "partial".
+# - Reports always say "aligned with" and list what VALOR does not cover: most requirements of every framework are
+#   organizational (policies, training, incident response) and outside any lab build.
+# - NIST SP 800-171 uses Rev. 2 numbering (the revision CMMC Level 2 assesses). PCI DSS ids are v4.0.1.
+#   NIST SP 800-53 ids are Rev. 5; `low` lists the ids selected for the Low baseline in SP 800-53B.
+#   CIS is reported by theme only (no benchmark section numbers).
+
+frameworks:
+  nist-800-171:
+    title: NIST SP 800-171 Rev. 2
+    about: Protecting Controlled Unclassified Information (CUI) in nonfederal systems; CMMC Level 2 assesses it
+    family: nist-800-171
+    profile: linux-moderate
+  nist-800-53-moderate:
+    title: NIST SP 800-53 Rev. 5 - Moderate baseline
+    about: Security and privacy controls for federal information systems, moderate-impact baseline (SP 800-53B)
+    family: nist-800-53
+    profile: linux-moderate
+  nist-800-53-low:
+    title: NIST SP 800-53 Rev. 5 - Low baseline
+    about: The low-impact baseline (SP 800-53B); VALOR applies the moderate profile, which exceeds it
+    family: nist-800-53
+    profile: linux-moderate
+    only: [AC-2, AC-7, AC-8, AC-17, AU-2, AU-4, AU-6, AU-8, AU-9, AU-12, CM-6, CM-7, IA-2, IA-5, IA-5(1),
+           SC-7, SI-2, SI-3]
+  pci-dss:
+    title: PCI DSS v4.0.1
+    about: Payment card industry data security standard - protecting cardholder data environments (CDE)
+    family: pci-dss
+    profile: linux-moderate
+  hipaa:
+    title: HIPAA Security Rule (45 CFR 164.308, 164.312)
+    about: Administrative and technical safeguards for electronic protected health information (ePHI)
+    family: hipaa
+    profile: linux-moderate
+  cis-l1:
+    title: CIS Benchmarks Level 1 (themes)
+    about: Baseline hardening themes of the CIS Benchmarks; reported by theme, without benchmark section numbers
+    family: cis
+    profile: ubuntu-l1
+
+requirements:
+  nist-800-171:
+    "3.1.1": Limit system access to authorized users, processes and devices
+    "3.1.5": Employ the principle of least privilege
+    "3.1.6": Use non-privileged accounts or roles when accessing nonsecurity functions
+    "3.1.7": Prevent non-privileged users from executing privileged functions and capture their execution in audit logs
+    "3.1.8": Limit unsuccessful logon attempts
+    "3.1.9": Provide privacy and security notices consistent with applicable CUI rules
+    "3.1.10": Use session lock with pattern-hiding displays after a period of inactivity
+    "3.1.11": Terminate (automatically) a user session after a defined condition
+    "3.1.12": Monitor and control remote access sessions
+    "3.3.1": Create and retain system audit logs and records
+    "3.3.2": Ensure the actions of individual users can be uniquely traced
+    "3.3.7": Synchronize internal system clocks with an authoritative source for audit time stamps
+    "3.3.8": Protect audit information and audit logging tools from unauthorized access, modification and deletion
+    "3.4.2": Establish and enforce security configuration settings
+    "3.4.6": Employ the principle of least functionality (only essential capabilities)
+    "3.4.7": Restrict, disable or prevent the use of nonessential programs, functions, ports, protocols and services
+    "3.5.2": Authenticate the identities of users, processes or devices before allowing access
+    "3.5.3": Use multifactor authentication for local and network access to privileged accounts (not covered)
+    "3.5.7": Enforce a minimum password complexity and change of characters when new passwords are created
+    "3.5.8": Prohibit password reuse for a specified number of generations
+    "3.13.1": Monitor, control and protect communications at external and key internal boundaries
+    "3.13.6": Deny network communications traffic by default and allow by exception
+    "3.13.11": Employ FIPS-validated cryptography to protect the confidentiality of CUI (not covered)
+    "3.14.1": Identify, report and correct system flaws in a timely manner
+    "3.14.2": Provide protection from malicious code at designated locations
+  nist-800-53:
+    AC-2: Account management
+    AC-6: Least privilege
+    AC-6(9): Least privilege - log use of privileged functions
+    AC-7: Unsuccessful logon attempts
+    AC-8: System use notification
+    AC-11: Device lock
+    AC-12: Session termination
+    AC-17: Remote access
+    AU-2: Event logging
+    AU-4: Audit log storage capacity
+    AU-6: Audit record review, analysis and reporting
+    AU-8: Time stamps
+    AU-9: Protection of audit information
+    AU-12: Audit record generation
+    CM-6: Configuration settings
+    CM-7: Least functionality
+    IA-2: Identification and authentication (organizational users)
+    IA-2(1): Multi-factor authentication to privileged accounts (not covered)
+    IA-5: Authenticator management
+    IA-5(1): Authenticator management - password-based authentication
+    SC-7: Boundary protection
+    SC-7(5): Boundary protection - deny by default, allow by exception
+    SC-8: Transmission confidentiality and integrity
+    SI-2: Flaw remediation
+    SI-3: Malicious code protection
+    SI-16: Memory protection
+  pci-dss:
+    "1.3.1": Inbound traffic to the CDE is restricted to only traffic that is necessary
+    "1.3.2": Outbound traffic from the CDE is restricted to only traffic that is necessary
+    "2.2.2": Vendor default accounts are managed (changed, removed or disabled)
+    "2.2.4": Only necessary services, protocols, daemons and functions are enabled
+    "2.2.6": System security parameters are configured to prevent misuse
+    "2.2.7": All non-console administrative access is encrypted using strong cryptography
+    "5.2.1": An anti-malware solution is deployed on all system components (except those not at risk)
+    "6.3.3": Security patches and updates are installed in a timely way
+    "8.2.8": Sessions idle for more than 15 minutes require re-authentication
+    "8.3.4": Invalid authentication attempts lock the account (at most 10 attempts, at least 30 minutes)
+    "8.3.6": Passwords are at least 12 characters with numeric and alphabetic characters
+    "8.3.7": New passwords are not the same as any of the last four
+    "8.4.2": MFA for all access into the CDE (not covered)
+    "10.2.1": Audit logs are enabled and active for all system components
+    "10.2.1.2": All actions taken by individuals with administrative access are logged
+    "10.3.2": Audit log files are protected to prevent modification by individuals
+    "10.3.3": Audit log files are promptly backed up to a secure, central, internal log server
+    "10.6.1": System clocks and time are synchronized using time-synchronization technology
+  hipaa:
+    "164.308(a)(5)(ii)(B)": Protection from malicious software
+    "164.308(a)(5)(ii)(C)": Log-in monitoring
+    "164.308(a)(5)(ii)(D)": Password management
+    "164.312(a)(1)": Access control
+    "164.312(a)(2)(iii)": Automatic logoff
+    "164.312(b)": Audit controls
+    "164.312(d)": Person or entity authentication
+    "164.312(e)(1)": Transmission security
+    "164.312(e)(2)(i)": Integrity controls (in transmission)
+
+# baseline control id -> requirement ids per framework family
+controls:
+  # ubuntu-l1 / linux-moderate
+  ssh-root-login: {nist-800-171: ["3.1.1", "3.1.5", "3.1.6", "3.1.12"], nist-800-53: [AC-6, IA-2, AC-17]}
+  ssh-password-auth: {nist-800-171: ["3.1.1", "3.1.12", "3.5.2"], nist-800-53: [IA-2, IA-5, AC-17], pci-dss: ["2.2.7"], hipaa: ["164.312(d)"]}
+  ssh-max-auth-tries: {nist-800-171: ["3.1.8"], nist-800-53: [AC-7]}
+  ssh-config-permissions: {nist-800-171: ["3.4.2"], nist-800-53: [CM-6], pci-dss: ["2.2.6"]}
+  kernel-aslr: {nist-800-171: ["3.4.2"], nist-800-53: [SI-16, CM-6]}
+  kernel-suid-dumpable: {nist-800-171: ["3.4.2"], nist-800-53: [CM-6]}
+  ip-forwarding-disabled: {nist-800-171: ["3.4.7"], nist-800-53: [CM-7], pci-dss: ["2.2.4"]}
+  auditd-running: {nist-800-171: ["3.3.1"], nist-800-53: [AU-2, AU-12], pci-dss: ["10.2.1"], hipaa: ["164.312(b)"]}
+  automatic-security-updates: {nist-800-171: ["3.14.1"], nist-800-53: [SI-2], pci-dss: ["6.3.3"]}
+  tmp-sticky-bit: {nist-800-171: ["3.4.2"], nist-800-53: [CM-6]}
+  login-banner: {nist-800-171: ["3.1.9"], nist-800-53: [AC-8]}
+  account-lockout: {nist-800-171: ["3.1.8"], nist-800-53: [AC-7], pci-dss: ["8.3.4"], hipaa: ["164.308(a)(5)(ii)(C)"]}
+  password-quality: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5, IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
+  password-history: {nist-800-171: ["3.5.8"], nist-800-53: [IA-5(1)], pci-dss: ["8.3.7"], hipaa: ["164.308(a)(5)(ii)(D)"]}
+  # idle shells are logged out: on servers without a graphical session this is the session lock (and stronger)
+  shell-timeout: {nist-800-171: ["3.1.10", "3.1.11"], nist-800-53: [AC-11, AC-12], pci-dss: ["8.2.8"], hipaa: ["164.312(a)(2)(iii)"]}
+  audit-rules: {nist-800-171: ["3.1.7", "3.3.1", "3.3.2"], nist-800-53: [AU-2, AU-12, AC-6(9)], pci-dss: ["10.2.1", "10.2.1.2"], hipaa: ["164.312(b)"]}
+  audit-log-protection: {nist-800-171: ["3.3.8"], nist-800-53: [AU-9], pci-dss: ["10.3.2"]}
+  time-sync: {nist-800-171: ["3.3.7"], nist-800-53: [AU-8], pci-dss: ["10.6.1"]}
+  sudo-logging: {nist-800-171: ["3.1.7"], nist-800-53: [AC-6(9), AU-12], pci-dss: ["10.2.1.2"]}
+  unneeded-services: {nist-800-171: ["3.4.6", "3.4.7"], nist-800-53: [CM-7], pci-dss: ["2.2.4"]}
+  # windows-l1 / windows-moderate (account-lockout, password-history and time-sync share the ids above)
+  smb1-disabled: {nist-800-171: ["3.4.2", "3.4.6", "3.4.7"], nist-800-53: [CM-6, CM-7], pci-dss: ["2.2.4", "2.2.6"]}
+  smb-signing-required: {nist-800-171: ["3.4.2"], nist-800-53: [SC-8, CM-6], pci-dss: ["2.2.6"], hipaa: ["164.312(e)(2)(i)"]}
+  firewall-enabled: {nist-800-171: ["3.4.2", "3.13.1"], nist-800-53: [SC-7, CM-6], pci-dss: ["2.2.6"]}
+  guest-account-disabled: {nist-800-171: ["3.1.1"], nist-800-53: [AC-2], pci-dss: ["2.2.2"], hipaa: ["164.312(a)(1)"]}
+  password-min-length: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5, IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
+  password-complexity: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5, IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
+  llmnr-disabled: {nist-800-171: ["3.4.2", "3.4.6", "3.4.7"], nist-800-53: [CM-6, CM-7], pci-dss: ["2.2.4", "2.2.6"]}
+  rdp-nla-required: {nist-800-171: ["3.1.12", "3.5.2"], nist-800-53: [AC-17, IA-2], hipaa: ["164.312(d)"]}
+  audit-logon: {nist-800-171: ["3.3.1"], nist-800-53: [AU-2, AU-12], pci-dss: ["10.2.1"], hipaa: ["164.308(a)(5)(ii)(C)", "164.312(b)"]}
+  defender-realtime: {nist-800-171: ["3.14.2"], nist-800-53: [SI-3], pci-dss: ["5.2.1"], hipaa: ["164.308(a)(5)(ii)(B)"]}
+  logon-banner: {nist-800-171: ["3.1.9"], nist-800-53: [AC-8]}
+  screen-lock: {nist-800-171: ["3.1.10"], nist-800-53: [AC-11], pci-dss: ["8.2.8"], hipaa: ["164.312(a)(2)(iii)"]}
+  audit-policy: {nist-800-171: ["3.1.7", "3.3.1", "3.3.2"], nist-800-53: [AU-2, AU-12, AC-6(9)], pci-dss: ["10.2.1", "10.2.1.2"], hipaa: ["164.312(b)"]}
+  security-log-size: {nist-800-171: ["3.3.1"], nist-800-53: [AU-4]}
+
+# checks of the range's design -> requirement ids
+design:
+  deny-by-default:
+    title: Segments are separated by the range router, which denies traffic by default and allows only the policy's flows (isolation tests pass)
+    nist-800-171: ["3.13.1", "3.13.6"]
+    nist-800-53: [SC-7, SC-7(5)]
+    pci-dss: ["1.3.1"]
+    hipaa: ["164.312(a)(1)"]
+  scope-no-internet:
+    title: The segments holding the regulated data (compliance.scope) have no internet access
+    nist-800-171: ["3.13.1"]
+    nist-800-53: [SC-7]
+    pci-dss: ["1.3.2"]
+  central-logging:
+    title: A central log server (syslog-server) receives the logs of every other Linux host (syslog-client)
+    nist-800-171: ["3.3.1"]
+    nist-800-53: [AU-6]
+    pci-dss: ["10.3.3"]
+    hipaa: ["164.312(b)"]
