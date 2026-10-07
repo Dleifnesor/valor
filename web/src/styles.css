@@ -374,3 +374,10 @@ details.framework { border: 1px solid var(--border); border-radius: 8px; padding
 details.framework > summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 ul.evidence { margin: 0; padding: 0; list-style: none; }
 ul.evidence li.bad { color: var(--bad); }
+@media (max-width: 640px) {        /* phones: requirement and status on one line, the evidence below */
+  table.compliance thead { display: none; }
+  table.compliance tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); }
+  table.compliance td { border: 0; padding: 0 4px; }
+  table.compliance td:last-child { grid-column: 1 / -1; }
+}

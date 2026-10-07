@@ -247,7 +247,7 @@ function Compliance({ report }: { report: ComplianceReport | { error: string } }
       <h3 style={{ margin: "8px 0 0" }}>Compliance frameworks</h3>
       <div className="muted small">Results are {report.claim}.</div>
       {Object.entries(report.frameworks).map(([id, f]) => (
-        <details key={id} className="framework" open>
+        <details key={id} className="framework" open={Object.keys(report.frameworks).length === 1}>
           <summary>
             <b>{f.title}</b>
             <span className="badge ok">{f.passed} pass</span>
@@ -257,7 +257,7 @@ function Compliance({ report }: { report: ComplianceReport | { error: string } }
           </summary>
           <div className="muted small">{f.about}</div>
           <div className="table-wrap">
-            <table>
+            <table className="compliance">
               <thead><tr><th>Requirement</th><th>Status</th><th>Evidence</th></tr></thead>
               <tbody>
                 {f.requirements.map((r) => (
