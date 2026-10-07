@@ -131,8 +131,8 @@ requirements:
 # baseline control id -> requirement ids per framework family
 controls:
   # ubuntu-l1 / linux-moderate
-  ssh-root-login: {nist-800-171: ["3.1.5", "3.1.6"], nist-800-53: [AC-6, IA-2]}
-  ssh-password-auth: {nist-800-171: ["3.5.2"], nist-800-53: [IA-2, IA-5], pci-dss: ["2.2.7"], hipaa: ["164.312(d)"]}
+  ssh-root-login: {nist-800-171: ["3.1.1", "3.1.5", "3.1.6", "3.1.12"], nist-800-53: [AC-6, IA-2, AC-17]}
+  ssh-password-auth: {nist-800-171: ["3.1.1", "3.1.12", "3.5.2"], nist-800-53: [IA-2, IA-5, AC-17], pci-dss: ["2.2.7"], hipaa: ["164.312(d)"]}
   ssh-max-auth-tries: {nist-800-171: ["3.1.8"], nist-800-53: [AC-7]}
   ssh-config-permissions: {nist-800-171: ["3.4.2"], nist-800-53: [CM-6], pci-dss: ["2.2.6"]}
   kernel-aslr: {nist-800-171: ["3.4.2"], nist-800-53: [SI-16, CM-6]}
@@ -145,21 +145,22 @@ controls:
   account-lockout: {nist-800-171: ["3.1.8"], nist-800-53: [AC-7], pci-dss: ["8.3.4"], hipaa: ["164.308(a)(5)(ii)(C)"]}
   password-quality: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5, IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
   password-history: {nist-800-171: ["3.5.8"], nist-800-53: [IA-5(1)], pci-dss: ["8.3.7"], hipaa: ["164.308(a)(5)(ii)(D)"]}
-  shell-timeout: {nist-800-171: ["3.1.11"], nist-800-53: [AC-12], pci-dss: ["8.2.8"], hipaa: ["164.312(a)(2)(iii)"]}
+  # idle shells are logged out: on servers without a graphical session this is the session lock (and stronger)
+  shell-timeout: {nist-800-171: ["3.1.10", "3.1.11"], nist-800-53: [AC-11, AC-12], pci-dss: ["8.2.8"], hipaa: ["164.312(a)(2)(iii)"]}
   audit-rules: {nist-800-171: ["3.1.7", "3.3.1", "3.3.2"], nist-800-53: [AU-2, AU-12, AC-6(9)], pci-dss: ["10.2.1", "10.2.1.2"], hipaa: ["164.312(b)"]}
   audit-log-protection: {nist-800-171: ["3.3.8"], nist-800-53: [AU-9], pci-dss: ["10.3.2"]}
   time-sync: {nist-800-171: ["3.3.7"], nist-800-53: [AU-8], pci-dss: ["10.6.1"]}
   sudo-logging: {nist-800-171: ["3.1.7"], nist-800-53: [AC-6(9), AU-12], pci-dss: ["10.2.1.2"]}
   unneeded-services: {nist-800-171: ["3.4.6", "3.4.7"], nist-800-53: [CM-7], pci-dss: ["2.2.4"]}
   # windows-l1 / windows-moderate (account-lockout, password-history and time-sync share the ids above)
-  smb1-disabled: {nist-800-171: ["3.4.7"], nist-800-53: [CM-7], pci-dss: ["2.2.4"]}
-  smb-signing-required: {nist-800-53: [SC-8], hipaa: ["164.312(e)(2)(i)"]}
-  firewall-enabled: {nist-800-171: ["3.13.1"], nist-800-53: [SC-7]}
+  smb1-disabled: {nist-800-171: ["3.4.2", "3.4.6", "3.4.7"], nist-800-53: [CM-6, CM-7], pci-dss: ["2.2.4", "2.2.6"]}
+  smb-signing-required: {nist-800-171: ["3.4.2"], nist-800-53: [SC-8, CM-6], pci-dss: ["2.2.6"], hipaa: ["164.312(e)(2)(i)"]}
+  firewall-enabled: {nist-800-171: ["3.4.2", "3.13.1"], nist-800-53: [SC-7, CM-6], pci-dss: ["2.2.6"]}
   guest-account-disabled: {nist-800-171: ["3.1.1"], nist-800-53: [AC-2], pci-dss: ["2.2.2"], hipaa: ["164.312(a)(1)"]}
-  password-min-length: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
-  password-complexity: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
-  llmnr-disabled: {nist-800-171: ["3.4.7"], nist-800-53: [CM-7], pci-dss: ["2.2.4"]}
-  rdp-nla-required: {nist-800-171: ["3.1.12"], nist-800-53: [AC-17], hipaa: ["164.312(d)"]}
+  password-min-length: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5, IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
+  password-complexity: {nist-800-171: ["3.5.7"], nist-800-53: [IA-5, IA-5(1)], pci-dss: ["8.3.6"], hipaa: ["164.308(a)(5)(ii)(D)"]}
+  llmnr-disabled: {nist-800-171: ["3.4.2", "3.4.6", "3.4.7"], nist-800-53: [CM-6, CM-7], pci-dss: ["2.2.4", "2.2.6"]}
+  rdp-nla-required: {nist-800-171: ["3.1.12", "3.5.2"], nist-800-53: [AC-17, IA-2], hipaa: ["164.312(d)"]}
   audit-logon: {nist-800-171: ["3.3.1"], nist-800-53: [AU-2, AU-12], pci-dss: ["10.2.1"], hipaa: ["164.308(a)(5)(ii)(C)", "164.312(b)"]}
   defender-realtime: {nist-800-171: ["3.14.2"], nist-800-53: [SI-3], pci-dss: ["5.2.1"], hipaa: ["164.308(a)(5)(ii)(B)"]}
   logon-banner: {nist-800-171: ["3.1.9"], nist-800-53: [AC-8]}
