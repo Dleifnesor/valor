@@ -449,8 +449,8 @@ def _execute(name: str, args: dict, ctx: Context) -> dict:
             return {"content": _clip(out) + f"\n[timed out after {timeout} s; the command may still be running]",
                     "error": True, "output": _clip(out), "exit": None, "seconds": round(time.time() - t0, 1)}
         clipped = _clip(out)
-        return {"content": f"exit code {res.code}\n{clipped}", "error": res.code != 0, "output": clipped,
-                "exit": res.code, "seconds": round(time.time() - t0, 1)}
+        return {"content": f"exit code {res.exitcode}\n{clipped}", "error": res.exitcode != 0, "output": clipped,
+                "exit": res.exitcode, "seconds": round(time.time() - t0, 1)}
     if name == "read_file":
         vm = _vm(ctx, args["host"])
         text = ctx.pve.file_read(vm.vmid, args["path"])

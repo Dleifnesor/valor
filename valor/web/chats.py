@@ -88,12 +88,17 @@ def _get_chat(s: Session, chat_id: int, write: bool = False):
 
 
 def _interrupted(conn, r) -> None:
-    """A turn still marked running whose thread is gone (VALOR restarted): mark it failed."""
-    if r["status"] == "running" and r["id"] not in _active:
-        meta = json.loads(r["meta"] or "{}")
-        meta["error"] = {"code": "interrupted", "message": "VALOR restarted while this answer was being written"}
-        conn.execute("UPDATE chat_messages SET status = 'failed', meta = ?, version = version + 1 WHERE id = ?",
-                     (json.dumps(meta), r["id"]))
+    """A turn still marked running whose thread is gone (VALOR restarted): mark it failed. A thread is registered
+    under _lock in the same step that marks its message running and writes its final status before it unregisters,
+    so checking and updating under _lock (only while the row still says running) never hits a live turn."""
+    if r["status"] != "running":
+        return
+    meta = json.loads(r["meta"] or "{}")
+    meta["error"] = {"code": "interrupted", "message": "VALOR restarted while this answer was being written"}
+    with _lock:
+        if r["id"] not in _active:
+            conn.execute("UPDATE chat_messages SET status = 'failed', meta = ?, version = version + 1 "
+                         "WHERE id = ? AND status = 'running'", (json.dumps(meta), r["id"]))
 
 
 # ---------------------------------------------------------------------- API
@@ -207,12 +212,14 @@ def send(chat_id: int, body: MessageIn, request: Request, s: Session = Depends(r
     now = time.time()
     u = s.conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', ?, ?)",
                        (chat_id, now, body.mode, body.message)).lastrowid
-    a = s.conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', ?, "
-                       "'running', ?)", (chat_id, now, body.mode, json.dumps({"steps": []}))).lastrowid
+    with _lock:
+        a = s.conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', "
+                           "?, 'running', ?)", (chat_id, now, body.mode, json.dumps({"steps": []}))).lastrowid
+        ev = _active[a] = threading.Event()
     title = c["title"] or re.sub(r"\s+", " ", body.message).strip()[:80]
     s.conn.execute("UPDATE chats SET updated = ?, title = ? WHERE id = ?", (now, title, chat_id))
     s.audit("chat.message", target=c["range"] or "builder", detail={"chat": chat_id, "mode": body.mode})
-    _spawn(request.app, chat_id, a, s.username, resume=False)
+    _spawn(request.app, chat_id, a, s.username, False, ev)
     rows = s.conn.execute("SELECT * FROM chat_messages WHERE id IN (?, ?) ORDER BY id", (u, a)).fetchall()
     return {"messages": [_msg_row(r) for r in rows]}
 
@@ -241,12 +248,14 @@ def decide(chat_id: int, msg_id: int, body: DecideIn, request: Request, s: Sessi
         s.conn.execute("UPDATE chats SET state = ? WHERE id = ?", (json.dumps(cs), chat_id))
         s.audit("chat.allow_all", target=c["range"] or "", detail={"chat": chat_id, "on": True})
     left = any(st.get("type") == "tool" and st.get("status") == "pending" for st in meta["steps"])
-    status = "waiting" if left else "running"
-    s.conn.execute("UPDATE chat_messages SET meta = ?, status = ?, version = version + 1 WHERE id = ?",
-                   (json.dumps(meta), status, msg_id))
     if not left:
         start_ai(request, s)
-        _spawn(request.app, chat_id, msg_id, s.username, resume=True)
+    with _lock:
+        s.conn.execute("UPDATE chat_messages SET meta = ?, status = ?, version = version + 1 WHERE id = ?",
+                       (json.dumps(meta), "waiting" if left else "running", msg_id))
+        ev = None if left else _active.setdefault(msg_id, threading.Event())
+    if ev is not None:
+        _spawn(request.app, chat_id, msg_id, s.username, True, ev)
     return _msg_row(s.conn.execute("SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone())
 
 
@@ -271,10 +280,8 @@ def stop(chat_id: int, msg_id: int, s: Session = Depends(require("operator"))) -
 
 
 # ---------------------------------------------------------------------- the background turn
-def _spawn(app, chat_id: int, msg_id: int, username: str, resume: bool) -> None:
-    ev = threading.Event()
-    with _lock:
-        _active[msg_id] = ev
+def _spawn(app, chat_id: int, msg_id: int, username: str, resume: bool, ev: threading.Event) -> None:
+    """Start the turn's thread; the caller registered ev in _active when it marked the message running."""
     t = threading.Thread(target=_run, args=(app, chat_id, msg_id, username, resume, ev), daemon=True,
                          name=f"chat-{msg_id}")
     t.start()
@@ -386,7 +393,8 @@ def _run(app, chat_id: int, msg_id: int, username: str, resume: bool, ev: thread
             feed.flush(True, status="failed")
     finally:
         with _lock:
-            _active.pop(msg_id, None)
+            if _active.get(msg_id) is ev:          # a resumed turn may already have registered its own thread
+                _active.pop(msg_id)
         conn.execute("UPDATE chats SET updated = ? WHERE id = ?", (time.time(), chat_id))
         conn.close()
 
