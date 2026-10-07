@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ApiError, del, get, post, put } from "../api";
 import { useApi, when } from "../hooks";
 import { Topology, TopoNode } from "../types";
@@ -6,7 +6,7 @@ import { ErrorBox, Loading, Modal } from "./ui";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
 import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
-import { CheckNotes } from "../pages/Builder";
+import { ChatLog, Mode, useChat } from "./ChatFeed";
 
 // Editing a built range on its map. Map controls and the chat panel both change the range's draft; the draft is
 // drawn in the plan colors and built only through "Review plan" -> approve.
@@ -16,17 +16,18 @@ interface Catalog { default_os: string; os: { name: string; family?: string; des
 interface Draft { yaml: string; valid: boolean; error?: string; meta: { by?: string; source?: string; updated?: string }; summary?: Record<string, number>; diff?: string }
 interface View { draft: Draft | null; topology: Topology }
 interface Op { op: string; [k: string]: any }
+interface ChatSummary { id: number; title: string; updated: number; status: string }
 
 const SOURCE: Record<string, string> = { map: "map", yaml: "YAML", "chat:plan": "chat (plan)", "chat:code": "chat (code)" };
 
-export function RangeMapTab({ name, canOperate, onConsole }: { name: string; canOperate: boolean; onConsole?: (host: string) => void }) {
+export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: string; canOperate: boolean; onConsole?: (host: string) => void; chatId?: number }) {
   const [view, setView] = useState<View | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
   const [modal, setModal] = useState<null | { kind: "addvm"; segment?: string } | { kind: "service" | "edit"; host: TopoNode }
     | { kind: "yaml" } | { kind: "addseg" } | { kind: "editseg"; seg: TopoNode } | { kind: "rule"; from?: string }>(null);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [planning, setPlanning] = useState(false);
-  const [chatOpen, setChatOpen] = useState(() => { try { return localStorage.getItem("valor-range-chat") === "1"; } catch { return false; } });
+  const [chatOpen, setChatOpen] = useState(() => { if (chatId) return true; try { return localStorage.getItem("valor-range-chat") === "1"; } catch { return false; } });
   const catalog = useApi<Catalog>(canOperate ? "/api/catalog" : null);
 
   const load = () => get<View>(`/api/ranges/${name}/draft`).then(setView).catch(setErr);
@@ -147,7 +148,7 @@ export function RangeMapTab({ name, canOperate, onConsole }: { name: string; can
             } : undefined} />
         </div>
         {chatOpen && canOperate && (
-          <RangeChat name={name} onView={(v) => setView(v)} onReview={reviewPlan} onClose={() => setChatOpen(false)} />
+          <RangeChat name={name} chatId={chatId} onView={(v) => setView(v)} onReview={reviewPlan} onClose={() => setChatOpen(false)} />
         )}
       </div>
       {modal?.kind === "addvm" && catalog.data && (
@@ -361,57 +362,61 @@ function YamlModal({ name, yaml, onClose, onSaved }: { name: string; yaml: strin
 
 // ---------------------------------------------------------------------- chat
 
-type Mode = "question" | "plan" | "code";
-interface ChatMessage {
-  id: number; ts: number; username: string; role: "user" | "assistant"; mode: Mode; content: string;
-  meta: { problems?: string[]; fixed?: string[]; warnings?: string[]; draft?: Record<string, number> | null; diff?: string; plan?: { summary: Record<string, number>; actions: { host: string; action: string; reasons: string[] }[] }; usage?: { input_tokens: number; output_tokens: number } };
-}
-
 const MODES: { mode: Mode; label: string; hint: string; placeholder: string }[] = [
-  { mode: "question", label: "Question", hint: "Answers about this range; changes nothing.", placeholder: "Who can reach the database? Why did a test fail?" },
+  { mode: "question", label: "Question", hint: "Answers about this range; may look inside the VMs with read-only commands.", placeholder: "Who can reach the database? Is nginx running on web?" },
   { mode: "plan", label: "Plan", hint: "Proposes a change as a draft on the map, with VALOR's plan to approve.", placeholder: "Add a second web server behind the same policy" },
-  { mode: "code", label: "Code", hint: "Edits the range's YAML directly and shows the diff (kept as a draft).", placeholder: "Give every host 2 vCPUs" },
+  { mode: "code", label: "Code", hint: "Works in the VMs (commands, files, services, power, snapshots) and records changes in the spec. Changes wait for your approval.", placeholder: "Install and configure PostgreSQL on db, reachable from web" },
 ];
 
-function RangeChat({ name, onView, onReview, onClose }: { name: string; onView: (v: View) => void; onReview: () => void; onClose: () => void }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+function RangeChat({ name, chatId, onView, onReview, onClose }: {
+  name: string; chatId?: number; onView: (v: View) => void; onReview: () => void; onClose: () => void;
+}) {
+  const info = useApi<{ configured: boolean; model: string }>("/api/builder");
+  const list = useApi<{ chats: ChatSummary[] }>(`/api/chats?range=${encodeURIComponent(name)}`);
+  const [current, setCurrent] = useState<number | null>(chatId ?? null);
   const [mode, setMode] = useState<Mode>("question");
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
-  const info = useApi<{ configured: boolean; model: string }>("/api/builder");
-  const end = useRef<HTMLDivElement>(null);
-  const current = useMemo(() => MODES.find((m) => m.mode === mode)!, [mode]);
+  const refreshMap = () => get<View>(`/api/ranges/${name}/draft`).then(onView).catch(() => undefined);
+  const ctl = useChat(current, (m) => { if (m.meta.draft_changed) refreshMap(); });
+  const def = useMemo(() => MODES.find((m) => m.mode === mode)!, [mode]);
 
-  useEffect(() => { get<{ messages: ChatMessage[] }>(`/api/ranges/${name}/chat`).then((r) => setMessages(r.messages)).catch(setErr); }, [name]);
-  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages, busy]);
+  useEffect(() => { if (chatId) setCurrent(chatId); }, [chatId]);
+  useEffect(() => {                                   // open the newest conversation about this range
+    if (current === null && list.data?.chats.length) setCurrent(list.data.chats[0].id);
+  }, [list.data]);
 
-  const send = async () => {
-    const msg = text.trim();
-    if (!msg || busy) return;
-    setBusy(true); setErr(null); setText("");
-    setMessages((m) => [...m, { id: -1, ts: Date.now() / 1000, username: "you", role: "user", mode, content: msg, meta: {} }]);
+  const send = async (msg: string, as: Mode = mode) => {
+    msg = msg.trim();
+    if (!msg || sending || ctl.busy) return;
+    setSending(true); setErr(null);
     try {
-      const r = await post<{ message: ChatMessage; draft: Draft | null; topology: Topology }>(`/api/ranges/${name}/chat`, { mode, message: msg });
-      setMessages((m) => [...m, r.message]);
-      if (mode !== "question") onView({ draft: r.draft, topology: r.topology });
-    } catch (e) {
-      setErr(e as ApiError);
-      setMessages((m) => m.filter((x) => x.id !== -1));
-      setText(msg);
-    } finally { setBusy(false); }
+      if (!ctl.chat) {
+        const c = await post<{ id: number }>("/api/chats", { kind: "range", range: name });
+        await post(`/api/chats/${c.id}/messages`, { message: msg, mode: as });
+        setCurrent(c.id);
+        list.reload();
+      } else {
+        await ctl.send(msg, as);
+      }
+      setText("");
+    } catch (e) { setErr(e as ApiError); }
+    finally { setSending(false); }
   };
-  const clear = async () => {
-    if (!window.confirm("Clear this range's conversation for everyone?")) return;
-    try { await del(`/api/ranges/${name}/chat`); setMessages([]); } catch (e) { setErr(e as ApiError); }
-  };
+  const chat = ctl.chat;
+  const readonly = !!chat?.readonly;
+  const lastMode = chat?.messages.filter((m) => m.role === "user").slice(-1)[0]?.mode ?? mode;
 
   return (
     <aside className="range-chat card" aria-label="Range chat">
       <div className="card-head">
         <h2>Chat</h2>
-        <span className="muted small grow" style={{ marginLeft: 8 }}>{info.data?.model}</span>
-        {messages.length > 0 && <button className="btn ghost small" onClick={clear}>Clear</button>}
+        <select className="chat-pick grow" value={current ?? ""} aria-label="Conversation"
+          onChange={(e) => setCurrent(e.target.value ? Number(e.target.value) : null)}>
+          <option value="">New conversation</option>
+          {(list.data?.chats ?? []).map((c) => <option key={c.id} value={c.id}>{c.title || `Conversation ${c.id}`}</option>)}
+        </select>
         <button className="btn ghost small" onClick={onClose} aria-label="Close chat">✕</button>
       </div>
       {info.data && !info.data.configured ? (
@@ -423,48 +428,31 @@ function RangeChat({ name, onView, onReview, onClose }: { name: string; onView: 
               <button key={m.mode} role="tab" aria-selected={mode === m.mode} className={mode === m.mode ? "active" : ""} onClick={() => setMode(m.mode)}>{m.label}</button>
             ))}
           </div>
-          <div className="muted small" style={{ padding: "0 12px" }}>{current.hint}</div>
+          <div className="muted small" style={{ padding: "0 12px" }}>{def.hint}</div>
+          {mode === "code" && chat && !readonly && (
+            <label className="allow-all small">
+              <input type="checkbox" checked={chat.allow_all} onChange={(e) => {
+                if (!e.target.checked || window.confirm("Let the assistant run commands and other changes in this chat without asking first?"))
+                  ctl.setAllowAll(e.target.checked).catch((x) => setErr(x as ApiError));
+              }} /> Run changes without asking (this conversation)
+            </label>
+          )}
           <div className="chat-log range">
-            {messages.length === 0 && <div className="muted small">Ask about this range or describe a change. The conversation is kept with the range.</div>}
-            {messages.map((m, i) => <ChatBubble key={m.id === -1 ? `p${i}` : m.id} m={m} onReview={onReview} />)}
-            {busy && <div className="bubble assistant"><span className="spinner" /> {mode === "question" ? "Thinking…" : "Writing and checking the change…"}</div>}
-            <div ref={end} />
+            {chat ? <ChatLog chat={chat} ctl={ctl} onReview={onReview} onAnswer={(a) => send(a, lastMode)}
+              empty={<div className="muted small">Ask about this range or describe a change. Conversations are saved (Chats page).</div>} />
+              : <div className="muted small">Ask about this range or describe a change. Conversations are saved (Chats page).</div>}
           </div>
-          <ErrorBox error={err} />
-          <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(); }}>
-            <textarea rows={3} value={text} disabled={busy} placeholder={current.placeholder} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-            <button className="btn primary" disabled={busy || !text.trim()}>Send</button>
-          </form>
+          <ErrorBox error={err ?? ctl.error} />
+          {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (
+            <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(text); }}>
+              <textarea rows={3} value={text} disabled={sending || ctl.busy} placeholder={ctl.busy ? "The assistant is working…" : def.placeholder}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }} />
+              <button className="btn primary" disabled={sending || ctl.busy || !text.trim()}>Send</button>
+            </form>
+          )}
         </>
       )}
     </aside>
-  );
-}
-
-function ChatBubble({ m, onReview }: { m: ChatMessage; onReview: () => void }) {
-  if (m.role === "user") {
-    return <div className="bubble user"><span className="mode-tag">{m.mode}</span>{m.content}</div>;
-  }
-  const meta = m.meta ?? {};
-  return (
-    <div className="bubble assistant">
-      <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
-      {!!meta.problems?.length && <div className="alert warn small" style={{ marginTop: 8 }}>Not applied - the spec still has problems: {meta.problems.join("; ")}</div>}
-      <CheckNotes fixed={meta.fixed} warnings={meta.warnings} />
-      {meta.draft && (
-        <div className="row small" style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
-          Draft: {Object.entries(meta.draft).map(([k, v]) => <span key={k} className={`badge c-${k}`}>{v} {k}</span>)}
-        </div>
-      )}
-      {meta.plan && (
-        <div className="small" style={{ marginTop: 8 }}>
-          <b>VALOR's plan</b>
-          <ul className="plan-list">{meta.plan.actions.map((a) => <li key={a.host}><span className={`badge c-${a.action === "converge" ? "update" : a.action}`}>{a.action}</span> {a.host}{a.reasons.length ? ` - ${a.reasons.join("; ")}` : ""}</li>)}</ul>
-          <button className="btn small primary" onClick={onReview}>Review and approve…</button>
-        </div>
-      )}
-      {meta.diff && <pre className="diff mono">{meta.diff.split("\n").map((l, i) => <span key={i} className={l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : ""}>{l}{"\n"}</span>)}</pre>}
-    </div>
   );
 }

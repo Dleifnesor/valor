@@ -17,6 +17,7 @@ import { Account } from "./pages/Account";
 import { Library } from "./pages/Library";
 import { Blueprints } from "./pages/Blueprints";
 import { Builder } from "./pages/Builder";
+import { Chats } from "./pages/Chats";
 // The console page carries noVNC and xterm.js: loaded only when a console is opened.
 const ConsolePage = lazy(() => import("./pages/Console").then((m) => ({ default: m.ConsolePage })));
 
@@ -58,6 +59,7 @@ const NAV: { path: string; label: string; icon: Parameters<typeof Icon>[0]["name
   { path: "dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "ranges", label: "Ranges", icon: "ranges" },
   { path: "builder", label: "Chat builder", icon: "chat" },
+  { path: "chats", label: "Chats", icon: "chats" },
   { path: "blueprints", label: "Blueprints", icon: "copy" },
   { path: "jobs", label: "Jobs", icon: "jobs" },
   { path: "library", label: "ISO library", icon: "disc" },
@@ -139,13 +141,17 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
     page = <RangeEditor name={p1} canEdit={can("operator")} />;
   } else if (p0 === "ranges" && p1) {
     title = `Range ${p1}`;
-    page = <RangeDetail name={p1} canOperate={can("operator")} />;
+    page = <RangeDetail key={p1} name={p1} canOperate={can("operator")} chatId={p2 === "chat" && p3 ? Number(p3) : undefined} />;
   } else if (p0 === "ranges") {
     title = "Ranges";
     page = <Ranges canOperate={can("operator")} />;
   } else if (p0 === "builder") {
     title = "Chat builder";
-    page = can("operator") ? <Builder isAdmin={isAdmin} /> : <div className="alert warn">The chat builder needs the operator role.</div>;
+    page = can("operator") || p1 ? <Builder key={p1 ?? "new"} isAdmin={isAdmin} chatId={p1 ? Number(p1) : null} />
+      : <div className="alert warn">The chat builder needs the operator role.</div>;
+  } else if (p0 === "chats") {
+    title = "Chats";
+    page = <Chats isAdmin={isAdmin} />;
   } else if (p0 === "blueprints") {
     title = "Blueprints";
     page = <Blueprints canOperate={can("operator")} />;

@@ -34,7 +34,7 @@ interface Detail {
 
 const TABS = ["Map", "Hosts", "Access", "Snapshots", "Tests", "Verification", "Spec", "Journal", "History"] as const;
 
-export function RangeDetail({ name, canOperate }: { name: string; canOperate: boolean }) {
+export function RangeDetail({ name, canOperate, chatId }: { name: string; canOperate: boolean; chatId?: number }) {
   const { data, error, loading, reload } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
   const [tab, setTab] = useState<(typeof TABS)[number]>("Map");
   const [planning, setPlanning] = useState(false);
@@ -105,7 +105,7 @@ export function RangeDetail({ name, canOperate }: { name: string; canOperate: bo
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
           ))}
         </div>
-        {tab === "Map" && <RangeMapTab name={name} canOperate={canOperate}
+        {tab === "Map" && <RangeMapTab name={name} canOperate={canOperate} chatId={chatId}
           onConsole={canOperate ? (h) => go(`ranges/${name}/console/${h}/vnc`) : undefined} />}
         {tab === "Hosts" && <Hosts data={data} canOperate={canOperate} onError={setActionError} />}
         {tab === "Access" && <AccessTab range={name} canOperate={canOperate} />}

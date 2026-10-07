@@ -381,3 +381,46 @@ ul.evidence li.bad { color: var(--bad); }
   table.compliance td { border: 0; padding: 0 4px; }
   table.compliance td:last-child { grid-column: 1 / -1; }
 }
+
+/* chats: live feed of an answer (reasoning, tool calls, checks), approval and question cards */
+.bubble.assistant { width: 100%; max-width: 100%; box-sizing: border-box; }
+.bubble.user { white-space: pre-wrap; }
+.feed { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.step { font-size: 13px; }
+.step > summary { cursor: pointer; display: flex; gap: 6px; align-items: baseline; list-style: none; min-width: 0; }
+.step > summary::-webkit-details-marker { display: none; }
+.step > summary::before { content: "▸"; color: var(--muted); width: 10px; flex: none; transition: transform .15s; }
+.step[open] > summary::before { transform: rotate(90deg); }
+.step-icon { width: 16px; flex: none; text-align: center; }
+.step-icon.done { color: var(--ok); } .step-icon.failed { color: var(--bad); } .step-icon.pending { color: var(--warn); }
+.step-icon.denied, .step-icon.refused, .step-icon.cancelled { color: var(--muted); }
+.step-icon .spinner { width: 10px; height: 10px; }
+.step-name { font-weight: 600; flex: none; }
+.step-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.step-meta { flex: none; }
+.step-body { margin: 4px 0 6px 16px; }
+.step-code, .step-output { max-height: 260px; overflow: auto; font-size: 12px; padding: 6px 8px; margin: 4px 0;
+  background: var(--code-bg, rgba(127,127,127,.08)); border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.step.thinking .thinking-text { margin: 4px 0 6px 16px; color: var(--muted); font-size: 12px; white-space: pre-wrap;
+  max-height: 240px; overflow: auto; border-left: 2px solid var(--border); padding-left: 8px; }
+.step.text { color: var(--muted); white-space: pre-wrap; }
+.step.check { border-left: 2px solid var(--warn); padding-left: 8px; }
+.answer { white-space: pre-wrap; }
+.usage { font-size: 11px; margin-top: 6px; text-align: right; }
+.approval { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); }
+.approval ul { margin: 6px 0 8px; padding-left: 18px; }
+.approval .mono { font-size: 12px; word-break: break-word; }
+.questions { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.question { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0; }
+.question legend { font-weight: 600; padding: 0 4px; }
+.question .options { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.question .option { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 16px;
+  padding: 4px 10px; cursor: pointer; font-size: 13px; }
+.question .option.on { border-color: var(--accent); background: var(--info-soft); }
+.question .option input { margin: 0; }
+.question .other { flex: 1; min-width: 140px; font-size: 13px; }
+ol.asked { margin: 8px 0 0; padding-left: 18px; }
+.allow-all { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; }
+.chat-pick { max-width: 210px; margin: 0 6px; font-size: 13px; }
+.seg-control.compact { margin: 0; }
+.seg-control.compact button { padding: 3px 10px; }
