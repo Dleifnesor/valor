@@ -1,0 +1,12 @@
+description: >
+  Mail server (Postfix) accepting mail for the range's domain from range hosts and delivering it to local mailboxes
+  (/var/mail/<user>)
+families: [debian, rhel]
+ports: [25]
+params:
+  domain:
+    default: ""
+    description: Mail domain (default <range name>.lab)
+  allow_from:
+    default: ""
+    description: Hosts or segments that may send mail through it (default every private network)

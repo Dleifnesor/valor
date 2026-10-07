@@ -38,7 +38,7 @@ class AiSettingsIn(_In):
     model: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9._:/-]*$")
     base_url: str = Field(default="", max_length=512)
     api_key: str | None = Field(default=None, max_length=512)
-    max_tokens: int = Field(default=ai.DEFAULTS["max_tokens"], ge=1024, le=64000)
+    max_tokens: int = Field(default=ai.DEFAULTS["max_tokens"], ge=1024, le=128000)
     daily_tokens_per_user: int = Field(default=400_000, ge=0, le=100_000_000)
     timeout: int = Field(default=ai.DEFAULTS["timeout"], ge=30, le=900)
 
@@ -126,7 +126,19 @@ def test_ai(request: Request, s: Session = Depends(require("admin"))) -> dict:
         raise ApiError(409 if e.code == "ai_not_configured" else 502, e.code, e.message, hint=e.hint)
     _record(s, st, r.input_tokens, r.output_tokens, True)
     s.audit("settings.ai.test", detail={"model": st["model"]})
-    return {"ok": True, "seconds": round(time.time() - t0, 1), "model": st["model"], "reply": r.text[:200]}
+    cfg = _cfg(request)
+    try:
+        pve = PVE(cfg)
+    except ValorError:
+        pve = None
+    prompt = len(ai.builder_prompt(reference_for(cfg, pve))) // 4          # ~4 characters per token
+    ctx = prov.context_length()
+    need = prompt + int(st.get("max_tokens") or ai.DEFAULTS["max_tokens"]) // 2
+    advice = (f"The model is loaded with a {ctx:,}-token context, but VALOR's prompt alone is about {prompt:,} tokens "
+              f"and answers need room too: load it with a Context Length of at least {max(32768, need):,}."
+              if ctx and ctx < need else "")
+    return {"ok": True, "seconds": round(time.time() - t0, 1), "model": st["model"], "reply": r.text[:200],
+            "context_length": ctx, "prompt_tokens": prompt, "advice": advice}
 
 
 @router.get("/settings/ai/usage")
@@ -240,7 +252,7 @@ def run_ai(s: Session, st: dict, fn):
     except ValorError as e:
         used = e.details if isinstance(e.details, dict) else {}
         _record(s, st, int(used.get("input_tokens", 0)), int(used.get("output_tokens", 0)), False)
-        status = 422 if e.code == "ai_truncated" else 502 if e.code.startswith("ai_") else 400
+        status = 422 if e.code in ("ai_truncated", "ai_context_full") else 502 if e.code.startswith("ai_") else 400
         raise ApiError(status, e.code, e.message, hint=e.hint)
     _record(s, st, res["input_tokens"], res["output_tokens"], not res.get("problems"))
     return res

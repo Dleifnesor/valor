@@ -25,7 +25,7 @@ def prep_script(name: str, address: str, prefix: int, gateway: str, dns: list[st
     return f"""
 $cs = Get-CimInstance Win32_ComputerSystem
 # the VM's hardware clock is UTC (Proxmox localtime=0): keep it so if someone changes the time zone
-New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' -Name RealTimeIsUniversal `
+New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation' -Name RealTimeIsUniversal `
   -Value 1 -PropertyType DWord -Force | Out-Null
 {pw}
 $nic = Get-NetAdapter -Physical | Sort-Object ifIndex | Select-Object -First 1
@@ -68,9 +68,21 @@ function Set-DnsByRole([string[]]$servers) {
   if (($cur -join ',') -ne ($servers -join ',')) {
     Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $servers; Changed
   }
-  New-Item -Path 'HKLM:\SOFTWARE\VALOR' -Force | Out-Null
+  if (-not (Test-Path 'HKLM:\SOFTWARE\VALOR')) { New-Item -Path 'HKLM:\SOFTWARE\VALOR' | Out-Null }
   New-ItemProperty -Path 'HKLM:\SOFTWARE\VALOR' -Name DnsByRole -Value ($servers -join ',') -Force | Out-Null
 }
+function Open-TcpPort([int]$port) {
+  # Allow inbound TCP to a port in Windows Firewall (every profile)
+  $n = "VALOR-TCP-$port"
+  if (-not (Get-NetFirewallRule -Name $n -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -Name $n -DisplayName "VALOR TCP $port" -Direction Inbound -Protocol TCP -LocalPort $port `
+      -Action Allow -Profile Any | Out-Null; Changed
+  }
+}
+function Wait-Port([int]$port, [int]$seconds = 120) {
+  Wait-Until { Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue } $seconds "TCP port $port"
+}
+function Get-Words([string]$s) { @(($s -split '\s+') | Where-Object { $_ }) }
 function Wait-Until([scriptblock]$test, [int]$seconds = 600, [string]$what = 'condition') {
   $end = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $end) { try { if (& $test) { return } } catch {} ; Start-Sleep -Seconds 5 }

@@ -1,0 +1,15 @@
+description: >
+  DNS server (BIND) with a zone naming every host of the range, answering and forwarding queries for range clients.
+  Clients use UDP and TCP 53: allow both in the policy.
+families: [debian, rhel]
+ports: [53]
+params:
+  zone:
+    default: ""
+    description: The range's DNS zone (default <range name>.lab); every host gets <host>.<zone>
+  allow_from:
+    default: ""
+    description: Hosts or segments that may query (default every private network)
+  forwarders:
+    default: ""
+    description: Upstream resolvers for other names, addresses or host names (default VALOR's nameservers)

@@ -1,92 +1,121 @@
+# *puts on a tiny hard hat* OwO baselines/ubuntu-l1.yaml: the default Linux HARDENING profile! Every Linux host of
+# a range gets these controls (unless the spec says `baseline: none`). valor/baseline.py loads this file and
+# bundles each control's `check` and `fix` shell snippets into one script that runs on the host ^w^
+# `id` is the name specs use (baseline: ubuntu-l1); `title` is shown in the UI and reports UwU *wags tail*
 id: ubuntu-l1
 title: Linux hardening baseline - Ubuntu, Debian, Kali, Rocky, Alma (aligned with common CIS Level 1 themes)
 # Results are reported as "aligned with" these themes - never as a certified benchmark implementation.
 # Controls branch on $VALOR_FAMILY (debian | rhel) where the two families differ (packages, update tooling).
+# claim: aligned-with, so reports never claim a certified benchmark >w<
 claim: aligned-with
+# families: which Linux families it supports (Debian-like and RHEL-like) OwO
 families: [debian, rhel]
 # Each control: `check` reads the system's effective state (exit 0 = compliant);
 # `fix` changes the system idempotently. Fixes run during the build; checks run again during verification.
 # `reference` is recorded only from vendor/upstream documentation; `theme` names the CIS L1 theme.
+# *lines up the controls* each control has an id (used by frameworks.yaml and the reports), an area (grouping in
+# the UI), a title, the CIS theme, a vendor reference, `applies_to` (all, router, or non-router hosts), and the
+# check/fix snippets ^w^
 controls:
+  # *guards the SSH door* nobody may log in over SSH as root directly UwU
   - id: ssh-root-login
     area: SSH
     title: SSH root login disabled
     theme: CIS Level 1 - SSH server configuration
     reference: "OpenSSH sshd_config(5): PermitRootLogin"
     applies_to: all
+    # check: ask sshd for its EFFECTIVE settings (sshd -T) and look for "permitrootlogin no" >w<
     check: |
       sshd -T 2>/dev/null | grep -qx 'permitrootlogin no'
+    # fix: in VALOR's own drop-in file (01- so it wins over later files), replace any old PermitRootLogin line, keep the
+    # file private, and reload sshd only if the new config is valid OwO
     fix: |
       f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
       grep -v -i '^PermitRootLogin ' "$f" > "$f.new"; echo 'PermitRootLogin no' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
       sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
 
+  # *hides the password field* SSH only accepts keys, no passwords (stops password guessing) ^w^
   - id: ssh-password-auth
     area: SSH
     title: SSH password authentication disabled
     theme: CIS Level 1 - SSH server configuration
     reference: "OpenSSH sshd_config(5): PasswordAuthentication, KbdInteractiveAuthentication"
     applies_to: all
+    # check: both password and keyboard-interactive logins are off in the effective config UwU
     check: |
       sshd -T 2>/dev/null | grep -qx 'passwordauthentication no' && sshd -T 2>/dev/null | grep -qx 'kbdinteractiveauthentication no'
+    # fix: the same drop-in file trick, for both settings >w<
     fix: |
       f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
       grep -v -i -E '^(PasswordAuthentication|KbdInteractiveAuthentication) ' "$f" > "$f.new"
       printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
       sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
 
+  # *counts the tries on its paws* at most 4 authentication attempts per SSH connection OwO
   - id: ssh-max-auth-tries
     area: SSH
     title: SSH authentication attempts limited (4 or fewer)
     theme: CIS Level 1 - SSH server configuration
     reference: "OpenSSH sshd_config(5): MaxAuthTries"
     applies_to: all
+    # check: the effective MaxAuthTries is set and 4 or lower ^w^
     check: |
       v=$(sshd -T 2>/dev/null | awk '$1=="maxauthtries"{print $2}'); [ -n "$v" ] && [ "$v" -le 4 ]
+    # fix: write MaxAuthTries 4 into the drop-in file UwU
     fix: |
       f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
       grep -v -i '^MaxAuthTries ' "$f" > "$f.new"; echo 'MaxAuthTries 4' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
       sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
 
+  # *sniffs the file permissions* SSH config files belong to root and nobody else may read them >w<
   - id: ssh-config-permissions
     area: SSH
     title: SSH server configuration files owned by root, not readable by others
     theme: CIS Level 1 - SSH server configuration
     reference: "OpenSSH sshd(8): FILES (sshd_config must be writable only by root)"
     applies_to: all
+    # check: every sshd config file is root:root and its mode has no group/other bits (mode & 077 == 0) OwO
     check: |
       for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf; do
         [ -e "$f" ] || continue
         [ "$(stat -c '%U:%G' "$f")" = root:root ] || exit 1
         [ $(( 0$(stat -c '%a' "$f") & 077 )) -eq 0 ] || exit 1
       done
+    # fix: chown root:root and chmod 600 each one ^w^
     fix: |
       for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf; do [ -e "$f" ] && chown root:root "$f" && chmod 600 "$f"; done
 
+  # *shuffles the memory map* full ASLR makes memory-corruption exploits much harder UwU
   - id: kernel-aslr
     area: Kernel
     title: Full address space layout randomization (kernel.randomize_va_space = 2)
     theme: CIS Level 1 - process hardening
     reference: "Linux kernel admin-guide, sysctl/kernel: randomize_va_space"
     applies_to: all
+    # check: the live value is 2 AND it is saved in VALOR's sysctl file (so it survives a reboot) >w<
     check: |
       [ "$(sysctl -n kernel.randomize_va_space)" = 2 ] && grep -qs '^kernel.randomize_va_space = 2' /etc/sysctl.d/60-valor-baseline.conf
+    # fix: save it in the sysctl file (replacing any old line) and apply it now OwO
     fix: |
       f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
       grep -v '^kernel.randomize_va_space' "$f" > "$f.new"; echo 'kernel.randomize_va_space = 2' >> "$f.new"; mv "$f.new" "$f"
       sysctl -q -w kernel.randomize_va_space=2
 
+  # *hides the crash dumps* setuid programs must not dump core (dumps could leak their secrets) ^w^
   - id: kernel-suid-dumpable
     area: Kernel
     title: Core dumps of setuid programs disabled (fs.suid_dumpable = 0), also after reboots
     theme: CIS Level 1 - process hardening; automatic error reporting not enabled
     reference: "Linux kernel admin-guide, sysctl/fs: suid_dumpable; Ubuntu apport(8) - apport sets suid_dumpable=2 when it starts"
     applies_to: all
+    # check: the value is 0 and saved; and on Ubuntu, apport (which sets it back to 2 when it starts) is masked and
+    # not running UwU
     check: |
       [ "$(sysctl -n fs.suid_dumpable)" = 0 ] && grep -qs '^fs.suid_dumpable = 0' /etc/sysctl.d/60-valor-baseline.conf || exit 1
       if systemctl cat apport.service >/dev/null 2>&1; then
         [ "$(systemctl is-enabled apport.service 2>/dev/null)" = masked ] && ! systemctl is-active -q apport.service
       fi
+    # fix: stop and mask apport (and switch it off in its defaults file), then save and apply the setting >w<
     fix: |
       if systemctl cat apport.service >/dev/null 2>&1; then
         systemctl stop apport.service 2>/dev/null || true
@@ -97,29 +126,39 @@ controls:
       grep -v '^fs.suid_dumpable' "$f" > "$f.new"; echo 'fs.suid_dumpable = 0' >> "$f.new"; mv "$f.new" "$f"
       sysctl -q -w fs.suid_dumpable=0
 
+  # *closes the side gate* a host that isn't a router must not forward packets between networks OwO
   - id: ip-forwarding-disabled
     area: Kernel
-    title: IP forwarding disabled (not a router)
+    title: IP forwarding disabled (not a router; container hosts are exempt - their engine forwards to containers)
     theme: CIS Level 1 - network parameters (host only)
     reference: "Linux kernel networking/ip-sysctl: ip_forward, conf/all/forwarding"
     applies_to: non-router
+    # /etc/valor/container-host is written by the container roles: published ports need forwarding into the
+    # container network, like a router (the exemption is shown in the control's title)
+    # check: container hosts pass right away; others need IPv4 and IPv6 forwarding off and saved ^w^
     check: |
+      [ -f /etc/valor/container-host ] && exit 0
       [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ] && [ "$(sysctl -n net.ipv6.conf.all.forwarding)" = 0 ] && grep -qs '^net.ipv4.ip_forward = 0' /etc/sysctl.d/60-valor-baseline.conf
+    # fix: skip container hosts; otherwise save both settings and apply them now UwU
     fix: |
+      [ -f /etc/valor/container-host ] && exit 0
       f=/etc/sysctl.d/60-valor-baseline.conf; touch "$f"
       grep -v -E '^net.ipv(4.ip_forward|6.conf.all.forwarding)' "$f" > "$f.new"
       printf 'net.ipv4.ip_forward = 0\nnet.ipv6.conf.all.forwarding = 0\n' >> "$f.new"; mv "$f.new" "$f"
       sysctl -q -w net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
 
+  # *takes notes on everything* the Linux audit daemon must be installed, enabled and running >w<
   - id: auditd-running
     area: Auditing
     title: auditd installed, enabled and running
     theme: CIS Level 1 - system auditing
     reference: "auditd(8) manual page"
     applies_to: all
+    # check: the package (auditd, or audit on RHEL) is installed and the service is enabled and active OwO
     check: |
       pkg=auditd; [ $VALOR_FAMILY = rhel ] && pkg=audit
       installed "$pkg" && systemctl is-enabled -q auditd && systemctl is-active -q auditd
+    # fix: install it if missing, enable it, and start it ^w^
     fix: |
       pkg=auditd; [ $VALOR_FAMILY = rhel ] && pkg=audit
       installed "$pkg" || pkg_install "$pkg"
@@ -127,12 +166,14 @@ controls:
       # auditd refuses 'systemctl start' when RefuseManualStart is set (RHEL); 'service' is the supported way
       systemctl is-active -q auditd || systemctl start auditd 2>/dev/null || service auditd start
 
+  # *keeps its fur clean* security updates must install by themselves UwU
   - id: automatic-security-updates
     area: Patching
     title: Automatic security updates installed and enabled
     theme: CIS Level 1 - software updates
     reference: "Debian/Ubuntu unattended-upgrades (APT::Periodic::Unattended-Upgrade); dnf-automatic(8) (apply_updates, upgrade_type)"
     applies_to: all
+    # check: RHEL: dnf-automatic applies security updates and its timer is on; Debian: unattended-upgrades runs >w<
     check: |
       if [ $VALOR_FAMILY = rhel ]; then
         installed dnf-automatic && grep -qE '^apply_updates\s*=\s*yes' /etc/dnf/automatic.conf \
@@ -140,6 +181,7 @@ controls:
       else
         installed unattended-upgrades && apt-config dump | grep -q '^APT::Periodic::Unattended-Upgrade "1";'
       fi
+    # fix: install the tool and switch it on (sed the dnf settings, or write APT's periodic settings) OwO
     fix: |
       if [ $VALOR_FAMILY = rhel ]; then
         installed dnf-automatic || pkg_install dnf-automatic
@@ -150,13 +192,17 @@ controls:
         printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
       fi
 
+  # *checks the shared toy box* /tmp is shared by everyone, so the sticky bit must stop users deleting each
+  # other's files ^w^
   - id: tmp-sticky-bit
     area: Filesystem
     title: /tmp is world-writable only with the sticky bit set (mode 1777)
     theme: CIS Level 1 - filesystem configuration
     reference: "Filesystem Hierarchy Standard 3.0, /tmp; chmod(1): restricted deletion flag"
     applies_to: all
+    # check: the sticky bit is set and the mode is exactly 1777 UwU
     check: |
       [ -k /tmp ] && [ "$(stat -c %a /tmp)" = 1777 ]
+    # fix: set mode 1777 >w<
     fix: |
       chmod 1777 /tmp

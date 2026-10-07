@@ -1,0 +1,12 @@
+description: >
+  SMB file share on Windows (C:\Shares\<share>): full control for Administrators, change (or read) access for
+  authenticated users - domain users on domain members
+families: [windows]
+ports: [445]
+params:
+  share:
+    default: Share
+    description: Share name
+  read_only:
+    default: false
+    description: Authenticated users may only read

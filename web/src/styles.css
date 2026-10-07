@@ -363,3 +363,8 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .check-notes { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .check-notes summary { cursor: pointer; }
 .check-notes ul { margin: 4px 0 0; padding-left: 18px; }
+.scripts-review { padding: 12px 14px; border-color: var(--warn, #b7791f); }
+.scripts-review h3 { margin: 0 0 4px; font-size: 14px; }
+.scripts-review pre.script { max-height: 260px; overflow: auto; font-size: 12px; padding: 8px 10px; margin: 4px 0 10px;
+  background: var(--code-bg, rgba(127,127,127,.08)); border-radius: 6px; white-space: pre; }
+.rule-item + .rule-item { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }

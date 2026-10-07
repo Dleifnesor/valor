@@ -353,6 +353,7 @@ def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps, lo
                         break
                     windows_reboot(pve, vmid)
             else:
+                env["VALOR_NAMESERVERS"] = " ".join(cfg.nameservers)
                 res = pve.script(vmid, build_script(role, env), timeout=1800)
                 changed = "VALOR-ROLE-CHANGED=1" in res.out
             if not res.ok:

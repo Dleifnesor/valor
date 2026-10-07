@@ -13,7 +13,7 @@ from ..blueprints import _taken
 from ..cluster import range_vms, vlans_in_use
 from ..errors import ValorError
 from ..pve import PVE
-from ..roles import load_role
+from ..roles import load_role, role_ports
 from ..spec import MAX_SPEC_BYTES, normalize, parse_spec
 from . import topology
 from .core import ApiError, Session, require
@@ -129,14 +129,17 @@ def edit(name: str, body: OpsIn, request: Request, s: Session = Depends(require(
     _, saved = _load(cfg, _name(name))
     d = drafts.load(cfg, name)
     base = parse_spec(d[0] if d else saved)             # unnormalized: hosts without an OS keep the default
-    ports = {}
+    loaded = {}
     for o in body.ops:
         for r in [o.role, *(x.name for x in o.roles)]:
-            if r and r not in ports:
+            if r and r not in loaded:
                 try:
-                    ports[r] = load_role(cfg.roles_dir, r).meta.get("ports") or []
+                    loaded[r] = load_role(cfg.roles_dir, r)
                 except ValorError:
                     raise ApiError(400, "unknown_role", f"There is no service (role) '{r}'.")
+
+    def ports(role: str, params: dict) -> list[int]:
+        return role_ports(loaded[role], params) if role in loaded else []
     try:
         segment_ops = any(o.op in ("add_segment", "update_segment") for o in body.ops)
         data = drafts.apply_ops(base, [o.model_dump(exclude_none=True, by_alias=True) for o in body.ops], ports,

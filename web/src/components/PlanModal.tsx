@@ -16,11 +16,14 @@ export interface PlanResponse {
   plan?: Plan;
   plan_hash?: string;
   topology: Topology;
+  scripts?: { host: string; os?: string; script: string; ports?: string }[];
 }
 
 export function PlanModal({ name, res, onClose, draft }: { name: string; res: PlanResponse; onClose: () => void; draft?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
+  const [ack, setAck] = useState(false);
+  const scripts = res.ok ? res.scripts ?? [] : [];
   const approve = async () => {
     setBusy(true);
     setErr(null);
@@ -43,7 +46,7 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
       <>
         <button className="btn" onClick={onClose}>Close</button>
         {res.ok && p?.changes && (
-          <button className="btn primary" onClick={approve} disabled={busy}>
+          <button className="btn primary" onClick={approve} disabled={busy || (scripts.length > 0 && !ack)}>
             {busy ? <><span className="spinner" /> Starting…</> : "Approve and build"}
           </button>
         )}
@@ -81,6 +84,23 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {scripts.length > 0 && p?.changes && (
+        <div className="card scripts-review">
+          <h3>Custom scripts this plan runs</h3>
+          <p className="small muted">
+            These run as root (Linux) or SYSTEM (Windows) on the hosts below while the range has internet access for the
+            build. Read them before approving.
+          </p>
+          {scripts.map((s, i) => (
+            <div key={i}>
+              <div className="small"><b>{s.host}</b> <span className="muted">{s.os ?? ""}{s.ports ? ` · ports ${s.ports}` : ""}</span></div>
+              <pre className="script">{s.script}</pre>
+            </div>
+          ))}
+          <label className="row small"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+            I have read the custom scripts and want to run them</label>
         </div>
       )}
       <ErrorBox error={err} />

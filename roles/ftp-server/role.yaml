@@ -1,0 +1,15 @@
+# *carries files in its mouth* OwO roles/ftp-server/role.yaml: metadata for ftp-server (vsftpd) for local users
+# and, optionally, anonymous read-only downloads ^w^
+description: >
+  FTP server (vsftpd) for local users (on Linux hosts the range login 'valor') and, optionally, anonymous read-only
+  downloads; passive data ports 40000-40100 - allow tcp 21 and 40000-40100 in the policy
+# Linux only UwU
+families: [debian, rhel]
+# Port 21 is its control port (the script also opens the passive data ports 40000-40100 on Rocky/Alma) >w<
+ports: [21]
+# params: one setting OwO
+params:
+  # anonymous: allow anonymous read-only access to /srv/ftp (default off) *wags tail*
+  anonymous:
+    default: false
+    description: Allow anonymous read-only access (files in /srv/ftp)

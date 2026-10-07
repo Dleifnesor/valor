@@ -222,8 +222,11 @@ function AiSettings() {
   const test = async () => {
     setErr(null); setMsg({ ok: true, text: "Asking the model…" });
     try {
-      const r = await post<{ seconds: number; model: string; reply: string }>("/api/settings/ai/test");
-      setMsg({ ok: true, text: `${r.model} answered in ${r.seconds} s: "${r.reply}"` });
+      const r = await post<{ seconds: number; model: string; reply: string; context_length?: number | null;
+        prompt_tokens: number; advice: string }>("/api/settings/ai/test");
+      const ctx = r.context_length ? ` Context window: ${r.context_length.toLocaleString()} tokens;` : "";
+      setMsg({ ok: !r.advice, text: `${r.model} answered in ${r.seconds} s: "${r.reply}".${ctx} VALOR's prompt: about `
+        + `${r.prompt_tokens.toLocaleString()} tokens.${r.advice ? " " + r.advice : ""}` });
     } catch (e) { setErr(e as ApiError); setMsg(null); }
   };
   return (

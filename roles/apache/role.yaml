@@ -1,0 +1,13 @@
+# *sniffs the feather logo* OwO roles/apache/role.yaml: metadata for the apache role, the Apache web server with
+# a tiny page that names the host and range ^w^
+description: Apache HTTP server (apache2 / httpd) with a minimal site naming the host and range
+# Runs on Debian-family (apache2) and RHEL-family (httpd) hosts UwU
+families: [debian, rhel]
+# ports_param: instead of fixed ports, the served port comes from the `port` param >w<
+ports_param: port
+# params: just one setting OwO
+params:
+  # port: the TCP port Apache listens on (default 80) *wags tail*
+  port:
+    default: 80
+    description: TCP port Apache listens on
