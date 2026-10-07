@@ -1,0 +1,30 @@
+description: >
+  Windows Server roles and features (Install-WindowsFeature, e.g. DNS, DHCP, FS-FileServer, Web-Server, RSAT-AD-Tools)
+  or, on Windows 11, optional features; plus Windows capabilities (e.g. OpenSSH.Server~~~~0.0.1.0), services to start
+  and ports to open
+category: generic
+families: [windows]
+ports_param: ports
+params:
+  features:
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$'
+    default: ""
+    description: >
+      Feature names, space separated - Get-WindowsFeature names on Windows Server, Get-WindowsOptionalFeature names on
+      Windows 11; reboots when a feature needs it
+  capabilities:
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._~-]{0,120}$'
+    default: ""
+    description: Windows capabilities (Add-WindowsCapability names), downloaded from Windows Update during the build
+  services:
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$'
+    default: ""
+    description: Services to set to Automatic and start (e.g. sshd after OpenSSH.Server)
+  ports:
+    raw: true
+    pattern: '^[0-9]{1,5}$'
+    default: ""
+    description: TCP ports to open in Windows Firewall (inbound) and wait for

@@ -11,7 +11,8 @@ import { Change, TopoEdge, TopoNode, Topology as Topo } from "../types";
 const SEG_W = 250;
 const SEG_GAP = 64;
 const HEAD_H = 62;
-const HOST_H = 84;
+const HOST_BASE = 60;                     // title + OS line
+const CHIP_ROW = 20;                      // one row of role chips
 const HOST_GAP = 12;
 const PAD = 14;
 const ROUTER_W = 220;
@@ -111,6 +112,28 @@ function SegmentNode({ data }: NodeProps<Node<Data>>) {
 const nodeTypes = { host: HostNode, router: RouterNode, internet: InternetNode, segment: SegmentNode, vpn: VpnNode };
 const VPN_W = 190;
 
+// Height of a host card: its role chips wrap, so count the rows they need at the card's width.
+function hostHeight(h: TopoNode): number {
+  const roles = h.roles ?? [];
+  if (!roles.length) return HOST_BASE + 4;
+  const inner = SEG_W - 2 * PAD - 22;
+  let rows = 1, used = 0;
+  for (const r of roles) {
+    const w = 12 + r.length * 6.6 + 4;
+    if (used && used + w > inner) { rows += 1; used = 0; }
+    used += w;
+  }
+  return HOST_BASE + rows * CHIP_ROW + 4;
+}
+
+// Long port lists would cover the map: "tcp 80,8080,+5" (the side panel shows the rule in full)
+function shortLabel(label?: string): string | undefined {
+  if (!label || label.length <= 20) return label;
+  const [proto, ports = ""] = label.split(" ", 2);
+  const list = ports.split(",");
+  return list.length > 2 ? `${proto} ${list.slice(0, 2).join(",")},+${list.length - 2}` : `${label.slice(0, 18)}…`;
+}
+
 function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
   const segs = topo.nodes.filter((n) => n.kind === "segment");
   const hosts = topo.nodes.filter((n) => n.kind === "host");
@@ -138,25 +161,38 @@ function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
   }
   segs.forEach((s, i) => {
     const members = hosts.filter((h) => h.parent === s.id);
-    const height = HEAD_H + Math.max(1, members.length) * (HOST_H + HOST_GAP) + PAD - HOST_GAP + 6;
+    const heights = members.map(hostHeight);
+    const height = HEAD_H + (heights.length ? heights.reduce((a, b) => a + b + HOST_GAP, 0) : HOST_BASE + HOST_GAP)
+      + PAD - HOST_GAP + 6;
     const x = -total / 2 + i * (SEG_W + SEG_GAP);
     nodes.push({ id: s.id, type: "segment", position: { x, y: SEG_Y }, data: { raw: s },
       style: { width: SEG_W, height }, selectable: true });
     abs[s.id] = { x, y: SEG_Y, w: SEG_W };
+    let y = HEAD_H;
     members.forEach((h, j) => {
-      const rel = { x: PAD, y: HEAD_H + j * (HOST_H + HOST_GAP) };
+      const rel = { x: PAD, y };
       nodes.push({ id: h.id, type: "host", parentId: s.id, extent: "parent", position: rel, data: { raw: h },
-        style: { width: SEG_W - 2 * PAD, height: HOST_H } });
+        style: { width: SEG_W - 2 * PAD, height: heights[j] } });
       abs[h.id] = { x: x + rel.x, y: SEG_Y + rel.y, w: SEG_W - 2 * PAD };
+      y += heights[j] + HOST_GAP;
     });
   });
-  hosts.filter((h) => !h.parent).forEach((h, j) => {          // VMs a plan removes
-    const pos = { x: total / 2 + SEG_GAP, y: SEG_Y + j * (HOST_H + HOST_GAP) };
-    nodes.push({ id: h.id, type: "host", position: pos, data: { raw: h }, style: { width: SEG_W - 2 * PAD, height: HOST_H } });
+  let ry = SEG_Y;
+  hosts.filter((h) => !h.parent).forEach((h) => {             // VMs a plan removes
+    const pos = { x: total / 2 + SEG_GAP, y: ry };
+    nodes.push({ id: h.id, type: "host", position: pos, data: { raw: h }, style: { width: SEG_W - 2 * PAD, height: hostHeight(h) } });
     abs[h.id] = { ...pos, w: SEG_W - 2 * PAD };
+    ry += hostHeight(h) + HOST_GAP;
   });
 
   const edges: Edge[] = [];
+  // rules between the same two endpoints (either direction) share one curve: draw them as one arrow
+  const groups = new Map<string, TopoEdge[]>();
+  for (const e of topo.edges) {
+    if (e.kind !== "policy" || !abs[e.source] || !abs[e.target]) continue;
+    const k = [e.source, e.target].sort().join("|");
+    groups.set(k, [...(groups.get(k) ?? []), e]);
+  }
   for (const e of topo.edges) {
     if (e.kind === "egress" || !abs[e.source] || !abs[e.target]) continue;   // internet access is a badge on the segment
     if (e.kind === "vpn") {
@@ -174,12 +210,16 @@ function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
         labelBgStyle: { fill: "var(--surface)" } });
       continue;
     }
+    const group = groups.get([e.source, e.target].sort().join("|")) ?? [e];
+    if (group[0].id !== e.id) continue;
     const s = abs[e.source], t = abs[e.target];
     const leftToRight = s.x < t.x;
+    const both = group.some((g) => g.source !== e.source);
     edges.push({
       id: e.id, source: e.source, target: e.target, type: "default", animated: true,
       sourceHandle: leftToRight ? "rs" : "ls", targetHandle: leftToRight ? "lt" : "rt",
-      label: e.label, data: { description: e.description },
+      label: group.length > 1 ? `${group.length} rules` : shortLabel(e.label), data: { description: e.description, group },
+      ...(both ? { markerStart: { type: MarkerType.ArrowClosed, color: "var(--accent)", width: 16, height: 16 } } : {}),
       style: { stroke: "var(--accent)", strokeWidth: 1.8, strokeDasharray: "6 4" },
       markerEnd: { type: MarkerType.ArrowClosed, color: "var(--accent)", width: 16, height: 16 },
       labelStyle: { fontFamily: "var(--mono)", fontSize: 11, fill: "var(--accent-strong)", fontWeight: 600 },
@@ -203,7 +243,7 @@ export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, e
 }) {
   const { nodes, edges } = useMemo(() => layout(topology), [topology]);
   const [selected, setSelected] = useState<TopoNode | null>(null);
-  const [rule, setRule] = useState<TopoEdge | null>(null);
+  const [rules, setRules] = useState<TopoEdge[] | null>(null);
   const label = (id: string) => topology.nodes.find((n) => n.id === id)?.label ?? id.replace(/^(host|seg):/, "");
   const key = useMemo(() => topology.nodes.map((n) => n.id + (n.change ?? "")).join("|"), [topology]);
   const changes = topology.changes;
@@ -232,31 +272,35 @@ export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, e
         elementsSelectable
         minZoom={0.2}
         maxZoom={1.75}
-        onNodeClick={(_, n) => { setSelected((n.data as Data).raw); setRule(null); }}
+        onNodeClick={(_, n) => { setSelected((n.data as Data).raw); setRules(null); }}
         onEdgeClick={(_, e) => {
-          const raw = topology.edges.find((x) => x.id === e.id);
-          if (raw?.kind === "policy" && edgeActions) { setRule(raw); setSelected(null); }
+          const group = (e.data as { group?: TopoEdge[] } | undefined)?.group;
+          if (group?.length) { setRules(group); setSelected(null); }
         }}
-        onPaneClick={() => { setSelected(null); setRule(null); }}
+        onPaneClick={() => { setSelected(null); setRules(null); }}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={20} size={1} />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {rule && edgeActions && (
+      {rules && (
         <div className="side-panel card">
           <div className="card-head">
-            <h2>Traffic rule</h2>
-            <button className="btn ghost small" onClick={() => setRule(null)} aria-label="Close">✕</button>
+            <h2>{rules.length > 1 ? `${rules.length} traffic rules` : "Traffic rule"}</h2>
+            <button className="btn ghost small" onClick={() => setRules(null)} aria-label="Close">✕</button>
           </div>
           <div className="card-body">
-            <dl className="kv">
-              <dt>From</dt><dd>{label(rule.source)}</dd>
-              <dt>To</dt><dd>{label(rule.target)}</dd>
-              <dt>Allows</dt><dd className="mono">{rule.label}</dd>
-              {rule.description && <><dt>Why</dt><dd>{rule.description}</dd></>}
-            </dl>
-            {edgeActions(rule, () => setRule(null))}
+            {rules.map((rule) => (
+              <div key={rule.id} className="rule-item">
+                <dl className="kv">
+                  <dt>From</dt><dd>{label(rule.source)}</dd>
+                  <dt>To</dt><dd>{label(rule.target)}</dd>
+                  <dt>Allows</dt><dd className="mono">{rule.label}</dd>
+                  {rule.description && <><dt>Why</dt><dd>{rule.description}</dd></>}
+                </dl>
+                {edgeActions?.(rule, () => setRules(null))}
+              </div>
+            ))}
           </div>
         </div>
       )}

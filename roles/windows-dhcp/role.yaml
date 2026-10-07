@@ -1,0 +1,18 @@
+description: >
+  DHCP server (Windows Server DHCP role) for its own segment - for extra clients; hands out the segment gateway and
+  DNS servers. Serves without AD authorization (lab setting), also on domain members.
+families: [windows]
+ports: []
+params:
+  range_start:
+    default: ""
+    description: First address to lease (default the network's .100)
+  range_end:
+    default: ""
+    description: Last address to lease (default the network's .199)
+  dns:
+    default: ""
+    description: DNS servers to hand out, addresses or host names (default the host's own DNS servers, e.g. a DC)
+  lease_hours:
+    default: 8
+    description: Lease duration in hours

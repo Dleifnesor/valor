@@ -1,0 +1,9 @@
+description: >
+  Forward this host's logs to the range's log server over TCP 514 (queued while the server is down) - pair with
+  syslog-server; the policy must allow tcp/514 to it
+families: [debian, rhel]
+ports: []
+params:
+  server:
+    required: true
+    description: Host name of the log server (a host with the syslog-server role)

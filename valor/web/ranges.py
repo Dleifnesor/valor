@@ -71,7 +71,8 @@ def role_list(cfg) -> list[dict]:
             role = load_role(cfg.roles_dir, d.name)
             meta = role.meta
             roles.append({"name": d.name, "description": meta.get("description", ""), "ports": meta.get("ports", []),
-                          "params": meta.get("params", {}), "families": role.families})
+                          "ports_param": meta.get("ports_param"), "params": meta.get("params", {}),
+                          "families": role.families, "category": meta.get("category", "service")})
     return roles
 
 
@@ -260,7 +261,15 @@ def plan(name: str, request: Request, body: PlanIn | None = None, s: Session = D
                 "topology": topology.build(spec, _vm_states(pve, name))}
     p = make_plan(pve, spec)
     return {"ok": True, "warnings": v.get("warnings", []), "plan": p, "plan_hash": _plan_hash(spec, p),
-            "version": spec_hash(spec)[:12], "topology": topology.build(spec, _vm_states(pve, name), p)}
+            "version": spec_hash(spec)[:12], "topology": topology.build(spec, _vm_states(pve, name), p),
+            "scripts": custom_scripts(spec, p)}
+
+
+def custom_scripts(spec, plan: dict) -> list[dict]:
+    """The custom-script roles this plan runs (as root / SYSTEM), so the person approving sees them in full."""
+    runs = {a["host"] for a in plan.get("actions", []) if a["action"] not in ("keep", "restamp", "remove")}
+    return [{"host": h.name, "os": h.os, "script": r.params.get("script", ""), "ports": r.params.get("ports", "")}
+            for h in spec.hosts if h.name in runs for r in h.roles if r.name == "custom-script"]
 
 
 @router.post("/ranges/{name}/apply")

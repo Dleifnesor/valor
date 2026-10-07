@@ -1,0 +1,30 @@
+description: >
+  Any distribution packages, with their services enabled and started and their ports opened - the generic way to add a
+  service no other role covers (e.g. packages "redis-server", services "redis-server", ports "6379")
+category: generic
+families: [debian, rhel]
+ports_param: ports
+params:
+  packages:
+    required: true
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9.+_:-]{0,100}$'
+    description: Packages to install, space separated (apt names; also used on Rocky/Alma unless rhel_packages is set)
+  rhel_packages:
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9.+_:-]{0,100}$'
+    default: ""
+    description: Package names on Rocky/Alma when they differ from the apt names (e.g. httpd for apache2)
+  services:
+    raw: true
+    pattern: '^[A-Za-z0-9][A-Za-z0-9@._-]{0,100}$'
+    default: ""
+    description: systemd services to enable and start, space separated
+  ports:
+    raw: true
+    pattern: '^[0-9]{1,5}$'
+    default: ""
+    description: TCP ports the services listen on, space separated; opened in the host firewall and waited for
+  epel:
+    default: false
+    description: Enable EPEL first on Rocky/Alma (for packages outside the base repositories)

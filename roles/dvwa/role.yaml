@@ -1,0 +1,9 @@
+description: >
+  DVWA (Damn Vulnerable Web Application) - deliberately vulnerable PHP/MySQL app for security training (container;
+  log in as admin / password, then "Create / Reset Database"); keep it in an isolated segment
+families: [debian, rhel]
+ports_param: port
+params:
+  port:
+    default: 80
+    description: TCP port it is published on
