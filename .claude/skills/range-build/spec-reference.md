@@ -36,7 +36,8 @@ hosts:                          # 1-40
     address: 10.110.0.10        # inside the segment; .1 is the router (gateway)
     os: ubuntu-24.04            # optional; must have a template (cluster_info.templates). Linux: ubuntu-24.04,
                                 # debian-13, kali, rocky-10, alma-10. Windows: windows-server-2022(-core),
-                                # windows-server-2025(-core), windows-11 (CPU/memory/disk floors from the catalog)
+                                # windows-server-2025(-core), windows-11 (VALOR raises cores/memory/disk to the
+                                # template's floor, so smaller values are fine)
     cores: 1                    # 1-16
     memory: 1024                # MiB, 512-65536
     disk: 10                    # GiB, 8-500 (can grow later, never shrink)
@@ -52,7 +53,9 @@ hosts:                          # 1-40
         params:
           allow_from: [web]     # host names become /32, segment names their network
 
-policy:                         # allowed flows between segments; everything else is denied
+policy:                         # allowed flows between segments; everything else is denied. Stateful: one rule
+                                # from the side that opens the connection, replies are allowed automatically.
+                                # Hosts in the same segment reach each other without a rule (not routed).
   - from: dmz                   # segment or host
     to: lan                     # segment or host (must be in a different segment)
     proto: tcp                  # tcp | udp | icmp | any

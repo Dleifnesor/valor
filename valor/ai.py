@@ -30,7 +30,9 @@ DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max
 MAX_TURNS = 24
 MAX_CHARS = 60_000
 FIX_ROUNDS = 2
-YAML_BLOCK = re.compile(r"```(?:yaml|yml)\s*\n(.*?)```", re.S)
+YAML_BLOCK = re.compile(r"```(?:yaml|yml)\s*\n(.*?)```", re.S | re.I)
+SPEC_BLOCK = re.compile(r"```[ \t]*\n(\s*apiVersion:.*?)```", re.S)     # a spec in a fence without a language
+SPEC_TEXT = re.compile(r"^\s*apiVersion:", re.M)
 QUESTIONS_BLOCK = re.compile(r"```questions\s*\n(.*?)```", re.S)
 MAX_QUESTIONS, MAX_OPTIONS = 12, 10
 # Anthropic models that take adaptive thinking and an effort level (older ones get no thinking parameter)
@@ -52,6 +54,7 @@ class Reply:
 
 
 MAX_TOTAL = 1140             # seconds for one answer, under the web proxy's 20 minutes for a chat request
+TURN_MAX_TOTAL = 3600       # one answer in a background chat turn (no request waits on it)
 
 
 class Provider:
@@ -63,6 +66,7 @@ class Provider:
                  timeout: int = 300):
         self.model, self.api_key, self.base_url = model, api_key, base_url.rstrip("/")
         self.max_tokens, self.timeout = max_tokens, timeout
+        self.max_total = MAX_TOTAL     # chat turns run in the background and allow longer
 
     def complete(self, system: str, messages: list[dict], tools: list[dict] | None = None,
                  on_delta=None) -> Reply:   # pragma: no cover - interface
@@ -93,11 +97,12 @@ class Provider:
         except requests.RequestException as e:
             raise ValorError("ai_unreachable", f"the AI provider did not answer: {e.__class__.__name__}")
         self._check_status(r, url)
+        r.encoding = "utf-8"            # event streams are UTF-8; without a charset requests would assume ISO-8859-1
         t0 = time.time()
         try:
             for line in r.iter_lines(decode_unicode=True):
-                if time.time() - t0 > MAX_TOTAL:
-                    raise ValorError("ai_unreachable", f"{where} was still answering after {MAX_TOTAL // 60} minutes",
+                if time.time() - t0 > self.max_total:
+                    raise ValorError("ai_unreachable", f"{where} was still answering after {self.max_total // 60} minutes",
                                      hint="Lower 'Max tokens per answer' or use a faster model.")
                 if not line or not line.startswith("data:"):
                     continue
@@ -285,7 +290,7 @@ class OpenAICompatible(Provider):
             info = r.json() if r.ok else {}
         except (requests.RequestException, ValueError):
             return None
-        n = info.get("loaded_context_length") or info.get("max_context_length")
+        n = info.get("loaded_context_length")      # not max_context_length: the model's limit, not what is loaded
         return int(n) if isinstance(n, int) else None
 
     @staticmethod
@@ -508,7 +513,8 @@ get internet access, remote access (WireGuard) and who may reach what. Ask again
 important is still open, but never ask what they already told you.
 
 Writing the spec: answer with a short explanation (a few sentences: what you built and any assumption you made)
-followed by exactly one complete range spec in a ```yaml code block.
+followed by exactly one complete range spec in a ```yaml code block. When the person asks something else (about the
+spec you wrote, VALOR, a choice you made), answer in plain text without a spec.
 
 {QUESTIONS_FORMAT}
 
@@ -572,7 +578,7 @@ def extract_questions(text: str) -> tuple[list[dict] | None, str]:
     if not blocks:
         return None, text
     try:
-        data = yaml.safe_load(blocks[-1])
+        data = yaml.safe_load(repair_yaml(blocks[-1]))
     except yaml.YAMLError:
         return None, text                       # shown as written
     if isinstance(data, dict):
@@ -596,11 +602,35 @@ def extract_questions(text: str) -> tuple[list[dict] | None, str]:
 
 
 def extract_yaml(text: str) -> tuple[str | None, str]:
-    """(the last ```yaml block, the text without it)."""
-    blocks = YAML_BLOCK.findall(text)
+    """(the last ```yaml block, repaired; the text without it)."""
+    fence = YAML_BLOCK if YAML_BLOCK.search(text) else SPEC_BLOCK
+    blocks = fence.findall(text)
     if not blocks:
         return None, text.strip()
-    return blocks[-1].strip() + "\n", YAML_BLOCK.sub("", text).strip()
+    return repair_yaml(blocks[-1].strip() + "\n"), fence.sub("", text).strip()
+
+
+PLAIN_VALUE = re.compile(r"^(\s*(?:-\s+)?[A-Za-z_][\w-]*:\s+)([^\s\"'\[{|>&*!#%@`].*?)(\s+#.*)?\s*$")
+
+
+def repair_yaml(text: str) -> str:
+    """Quote the plain values that contain ": " (`description: Data tier: files`), the YAML slip models make most:
+    a whole fix round with a slow local model otherwise. Only lines YAML rejects change, and only if it then parses."""
+    lines = text.split("\n")
+    for _ in range(50):
+        try:
+            yaml.safe_load("\n".join(lines))
+            return "\n".join(lines)
+        except yaml.MarkedYAMLError as e:
+            n = e.problem_mark.line if e.problem_mark else -1
+            m = PLAIN_VALUE.match(lines[n]) if "mapping values are not allowed" in (e.problem or "") and \
+                0 <= n < len(lines) else None
+            if not m:
+                return text
+            lines[n] = m[1] + json.dumps(m[2], ensure_ascii=False) + (m[3] or "")
+        except yaml.YAMLError:
+            return text
+    return text
 
 
 def trim(messages: list[dict]) -> list[dict]:
@@ -689,11 +719,11 @@ def build(provider: Provider, system: str, messages: list[dict], check, on_delta
             raise e
         questions, text = extract_questions(r.text)
         yaml_text, reply = extract_yaml(text)
-        if yaml_text is None and questions:
-            problems = []
+        if yaml_text is None and (questions or not SPEC_TEXT.search(text)):
+            problems = []               # questions, or a plain answer to something that asked for no spec
             break
         if yaml_text is None:
-            problems = ["the answer contains no ```yaml block with the spec"]
+            problems = ["the spec is not in a ```yaml block"]
         else:
             problems = check(yaml_text)
         if not problems:

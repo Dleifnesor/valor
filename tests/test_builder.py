@@ -6,6 +6,7 @@ import json
 import pytest
 
 from valor import ai, validate
+from valor.spec import parse_spec
 from valor.web import builder, db
 
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
@@ -45,6 +46,21 @@ def test_extract_and_trim():
     assert out and out[0]["role"] == "user" and sum(len(m["content"]) for m in out) <= ai.MAX_CHARS
 
 
+def test_repair_yaml_quotes_a_colon_in_a_plain_value():
+    slip = GOOD.replace("{name: pc, segment: lan, address: 10.65.0.10}",
+                        "name: pc\n    segment: lan\n    address: 10.65.0.10\n    description: Admin PC: files, db  # note")
+    y, _ = ai.extract_yaml(f"Here.\n```yaml\n{slip}```")
+    assert '    description: "Admin PC: files, db"  # note\n' in y
+    assert parse_spec(y).hosts[1].description == "Admin PC: files, db"
+    fake = Fake([f"Spec.\n```yaml\n{slip}```"])           # no fix round for it
+    assert ai.build(fake, "sys", [{"role": "user", "content": "lab"}], lambda t: [])["attempts"] == 1
+    qs, rest = ai.extract_questions("Before I build:\n```questions\n- question: Which OS: Ubuntu or Rocky?\n"
+                                    "  options: [Ubuntu, Rocky]\n```")
+    assert (qs[0]["question"], qs[0]["options"], rest) == ("Which OS: Ubuntu or Rocky?", ["Ubuntu", "Rocky"], "Before I build:")
+    for bad in ("a: b: c\nd: [e\n", "a: [b: c\n", "description: 'quoted': x\n"):
+        assert ai.repair_yaml(bad) == bad                  # what it cannot make parse stays as the model wrote it
+
+
 def test_fix_loop():
     fake = Fake([f"First try.\n```yaml\n{GOOD.replace('vlan: 641', 'vlan: 640')}```",
                  f"Fixed the VLAN.\n```yaml\n{GOOD}```"])
@@ -64,8 +80,15 @@ def test_fix_loop():
     assert "does not see" in second[-1]["content"] and "do not apologize" in second[-1]["content"]
     assert res["fixed"] == ["spec has 1 problem(s)"]                    # what the model corrected, for the UI
     assert ai.build(Fake([f"```yaml\n{GOOD}```"]), "S", [{"role": "user", "content": "x"}], check)["fixed"] == []
-    gave_up = ai.build(Fake(["no yaml here"] * 3), "S", [{"role": "user", "content": "x"}], lambda t: [])
-    assert gave_up["problems"] and gave_up["attempts"] == ai.FIX_ROUNDS + 1
+    gave_up = ai.build(Fake([f"Spec:\n{GOOD}"] * 3), "S", [{"role": "user", "content": "x"}], lambda t: [])
+    assert gave_up["problems"] == ["the spec is not in a ```yaml block"] and gave_up["attempts"] == ai.FIX_ROUNDS + 1
+    # a plain answer (the person asked something else) is not forced into a spec
+    plain = ai.build(Fake(["Paris."]), "S", [{"role": "user", "content": "capital of France?"}], check)
+    assert plain["attempts"] == 1 and plain["reply"] == "Paris." and not plain["problems"] and plain["yaml"] is None
+    # a spec in a fence without a language (or ```YAML) is still the spec
+    for fence in ("```", "```YAML"):
+        res = ai.build(Fake([f"Here.\n{fence}\n{GOOD}```"]), "S", [{"role": "user", "content": "x"}], check)
+        assert res["attempts"] == 1 and res["yaml"] == GOOD and res["reply"] == "Here."
 
 
 class Stream:
@@ -73,13 +96,14 @@ class Stream:
 
     def __init__(self, events=(), status=200, error=None, stall=None):
         self.status_code, self._events, self._error, self._stall = status, list(events), error, stall
+        self.encoding = "ISO-8859-1"    # what requests assumes for text/event-stream without a charset (LM Studio)
 
     def json(self):
         return {"error": self._error or "x"}
 
     def iter_lines(self, decode_unicode=True):
         for e in self._events:
-            yield "data: " + json.dumps(e)
+            yield ("data: " + json.dumps(e, ensure_ascii=False)).encode().decode(self.encoding)
             yield ""
         if self._stall:
             raise self._stall
@@ -130,6 +154,27 @@ def test_streaming_edge_cases(monkeypatch):
     monkeypatch.setattr(ai.requests, "post", post)
     r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
     assert r.text == "fine" and len(calls) == 2 and "stream_options" not in calls[1]
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(
+        [{"choices": [{"delta": {"reasoning_content": "web → db — ok"}}]},
+         {"choices": [{"delta": {"content": "It isn’t café"}, "finish_reason": "stop"}]}]))
+    r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
+    assert (r.text, r.reasoning) == ("It isn’t café", "web → db — ok")     # UTF-8, not mojibake
+
+
+def test_context_length_is_the_loaded_one(monkeypatch):
+    class Info:
+        ok = True
+
+        def __init__(self, d):
+            self.d = d
+
+        def json(self):
+            return self.d
+    p = ai.OpenAICompatible("m", base_url="http://x:1234/v1")
+    monkeypatch.setattr(ai.requests, "get", lambda *a, **k: Info({"state": "not-loaded", "max_context_length": 262144}))
+    assert p.context_length() is None                  # unloaded: the model's maximum says nothing about the load
+    monkeypatch.setattr(ai.requests, "get", lambda *a, **k: Info({"loaded_context_length": 35328, "max_context_length": 262144}))
+    assert p.context_length() == 35328
     monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([{"choices": [{"delta": {"content": "half"}}]}],
                                                                      stall=ai.requests.ConnectionError("Read timed out.")))
     with pytest.raises(ai.ValorError) as e:

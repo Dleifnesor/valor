@@ -46,6 +46,8 @@ export function useChat(chatId: number | null, onSettled?: (m: Message) => void)
 
   const running = chat?.messages.filter((m) => LIVE.includes(m.status)) ?? [];
   const key = running.map((m) => `${m.id}:${m.version}`).join(",");
+  // every poll re-arms the next one: an "unchanged" answer (a local model still reading the prompt) changes no key
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!chat || !running.length) return;
     let stop = false;
@@ -61,9 +63,10 @@ export function useChat(chatId: number | null, onSettled?: (m: Message) => void)
           }
         } catch (e) { if (!stop) setError(e as ApiError); }
       }
+      if (!stop) setTick((n) => n + 1);
     }, document.visibilityState === "visible" ? 600 : 3000);
     return () => { stop = true; window.clearTimeout(t); };
-  }, [chat?.id, key]);
+  }, [chat?.id, key, tick]);
 
   const send = async (message: string, mode: Mode) => {
     if (!chat) return;
@@ -154,6 +157,20 @@ function ThinkingStep({ s, live }: { s: Step; live: boolean }) {
     <Fold live={streaming} className="step thinking"
       summary={<span className="muted">{streaming ? <><span className="spinner" /> Thinking…</> : `Thought for ${secs(s.ts, s.ended)}`}</span>}>
       <div className="thinking-text">{s.text}</div>
+    </Fold>
+  );
+}
+
+/** Text the model wrote between steps (or an earlier attempt VALOR sent back): live while streaming, then folded. */
+function TextStep({ s, live }: { s: Step; live: boolean }) {
+  const text = s.text ?? "";
+  const first = text.trim().split("\n")[0].slice(0, 140);
+  const lines = text.trim().split("\n").length;
+  if (lines <= 2 && text.length <= 240) return <div className="step text">{text}</div>;
+  return (
+    <Fold live={live && !!s.open} className="step text"
+      summary={<span className="muted">{first}{lines > 1 ? ` (${lines} lines)` : "…"}</span>}>
+      <div className="thinking-text">{text}</div>
     </Fold>
   );
 }
@@ -259,7 +276,7 @@ export function AssistantMessage({ m, last, readonly, decide, stop, onAnswer, on
           {steps.map((s) => s.type === "thinking" ? <ThinkingStep key={s.id} s={s} live={live} />
             : s.type === "tool" ? <ToolStep key={s.id} s={s} live={live} />
             : s.type === "check" ? <div key={s.id} className="step check muted small">{s.text}</div>
-            : <div key={s.id} className="step text">{s.text}</div>)}
+            : <TextStep key={s.id} s={s} live={live} />)}
         </div>
       )}
       {m.status === "running" && (

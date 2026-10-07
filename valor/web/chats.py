@@ -356,7 +356,9 @@ class Feed:
 def _provider(app, conn):
     st = _settings(conn)
     key = app.state.box.open_text(st["api_key"], "ai:api_key") if st.get("api_key") else ""
-    return ai.provider_from(st, key), st
+    prov = ai.provider_from(st, key)
+    prov.max_total = ai.TURN_MAX_TOTAL           # a slow local model may think for a long time
+    return prov, st
 
 
 def _run(app, chat_id: int, msg_id: int, username: str, resume: bool, ev: threading.Event) -> None:
@@ -384,6 +386,9 @@ def _run(app, chat_id: int, msg_id: int, username: str, resume: bool, ev: thread
             record_usage(conn, username, st, int(used.get("input_tokens", 0)), int(used.get("output_tokens", 0)), False)
         if feed is not None:
             feed.close()
+            for s in feed.steps:
+                if s.get("type") == "tool" and s.get("status") in ("pending", "queued", "approved", "running"):
+                    s["status"] = "cancelled"
             feed.meta["error"] = {"code": e.code, "message": e.message, "hint": e.hint}
             feed.flush(True, status="failed")
     except Exception as e:                           # pragma: no cover - logged, shown as failed
@@ -405,7 +410,8 @@ class Turn:
         self.prov, self.settings, self.feed = prov, settings, feed
         self.cfg = app.state.cfg
         self.mode = msg["mode"]
-        self.used = [0, 0]
+        u = feed.meta.get("usage") or {}                 # a resumed turn keeps counting
+        self.used = [int(u.get("input_tokens", 0)), int(u.get("output_tokens", 0))]
         try:
             self.pve = PVE(self.cfg)
         except ValorError:
@@ -439,6 +445,9 @@ class Turn:
         self.used[1] += r.output_tokens
         record_usage(self.conn, self.username, self.settings, r.input_tokens, r.output_tokens, True)
         self.feed.meta["usage"] = {"input_tokens": self.used[0], "output_tokens": self.used[1]}
+
+    def check_budget(self) -> None:
+        """Before every further model call of a turn (the first was checked when the message was sent)."""
         limit = int(self.settings.get("daily_tokens_per_user") or 0)
         if limit:
             spent = self.conn.execute("SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM ai_usage WHERE "
@@ -582,9 +591,11 @@ class Turn:
                       "history": self.history(), "transcript": []}
         else:
             self.run_pending(state_, ctx)
-        for _ in range(MAX_ROUNDS):
+        for i in range(MAX_ROUNDS):
             if self.feed.stop.is_set():
                 raise Stopped()
+            if i or resume:
+                self.check_budget()
             r = self.prov.complete(state_["system"], state_["history"] + state_["transcript"], tools=tools,
                                    on_delta=self.feed.delta)
             self.record(r)
