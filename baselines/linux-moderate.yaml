@@ -1,0 +1,186 @@
+id: linux-moderate
+title: >
+  Linux hardening for compliance frameworks (NIST SP 800-171, NIST SP 800-53 Low/Moderate, PCI DSS, HIPAA) -
+  ubuntu-l1 plus account lockout, password policy, notices, idle-session timeout, audit rules and time sync
+# Results are reported as "aligned with" the frameworks' requirements - never as an assessment or certification.
+# Which requirement each control supports is in baselines/frameworks/frameworks.yaml.
+claim: aligned-with
+families: [debian, rhel]
+extends: ubuntu-l1
+windows: windows-moderate
+controls:
+  - id: login-banner
+    area: Access
+    title: Authorized-use notice shown before SSH and console logins
+    reference: "OpenSSH sshd_config(5): Banner; issue(5)"
+    applies_to: all
+    check: |
+      grep -q 'Authorized use only' /etc/issue.net && grep -q 'Authorized use only' /etc/issue && \
+        sshd -T 2>/dev/null | grep -qx 'banner /etc/issue.net'
+    fix: |
+      msg='Authorized use only. Activity on this system is monitored and recorded; using it means you consent.'
+      printf '%s\n' "$msg" > /etc/issue.net; printf '%s\n\n' "$msg" > /etc/issue
+      f=/etc/ssh/sshd_config.d/01-valor-baseline.conf; touch "$f"
+      grep -v -i '^Banner ' "$f" > "$f.new"; echo 'Banner /etc/issue.net' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
+      sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
+
+  - id: account-lockout
+    area: Accounts
+    title: Accounts locked for 30 minutes after 5 failed logins (pam_faillock)
+    reference: "faillock.conf(5), pam_faillock(8); authselect(8) with-faillock on RHEL-family systems"
+    applies_to: all
+    check: |
+      conf=/etc/security/faillock.conf
+      deny=$(sed -n 's/^[[:space:]]*deny[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$conf" 2>/dev/null | tail -1)
+      unlock=$(sed -n 's/^[[:space:]]*unlock_time[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$conf" 2>/dev/null | tail -1)
+      [ -n "$deny" ] && [ "$deny" -ge 1 ] && [ "$deny" -le 5 ] || exit 1
+      [ "${unlock:-600}" -eq 0 ] || [ "${unlock:-600}" -ge 1800 ] || exit 1
+      if [ $VALOR_FAMILY = rhel ]; then
+        grep -q '^auth.*pam_faillock.so.*preauth' /etc/pam.d/system-auth && grep -q '^auth.*pam_faillock.so.*preauth' /etc/pam.d/password-auth
+      else
+        grep -q '^auth.*pam_faillock.so.*preauth' /etc/pam.d/common-auth && grep -q '^auth.*pam_faillock.so.*authfail' /etc/pam.d/common-auth
+      fi
+    fix: |
+      printf '# Managed by VALOR\ndeny = 5\nfail_interval = 900\nunlock_time = 1800\n' > /etc/security/faillock.conf
+      if [ $VALOR_FAMILY = rhel ]; then
+        if authselect current >/dev/null 2>&1; then authselect enable-feature with-faillock >/dev/null
+        else authselect select minimal with-faillock --force >/dev/null; fi
+      else
+        printf 'Name: Lock accounts after failed logins (VALOR)\nDefault: yes\nPriority: 0\nAuth-Type: Primary\nAuth:\n\t[default=die]\tpam_faillock.so authfail\n' \
+          > /usr/share/pam-configs/valor-faillock
+        printf 'Name: Count failed logins, reset on success (VALOR)\nDefault: yes\nPriority: 1024\nAuth-Type: Primary\nAuth:\n\trequisite\tpam_faillock.so preauth\nAccount-Type: Primary\nAccount:\n\trequired\tpam_faillock.so\n' \
+          > /usr/share/pam-configs/valor-faillock-notify
+        pam-auth-update --package --enable valor-faillock valor-faillock-notify
+      fi
+
+  - id: password-quality
+    area: Accounts
+    title: New passwords need 14+ characters, all four character classes and 8 changed characters (pam_pwquality)
+    reference: "pwquality.conf(5), pam_pwquality(8)"
+    applies_to: all
+    check: |
+      f=/etc/security/pwquality.conf.d/60-valor.conf
+      grep -qx 'minlen = 14' "$f" && grep -qx 'minclass = 4' "$f" && grep -qx 'difok = 8' "$f" || exit 1
+      if [ $VALOR_FAMILY = rhel ]; then grep -q '^password.*pam_pwquality.so' /etc/pam.d/system-auth
+      else grep -q '^password.*pam_pwquality.so' /etc/pam.d/common-password; fi
+    fix: |
+      [ $VALOR_FAMILY = rhel ] && pkg=libpwquality || pkg=libpam-pwquality
+      installed $pkg || pkg_install $pkg
+      install -d -m 0755 /etc/security/pwquality.conf.d
+      printf '# Managed by VALOR\nminlen = 14\nminclass = 4\ndifok = 8\nmaxrepeat = 3\n' > /etc/security/pwquality.conf.d/60-valor.conf
+      [ $VALOR_FAMILY = rhel ] || pam-auth-update --package --enable pwquality
+
+  - id: password-history
+    area: Accounts
+    title: The last 24 passwords cannot be reused (pam_pwhistory)
+    reference: "pam_pwhistory(8), pwhistory.conf(5); authselect(8) with-pwhistory on RHEL-family systems"
+    applies_to: all
+    check: |
+      grep -qx 'remember = 24' /etc/security/pwhistory.conf 2>/dev/null || exit 1
+      if [ $VALOR_FAMILY = rhel ]; then grep -q '^password.*pam_pwhistory.so' /etc/pam.d/system-auth
+      else grep -q '^password.*pam_pwhistory.so' /etc/pam.d/common-password; fi
+    fix: |
+      printf '# Managed by VALOR\nremember = 24\n' > /etc/security/pwhistory.conf
+      if [ $VALOR_FAMILY = rhel ]; then
+        if authselect current >/dev/null 2>&1; then authselect enable-feature with-pwhistory >/dev/null
+        else authselect select minimal with-pwhistory --force >/dev/null; fi
+      else
+        printf 'Name: Remember old passwords (VALOR)\nDefault: yes\nPriority: 1023\nPassword-Type: Primary\nPassword:\n\trequisite\tpam_pwhistory.so remember=24 use_authtok\n' \
+          > /usr/share/pam-configs/valor-pwhistory
+        pam-auth-update --package --enable valor-pwhistory
+      fi
+
+  - id: shell-timeout
+    area: Access
+    title: Idle interactive shells end after 15 minutes (TMOUT)
+    reference: "bash(1): TMOUT"
+    applies_to: all
+    check: |
+      [ -f /etc/profile.d/60-valor-tmout.sh ] && [ "$(bash -lc 'echo $TMOUT' 2>/dev/null | tail -1)" = 900 ]
+    fix: |
+      cat > /etc/profile.d/60-valor-tmout.sh <<'EOF'
+      # Managed by VALOR: end idle interactive shells after 15 minutes
+      if ! readonly -p 2>/dev/null | grep -q ' TMOUT='; then TMOUT=900; readonly TMOUT; export TMOUT; fi
+      EOF
+      chmod 0644 /etc/profile.d/60-valor-tmout.sh
+
+  - id: audit-rules
+    area: Auditing
+    title: Changes to accounts and sudo rules, privileged commands and clock changes are audited
+    reference: "audit.rules(7), auditctl(8), augenrules(8)"
+    applies_to: all
+    check: |
+      r=$(auditctl -l 2>/dev/null)
+      echo "$r" | grep -q 'valor-identity' && echo "$r" | grep -q 'valor-privilege' && \
+        echo "$r" | grep -q 'valor-privileged-exec' && echo "$r" | grep -q 'valor-time-change'
+    fix: |
+      cat > /etc/audit/rules.d/60-valor.rules <<'EOF'
+      ## Managed by VALOR: identity, privilege and clock events
+      -w /etc/passwd -p wa -k valor-identity
+      -w /etc/group -p wa -k valor-identity
+      -w /etc/shadow -p wa -k valor-identity
+      -w /etc/gshadow -p wa -k valor-identity
+      -w /etc/sudoers -p wa -k valor-privilege
+      -w /etc/sudoers.d -p wa -k valor-privilege
+      -a always,exit -F arch=b64 -S execve -C euid!=uid -F auid!=unset -k valor-privileged-exec
+      -a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k valor-time-change
+      EOF
+      chmod 0640 /etc/audit/rules.d/60-valor.rules
+      augenrules --load >/dev/null 2>&1 || service auditd reload
+
+  - id: audit-log-protection
+    area: Auditing
+    title: Audit logs readable only by root (and its group), the directory not open to others
+    reference: "auditd.conf(5): log_file, log_group"
+    applies_to: all
+    check: |
+      d=/var/log/audit
+      [ -d "$d" ] && [ "$(stat -c %U "$d")" = root ] || exit 1
+      [ -z "$(find "$d" -maxdepth 0 -perm /0027)" ] && [ -z "$(find "$d" -maxdepth 1 -type f -perm /0137)" ]
+    fix: |
+      chown root /var/log/audit
+      chmod 0750 /var/log/audit
+      find /var/log/audit -maxdepth 1 -type f -exec chmod g-wx,o-rwx {} +
+
+  - id: time-sync
+    area: Time
+    title: Clock synchronized by a time service (chrony or systemd-timesyncd)
+    reference: "chronyd(8), systemd-timesyncd.service(8)"
+    applies_to: all
+    check: |
+      systemctl is-active -q chronyd || systemctl is-active -q chrony || systemctl is-active -q systemd-timesyncd
+    fix: |
+      for s in chronyd chrony systemd-timesyncd; do
+        systemctl cat "$s.service" >/dev/null 2>&1 && systemctl enable --now "$s" >/dev/null 2>&1 && exit 0
+      done
+      pkg_install chrony && { systemctl enable --now chronyd 2>/dev/null || systemctl enable --now chrony; }
+
+  - id: sudo-logging
+    area: Auditing
+    title: sudo commands logged to /var/log/sudo.log and run in a pseudo-terminal
+    reference: "sudoers(5): logfile, use_pty"
+    applies_to: all
+    check: |
+      grep -rqsx 'Defaults logfile="/var/log/sudo.log"' /etc/sudoers.d/ && grep -rqsx 'Defaults use_pty' /etc/sudoers.d/
+    fix: |
+      printf '# Managed by VALOR\nDefaults logfile="/var/log/sudo.log"\nDefaults use_pty\n' > /etc/sudoers.d/60-valor
+      chmod 0440 /etc/sudoers.d/60-valor
+      visudo -cqf /etc/sudoers.d/60-valor || { rm -f /etc/sudoers.d/60-valor; exit 1; }
+
+  - id: unneeded-services
+    area: Services
+    title: Network services a server does not need are off (avahi, CUPS printing, rpcbind)
+    reference: "systemctl(1): disable, mask"
+    applies_to: all
+    check: |
+      for s in avahi-daemon cups rpcbind; do
+        systemctl is-active -q "$s" && exit 1
+        systemctl is-enabled -q "$s" 2>/dev/null && exit 1
+      done
+      exit 0
+    fix: |
+      for s in avahi-daemon cups rpcbind; do
+        systemctl cat "$s.service" >/dev/null 2>&1 || continue
+        systemctl disable --now "$s.service" "$s.socket" >/dev/null 2>&1 || true
+        systemctl mask "$s.service" >/dev/null 2>&1 || true
+      done

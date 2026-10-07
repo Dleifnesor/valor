@@ -6,8 +6,17 @@ name: web2tier                  # 2-15 chars: a-z, 0-9, '-'; starts with a lette
 description: >                  # free text, shown in the journal
   What this range is for.
 baseline: ubuntu-l1             # the Linux hardening baseline (default ubuntu-l1, covers Debian/Ubuntu/Kali and
-                                # Rocky/Alma). Windows hosts ALWAYS get windows-l1 automatically - never put it here.
+                                # Rocky/Alma). Windows hosts get its Windows counterpart automatically (windows-l1;
+                                # windows-moderate with linux-moderate) - never put a Windows profile here.
+                                # linux-moderate: ubuntu-l1 plus lockout, password policy, notices, idle logout,
+                                # audit rules, time sync - required by the compliance frameworks below.
                                 # 'none' turns hardening off for every host (Windows too): only when asked to.
+compliance:                     # optional: frameworks the range is built toward and reported on ("aligned with",
+                                # never certified). Needs baseline: linux-moderate (cis-l1 alone: ubuntu-l1).
+  frameworks: [nist-800-171]    # nist-800-171 (CUI / CMMC L2), nist-800-53-moderate, nist-800-53-low, pci-dss,
+                                # hipaa, cis-l1
+  scope: [lan]                  # segments holding the regulated data (CUI, cardholder data, ePHI): checked to
+                                # have no internet access
 router:                         # optional; the router 'rtr' is always created automatically
   cores: 1                      # 1-8
   memory: 1024                  # MiB, 512-8192
@@ -77,7 +86,21 @@ access:                         # optional remote access to the range
   (`domain`, `dc`, optional `dc2`), `iis`. A host whose role names another host in `dc`/`dc2` waits for it
   (domain controllers first, then members).
 - Domain traffic needs a policy rule between the segments, e.g. `{from: users, to: srv, proto: any}`.
-- Windows hosts get the `windows-l1` baseline (SMBv1 off, SMB signing, firewall, NLA, LLMNR off, audit, Defender).
+- Windows hosts get the `windows-l1` baseline (SMBv1 off, SMB signing, firewall, NLA, LLMNR off, audit, Defender);
+  with `baseline: linux-moderate` they get `windows-moderate` (plus lockout, password history and complexity, logon
+  notice, screen lock, audit policy, security log size, time sync - on domain controllers set as domain policy).
+
+## Compliance frameworks
+
+- `compliance.frameworks` makes VALOR validate the design for them and report verification evidence per requirement
+  id (e.g. 800-171 3.1.8, 800-53 AC-7, PCI DSS 8.3.4): baseline controls on every host plus design checks -
+  deny-by-default isolation, no internet in `compliance.scope`, and central logging (a `syslog-server` host with
+  `syslog-client` on the other Linux hosts). Design gaps are warnings; a too-weak baseline is an error.
+- A design for a framework: put the regulated data in its own segment(s) listed in `scope` without internet, allow
+  only the flows the services need, add a log server and time server (`ntp-server`, `ntp-client` elsewhere), and
+  keep administration on its own segment where it makes sense.
+- Most requirements of every framework are organizational (policies, training, incident response); the report lists
+  them as not covered. Never call a range "compliant" or "certified".
 - Rocky/Alma hosts use the same roles as Ubuntu where the role lists `families: [debian, rhel]`.
 
 ## What the engine does with it

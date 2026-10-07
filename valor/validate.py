@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 
+from . import compliance
 from .baseline import baseline_for, load_baseline
 from .isos import installer_iso, list_isos
 from .cluster import load_catalog, range_vms, templates, vlans_in_use
@@ -128,6 +129,21 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
                     err("baseline", e.message)
             elif fam and fam not in bfam:
                 err("baseline", f"baseline {spec.baseline} does not support {os_name} ({fam})")
+
+    comp = spec.compliance
+    if comp and comp.frameworks:
+        try:
+            need = compliance.required_profile(cfg.baselines_dir, comp.frameworks)
+            have = compliance.STRENGTH.get(spec.baseline)
+            if have is not None and have < compliance.STRENGTH.get(need, 0):
+                err("baseline", f"compliance {', '.join(comp.frameworks)} needs baseline {need}; the range uses "
+                                f"'{spec.baseline}'",
+                    f"Set baseline: {need} (Windows hosts then get its Windows counterpart). It adds account lockout, "
+                    "password policy, login notices, idle-session limits, audit rules and time sync.")
+            families = {h.name: catalog.get(h.os or "", {}).get("family", "debian") for h in spec.hosts}
+            warnings += compliance.design_warnings(cfg.baselines_dir, spec, families)
+        except ValorError as e:
+            err("compliance", e.message, e.hint)
 
     others = {vm.name for vm in range_vms(pve, with_config=False) if f"valor-range-{spec.name}" not in vm.tags}
     for name in ["rtr", *(h.name for h in spec.hosts)]:
