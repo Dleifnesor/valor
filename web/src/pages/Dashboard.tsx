@@ -43,23 +43,23 @@ export function Dashboard() {
         <div className="alert ok">VALOR is healthy and can build ranges.</div>
       )}
       {c && (
-        <div className="grid cols-4">
-          <div className="card stat">
+        <div className="card stats">
+          <div className="stat">
             <div className="label">Range node</div>
             <div className="value">{c.node}</div>
             <div className="sub">{c.cpu_threads} CPU threads</div>
           </div>
-          <div className="card stat">
+          <div className="stat">
             <div className="label">Free memory</div>
             <div className="value">{gib(c.memory_free_mib)}</div>
             <div className="sub">of {gib(c.memory_total_mib)}</div>
           </div>
-          <div className="card stat">
+          <div className="stat">
             <div className="label">Range storage</div>
             <div className="value">{c.storage.available_gib.toFixed(0)} GiB</div>
             <div className="sub">free on {c.storage.id}</div>
           </div>
-          <div className="card stat">
+          <div className="stat">
             <div className="label">Ranges</div>
             <div className="value">{ranges.length}</div>
             <div className="sub">
