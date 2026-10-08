@@ -28,6 +28,7 @@
   --c-keep: #94a3b8;
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 16px rgba(15, 23, 42, 0.06);
   --radius: 10px;
+  --map-tall: max(640px, calc(100vh - 290px));   /* the range map and its chat fill the window's height */
   --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
   color-scheme: light;
 }
@@ -122,7 +123,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 }
 .topbar .title { flex: 1; min-width: 0; }
 .topbar .title small { color: var(--muted); display: block; font-size: 12px; }
-.content { padding: 24px 28px 48px; display: flex; flex-direction: column; gap: 20px; max-width: 1400px; width: 100%; }
+.content { padding: 24px 28px 48px; display: flex; flex-direction: column; gap: 20px; width: 100%; }
 .nav-backdrop { display: none; }
 @media (min-width: 861px) {
   .shell.collapsed { grid-template-columns: 1fr; }
@@ -257,7 +258,7 @@ tr.clickable { cursor: pointer; }
 
 /* ---------------------------------------------------------------- topology map */
 .map { height: 560px; border-top: 1px solid var(--border); position: relative; }
-.map.tall { height: 640px; }
+.map.tall { height: var(--map-tall); }
 .map .react-flow__attribution { display: none; }
 .map .react-flow { --xy-background-color: var(--surface); }
 .legend {
@@ -321,7 +322,7 @@ tr.clickable { cursor: pointer; }
 .builder-chat > .card-head { flex-wrap: wrap; gap: 8px 12px; }
 .builder-chat > .card-head h2 { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .builder-chat > .card-head .provider-pick { flex: 1 1 140px; max-width: 280px; min-width: 0; }
-.chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
+.chat-log { display: flex; flex-direction: column; gap: 10px; max-height: max(60vh, calc(100vh - 330px)); overflow-y: auto; }
 .bubble { padding: 10px 12px; border-radius: 10px; max-width: 92%; line-height: 1.45; }
 .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; }
 .bubble.assistant { align-self: flex-start; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); }
@@ -336,8 +337,8 @@ tr.clickable { cursor: pointer; }
 .map-layout { display: flex; align-items: stretch; }
 .map-layout .map-main { flex: 1; min-width: 0; }
 .map-layout.with-chat .side-panel { right: 12px; }
-.range-chat { width: 380px; flex: none; display: flex; flex-direction: column; border-radius: 0; border-width: 1px 0 0 1px; max-height: 640px; }
-.range-chat .chat-log.range { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; min-height: 0; }
+.range-chat { width: 380px; flex: none; display: flex; flex-direction: column; border-radius: 0; border-width: 1px 0 0 1px; max-height: var(--map-tall); }
+.range-chat .chat-log.range { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; min-height: 0; max-height: none; }
 @media (max-width: 1100px) { .map-layout { flex-direction: column; } .range-chat { width: auto; max-height: 560px; border-width: 1px 0 0 0; } }
 .seg-control { display: flex; gap: 4px; margin: 10px 12px 6px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; }
 .seg-control button { flex: 1; border: 0; background: none; color: var(--muted); padding: 5px 8px; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
@@ -411,6 +412,10 @@ ul.evidence li.bad { color: var(--bad); }
 .answer { white-space: pre-wrap; }
 .usage { font-size: 11px; margin-top: 6px; text-align: right; }
 .approval { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); }
+/* Approve / Deny stay in view at the bottom of the chat while the person scrolls through the changes above them */
+.chat-log .approval { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -8px 16px -8px rgba(2, 6, 23, 0.45); }
+.chat-log .approval ul { list-style: none; padding-left: 0; }     /* one line each: the steps above show the full text */
+.chat-log .approval li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .approval ul { margin: 6px 0 8px; padding-left: 18px; }
 .approval .mono { font-size: 12px; word-break: break-word; }
 .questions { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
