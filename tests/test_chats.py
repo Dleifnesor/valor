@@ -288,6 +288,7 @@ def test_range_chat_moves_into_saved_chats(tmp_path):
 
 
 READ_ONLY = [
+    "(cd /; ls)", "(ufw status verbose 2>/dev/null || nft list ruleset 2>/dev/null || iptables -S) | head -60",
     "pg_isready -h 10.86.3.10 -p 5432", "su - postgres -c 'psql -l'", "runuser -u postgres -- psql -l", "mysqladmin -h db status",
     # port probes, is-it-installed checks and line printing (seen in live Mistral runs)
     "timeout 5 bash -c 'exec 3<>/dev/tcp/10.86.3.10/5432 && echo OPEN' || echo FAILED", "timeout 1 bash -c '</dev/tcp/10.0.0.1/22'",
@@ -303,6 +304,7 @@ READ_ONLY = [
     "find /etc -name '*.conf'", "timeout 5 nc -zv 10.0.0.1 22", "sudo cat /etc/shadow", "wc -l < /etc/passwd",
     "systemctl", "nft list ruleset", "date +%s", "ping -c 2 10.0.0.1", "semanage port -l | grep http"]
 CHANGES = [
+    "(rm -rf /tmp/x) | head", "(cat /etc/hosts; touch /tmp/x)", "f() { rm -rf /; }; f",
     "psql -c 'drop table x'", "su - postgres -c \"psql -tAc 'SELECT 1'\"", "runuser -u postgres -- bash", "mysqladmin shutdown",
     "mysqladmin -pSECRET ping", "su - postgres -c 'rm -rf /var/lib/postgresql'", "runuser -u x -- rm -rf /",
     "sed -i 's/a/b/' /etc/x", "sed 's/a/b/w /tmp/o' /etc/x", "sed -n 'e rm -rf /' x", "sed -f s.sed x",
@@ -315,7 +317,7 @@ CHANGES = [
     "systemctl restart nginx", "rm -rf /tmp/x", "echo hi > /etc/motd", "cat a >> b", "apt-get install -y x",
     "curl -o /tmp/x http://e", "curl -sSo x http://e", "find / -delete", "sed -i s/a/b/ f", "hostname evil",
     "date 01010000", "ip link set eth0 down", "iptables -F", "ss -K dst 1.2.3.4", "nginx", "$(rm x)",
-    "echo `id`", "FOO=1 ls", "ls & rm x", "(cd /; ls)", "ls; reboot", "cat <<EOF\nx\nEOF", "docker run x",
+    "echo `id`", "FOO=1 ls", "ls & rm x", "ls; reboot", "cat <<EOF\nx\nEOF", "docker run x",
     "chronyc makestep", "env rm x", "nc -l 9999", "sysctl -w a=1", "sysctl net.ipv4.ip_forward=1",
     "firewall-cmd --add-port=80/tcp", "tee /etc/x", "xargs rm", "rpm -i x.rpm", "wg showconf wg0", "ping 1.2.3.4",
     "journalctl --vacuum-size=1M", "awk '{system(\"id\")}'", "ls 'unbalanced"]

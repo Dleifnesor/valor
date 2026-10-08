@@ -331,11 +331,11 @@ def linux_readonly(command: str, depth: int = 0) -> bool:
     i = 0
     while i < len(tokens):
         tok = tokens[i]
-        if tok in (";", "|", "||", "&&", "|&"):
-            segments.append([])
+        if tok in (";", "|", "||", "&&", "|&") or set(tok) <= set("()"):
+            segments.append([])         # ( a || b ) | head: a group only groups - every command in it is checked
         elif set(tok) <= set("<>&()"):
-            if tok in ("(", ")", "&", ">>", "&>>"):
-                return False            # subshells, background jobs, appending to files
+            if tok in ("&", ">>", "&>>"):
+                return False            # background jobs, appending to files
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
             if tok in ("<", ">", "<>") and NET_DEVICE.fullmatch(target):
                 if segments[-1] and segments[-1][-1].isdigit():
