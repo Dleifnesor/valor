@@ -467,3 +467,42 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     assert chats.fix_failed_builds(app) == []
     assert op.post("/api/jobs/20990101-000000-abcdef/fix", headers=h).status_code == 404
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
+
+
+def test_failed_verification_and_small_context_go_to_the_assistant(lab, monkeypatch):
+    """A build whose verification failed has no error message: the assistant gets the failed tests and controls."""
+    from valor import jobs, state
+    app, wcfg, cfg, pve = lab
+    fake = Script(["Nothing listens on app1:8080; I added a container there in the spec. Re-apply."])
+    adm, ah, op, h = start(app, monkeypatch, fake)
+    chats._fix_seen.clear()
+    jid = jobs.create(cfg, "apply", {"spec": "lab.yaml", "verify": True}, "web:olivia")
+    jobs.finish(cfg, jid, {"ok": False, "verify": {"ok": False, "summary": {"tests_passed": 1, "tests_total": 2}}})
+    jobs.update(cfg, jid, state="failed", finished=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    state.save(cfg, "lab", "verify", {"job": jid, "ok": False, "tests": [
+        {"name": "policy allows web -> pc tcp/8080", "from": "web", "to": "pc", "proto": "tcp", "port": 8080,
+         "expect": "open", "observed": "closed", "detail": "refused (nothing listening, or rejected)", "pass": False},
+        {"name": "fine", "from": "pc", "to": "web", "proto": "tcp", "port": 80, "expect": "open", "pass": True}],
+        "baseline": {"web": [{"control": "ssh-root-login", "title": "No root login over SSH", "after": "fail"},
+                             {"control": "x", "title": "ok", "after": "pass"}]}})
+    [cid] = chats.fix_failed_builds(app)
+    chat = op.get(f"/api/chats/{cid}").json()
+    ask = chat["messages"][0]["content"]
+    assert chat["title"] == "Fix: verification failed (2 checks)" and "Error: error" not in ask
+    assert "web -> pc tcp/8080, expected open, observed closed (refused (nothing listening" in ask
+    assert "baseline on web: ssh-root-login No root login over SSH is fail" in ask and "'fine'" not in ask
+    wait(op, cid, chat["messages"][1]["id"])
+    op.__exit__(None, None, None), adm.__exit__(None, None, None)
+
+
+def test_a_context_too_small_is_named(monkeypatch):
+    """LM Studio reports a prompt larger than the loaded context as an error event (or HTTP 400)."""
+    msg = 'request (9655 tokens) exceeds the available context size (8192 tokens), try increasing it'
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([{"error": {"code": 400, "message": msg, "type": "exceed_context_size_error"}}]))
+    with pytest.raises(ai.ValorError) as e:
+        ai.OpenAICompatible("m", base_url="http://x:1234/v1").complete("S", [])
+    assert e.value.code == "ai_context_full" and "Context Length" in e.value.hint and "9655" in e.value.message
+    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(status=400, error={"message": msg}))
+    with pytest.raises(ai.ValorError) as e:
+        ai.OpenAICompatible("m", base_url="http://x:1234/v1").complete("S", [])
+    assert e.value.code == "ai_context_full"

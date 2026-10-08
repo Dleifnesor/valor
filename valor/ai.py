@@ -54,6 +54,9 @@ class Reply:
                                         # blocks are bound to the conversation that produced them)
 
 
+CONTEXT_ERROR = re.compile(r"exceed\w*[_ ]context|context[_ ](size|length|window)|n_ctx", re.I)
+CONTEXT_HINT = ("Give the model a larger context window: in LM Studio load it with a Context Length of at least 32,768 - "
+                "and set that as the model's default, or LM Studio loads it with a small one after a restart.")
 MAX_TOTAL = 1140             # seconds for one answer, under the web proxy's 20 minutes for a chat request
 TURN_MAX_TOTAL = 3600       # one answer in a background chat turn (no request waits on it)
 
@@ -143,6 +146,8 @@ class Provider:
             raise ValorError("ai_auth", "the AI provider rejected the API key", hint="An administrator can update it in Settings.")
         if r.status_code == 429:
             raise ValorError("ai_rate_limited", "the AI provider is rate limiting VALOR; try again in a minute")
+        if r.status_code == 400 and CONTEXT_ERROR.search(detail):
+            raise ValorError("ai_context_full", f"the model's context window is too small: {detail}", hint=CONTEXT_HINT)
         if r.status_code == 402:                # OpenRouter: the credits cannot cover max_tokens of this model
             raise ValorError("ai_credits", f"the AI provider wants more credits for this request {detail}".strip(),
                              hint="Add credits, or lower 'Max tokens per answer' for this provider in Settings -> "
@@ -308,6 +313,9 @@ class OpenAICompatible(Provider):
             if ev.get("error"):                 # a failure after the stream started (OpenRouter, vLLM) arrives as an event
                 err = ev["error"]
                 msg = str(err.get("message") or err.get("code") or err) if isinstance(err, dict) else str(err)
+                if CONTEXT_ERROR.search(msg):   # LM Studio / llama.cpp: the prompt does not fit the loaded context
+                    raise ValorError("ai_context_full", f"the model's context window is too small: {msg[:300]}",
+                                     hint=CONTEXT_HINT)
                 raise ValorError("ai_error", f"the model provider reported an error in the middle of the answer: {msg[:300]}",
                                  hint="Usually temporary: send the message again, or pick another model or provider.")
             for ch in ev.get("choices") or []:

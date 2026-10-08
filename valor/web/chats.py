@@ -310,12 +310,28 @@ def _job_range(job: dict) -> str:
     return t.get("range") or str(t.get("spec", "")).removesuffix(".yaml")
 
 
-def fix_prompt(job: dict) -> str:
+def _verify_failures(cfg, job: dict) -> list[str]:
+    """The tests and baseline controls that failed in the build's verification."""
+    v = state.load(cfg, _job_range(job), "verify") or {}
+    if v.get("job") != job["id"]:
+        return []
+    out = [f"- test '{t.get('name')}': {t.get('from')} -> {t.get('to')} {t.get('proto')}"
+           f"{'/' + str(t['port']) if t.get('port') else ''}, expected {t.get('expect')}, observed {t.get('observed')}"
+           f" ({t.get('detail', '')})" for t in v.get("tests") or [] if not t.get("pass")]
+    out += [f"- baseline on {host}: {r.get('control')} {r.get('title', '')} is {r.get('after')}"
+            for host, rows in (v.get("baseline") or {}).items() for r in rows if r.get("after") != "pass"]
+    return out
+
+
+def fix_prompt(job: dict, failures: list[str] | None = None) -> str:
     """What the assistant is told about a failed build (sent as the chat's first message)."""
     r = job.get("result") or {}
     lines = [f"[VALOR] The build of range {_job_range(job)} failed (job {job['id']}). Find the cause and fix it so "
-             "that the next apply succeeds.",
-             f"Error: {r.get('error', 'error')}: {r.get('message', '')}"]
+             "that the next apply succeeds."]
+    if r.get("error") or not failures:
+        lines.append(f"Error: {r.get('error', 'error')}: {r.get('message', '')}")
+    if failures:
+        lines.append("The build finished, but its verification failed:\n" + "\n".join(failures[:40]))
     if r.get("step"):
         lines.append(f"Failed step: {r['step']}" + (f" on {r['host']}" if r.get("host") else ""))
     if r.get("details"):
@@ -326,8 +342,8 @@ def fix_prompt(job: dict) -> str:
         lines.append("Steps that completed before it: " + ", ".join(map(str, r["completed_steps"][-15:])))
     lines.append("Look inside the affected VMs first, then fix the cause where it is: in the VMs (commands that change "
                  "something wait for my approval), in the spec with update_spec when the spec is wrong, or both. The "
-                 "failed step runs again on the next apply, so make sure it will succeed then. Finish with what you "
-                 "found, what you changed, and whether I should re-apply.")
+                 "next apply runs the failed step and the verification again, so make sure they will pass then. Finish "
+                 "with what you found, what you changed, and whether I should re-apply.")
     return "\n".join(lines)[:7900]
 
 
@@ -340,12 +356,15 @@ def start_fix(app, conn, job: dict, username: str, auto: bool, provider: str | N
             return r["id"]
     now = time.time()
     res = job.get("result") or {}
-    title = f"Fix: {res.get('message') or res.get('error') or 'failed build'}"[:120]
+    failures = [] if res.get("error") else _verify_failures(app.state.cfg, job)
+    title = f"Fix: {res.get('message') or res.get('error') or ''}" if not failures else \
+        f"Fix: verification failed ({len(failures)} check{'' if len(failures) == 1 else 's'})"
+    title = (title if title != "Fix: " else "Fix: failed build")[:120]
     cid = conn.execute("INSERT INTO chats(owner, kind, range, title, created, updated, state) VALUES "
                        "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now,
                                                         json.dumps({"job": job["id"], **({"provider": provider} if provider else {})}))).lastrowid
     conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
-                 (cid, now, fix_prompt(job)))
+                 (cid, now, fix_prompt(job, failures)))
     with _lock:
         a = conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', "
                          "'code', 'running', ?)", (cid, now, json.dumps({"steps": []}))).lastrowid
