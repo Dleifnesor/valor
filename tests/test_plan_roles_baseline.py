@@ -163,3 +163,28 @@ def test_iso9660_writer(tmp_path):
         assert "KS.CFG;1" in listing and "README.TXT;1" in listing
         data = subprocess.run(["isoinfo", "-x", "/KS.CFG;1", "-i", str(p)], capture_output=True).stdout
         assert data == b"a" * 5000
+
+
+def test_apt_settles_before_every_update(tmp_path):
+    """A clone's overdue apt-daily refresh holds the package-list lock at boot (apt-get update does not wait):
+    VALOR stops it and waits for other holders before its own update - in roles, baselines and on the router."""
+    from valor import roles, wireguard
+    log = tmp_path / "log"
+    stubs = {"systemctl": f'echo "systemctl $*" >> {log}',
+             "fuser": f'n=$(cat {tmp_path}/n 2>/dev/null || echo 0); echo $((n+1)) > {tmp_path}/n; [ $n -lt 2 ]',
+             "sleep": f'echo "sleep $*" >> {log}'}
+    for name, body in stubs.items():
+        (tmp_path / name).write_text(f"#!/bin/bash\n{body}\n")
+        (tmp_path / name).chmod(0o755)
+    r = subprocess.run(["bash", "-c", roles.APT_SETTLE + "apt_settle; echo settled"], capture_output=True, text=True,
+                       env={"PATH": f"{tmp_path}:/usr/bin:/bin"})
+    assert r.stdout.strip() == "settled"
+    assert log.read_text().splitlines() == ["systemctl stop apt-daily.service", "sleep 5", "sleep 5"]  # lock held twice
+    scripts = {"role": roles.PRELUDE, "router": wireguard.router_script("[Interface]\n"),
+               "baseline": bundle(load_baseline(Path(__file__).parents[1] / "baselines", "ubuntu-l1"), False, fix=True)}
+    for where, script in scripts.items():
+        assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0, where
+        for line in script.splitlines():
+            if "update" in line and ("apt-get" in line or "$APT" in line):
+                assert "apt_settle" in line or line.strip().startswith("apt-get -o DPkg::Lock::Timeout=900 -qq update"), (where, line)
+        assert "apt_settle()" in script, where

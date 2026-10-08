@@ -13,19 +13,35 @@ import yaml
 from .errors import ValorError
 from .spec import RangeSpec
 
+# Before every `apt-get update` VALOR runs (roles, baselines, the router). A clone's apt-daily.timer is overdue
+# (Persistent=true, last run when the template was built), so Ubuntu starts its daily list refresh right at boot -
+# often before the build has internet - and it can hang for long holding the package-list lock, which `apt-get
+# update` does not wait for (DPkg::Lock::Timeout covers only installs). It only refreshes the lists, which VALOR
+# does next anyway: stop it, then wait for any other holder.
+APT_SETTLE = r"""apt_settle() {
+  systemctl stop apt-daily.service 2>/dev/null || true
+  local i
+  for i in $(seq 1 120); do
+    command -v fuser >/dev/null 2>&1 && fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || return 0
+    sleep 5
+  done
+}
+"""
+
 # Shared helpers available to every role script.
 PRELUDE = r"""
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
 VALOR_CHANGED=0
-apt_install() {
+""" + APT_SETTLE + r"""apt_install() {
   # Install packages only if missing; waits for apt locks held by first-boot updates.
   local missing=()
   for p in "$@"; do dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep "install ok installed" >/dev/null || missing+=("$p"); done
   [ ${#missing[@]} -eq 0 ] && return 0
   local i
   for i in 1 2 3; do
+    apt_settle
     apt-get -o DPkg::Lock::Timeout=900 -qq update >/dev/null 2>&1 && \
     apt-get -o DPkg::Lock::Timeout=900 -qq -y install "${missing[@]}" >/dev/null && { VALOR_CHANGED=1; return 0; }
     sleep $((i * 10))
