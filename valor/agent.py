@@ -159,6 +159,22 @@ def _wget(args):
     return out in ("-", "/dev/null")
 
 
+def _mysqladmin(args):
+    """mysqladmin ping / status / version / variables (no password on the command line)."""
+    words, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-h", "-P", "-u", "-S", "--host", "--port", "--user", "--socket"):
+            i += 2
+            continue
+        if a.startswith("-p") or a.startswith("--password"):
+            return False
+        if not a.startswith("-"):
+            words.append(a)
+        i += 1
+    return bool(words) and all(w in ("ping", "status", "version", "variables") for w in words)
+
+
 REDIS_READ = {"ping", "info", "dbsize", "role", "time", "lastsave", "get", "mget", "exists", "type", "ttl", "pttl",
               "strlen", "llen", "lrange", "scard", "smembers", "hlen", "hget", "hgetall", "zcard", "zrange", "keys", "scan"}
 
@@ -251,6 +267,11 @@ LINUX_READ = {
     "wget": _wget,
     "redis-cli": _redis_cli,
     "fail2ban-client": _first_in("status", "ping", "version", "get", "banned"),
+    "pg_isready": None,                                     # does PostgreSQL accept connections
+    "psql": lambda args: bool(args) and all(a in ("-l", "--list", "-w", "--no-password", "-X") or
+                                            re.fullmatch(r"(-[hpUd]|--(host|port|username|dbname))(=\S+)?|[\w.@/-]+", a)
+                                            for a in args) and any(a in ("-l", "--list") for a in args),
+    "mysqladmin": _mysqladmin,
     "ip": _ip,
     "env": lambda args: not args,
     "systemctl": _first_in("status", "is-active", "is-enabled", "is-failed", "list-units", "list-unit-files", "show",
@@ -344,6 +365,11 @@ def _linux_segment_ok(words: list[str], depth: int = 0) -> bool:
     if not words or "=" in words[0]:
         return False                    # nothing left, or an environment assignment (FOO=bar cmd)
     cmd, args = words[0].rsplit("/", 1)[-1], words[1:]
+    if cmd == "su" and depth < 2:                   # su [-] USER -c 'cmd': judge cmd
+        rest = [w for w in args if w not in ("-", "-l", "--login")]
+        return len(rest) == 3 and rest[1] == "-c" and linux_readonly(rest[2], depth + 1)
+    if cmd == "runuser" and len(args) >= 4 and args[0] == "-u" and args[2] == "--" and depth < 2:
+        return _linux_segment_ok(args[3:], depth + 1)       # runuser -u USER -- cmd
     if cmd == "exec" and not args:
         return True                     # exec 3<>/dev/tcp/...: only its (checked) redirections
     if cmd in ("bash", "sh") and len(args) == 2 and args[0] == "-c" and depth < 2:

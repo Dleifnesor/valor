@@ -145,13 +145,14 @@ container_cmd() {
   fi
 }
 write_file() {
-  # write_file PATH MODE  (content on stdin); only touches the file when content differs.
+  # write_file PATH MODE  (content on stdin); only touches the file when content differs, then sets VALOR_CHANGED=1.
+  # Succeeds either way: under set -e a "nothing to do" status ended model-written scripts (re-runs of a fixed host).
   # Feed it with a heredoc or < <(cmd), never `cmd | write_file`: a pipeline runs it in a subshell and the change
   # would not count (VALOR_CHANGED), so services would not restart.
   local path="$1" mode="${2:-0644}" tmp
   tmp=$(mktemp)
   cat > "$tmp"
-  if [ -f "$path" ] && cmp -s "$tmp" "$path"; then rm -f "$tmp"; return 1; fi
+  if [ -f "$path" ] && cmp -s "$tmp" "$path"; then rm -f "$tmp"; return 0; fi
   install -D -m "$mode" "$tmp" "$path"; rm -f "$tmp"; VALOR_CHANGED=1; return 0
 }
 changed() { VALOR_CHANGED=1; }

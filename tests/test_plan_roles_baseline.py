@@ -223,3 +223,22 @@ def test_nginx_reverse_proxy_and_address_errors(ref_spec):
                    "hosts: [{name: aa, segment: lan, address: 10.340.0.10}]\n")
     msgs = {d["location"]: d["message"] for d in e.value.details}
     assert "not 10.340.0.0/24" in msgs["segments.0.cidr"] and "0-255" in msgs["hosts.0.address"]
+
+
+def test_write_file_with_unchanged_content_does_not_end_a_script(tmp_path):
+    """A model-written custom script re-run on a host it already fixed: write_file found nothing to change, returned 1
+    and set -e ended the script ("role 'custom-script' failed (exit 1)" with no message)."""
+    from valor.roles import PRELUDE
+    script = PRELUDE + f'''
+write_file {tmp_path}/a.conf 0644 <<'EOF'
+x = 1
+EOF
+echo "first=$VALOR_CHANGED"; VALOR_CHANGED=0
+write_file {tmp_path}/a.conf 0644 <<'EOF'
+x = 1
+EOF
+echo "second=$VALOR_CHANGED"
+'''
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["first=1", "second=0", "VALOR-ROLE-CHANGED=0"]

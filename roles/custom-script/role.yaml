@@ -11,8 +11,10 @@ params:
     raw: true
     max_length: 20000
     description: >
-      The script. Bash runs with set -euo pipefail and VALOR's helpers (pkg_install, write_file PATH MODE <<EOF,
-      firewall_open PORT [udp], wait_port PORT, run_container NAME IMAGE [options], changed); PowerShell runs with
+      The script. Bash runs with set -euo pipefail and VALOR's helpers (pkg_install, write_file PATH MODE <<EOF -
+      writes only when the content differs and then sets VALOR_CHANGED=1, so restart a service when
+      [ "$VALOR_CHANGED" = 1 ] -, firewall_open PORT [udp], wait_port PORT, run_container NAME IMAGE [options],
+      changed); PowerShell runs with
       $ErrorActionPreference = 'Stop' and Changed, Open-TcpPort, Wait-Port, Wait-Until, Write-RebootRequired
   ports:
     raw: true
