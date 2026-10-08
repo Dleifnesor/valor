@@ -1,0 +1,16 @@
+description: >
+  Redis key-value store on the host's segment address (no password); with allow_from only those clients reach it -
+  enforced by the host's firewall, so it also holds within the same segment
+families: [debian]
+ports_param: port
+params:
+  port:
+    raw: true
+    pattern: '^[0-9]{1,5}$'
+    default: 6379
+    description: TCP port Redis listens on
+  allow_from:
+    default: ""
+    description: >
+      Hosts or segments allowed to connect (spec names; hosts become /32, segments their network); default anyone
+      the router lets through. Clients in other segments also need a policy rule.

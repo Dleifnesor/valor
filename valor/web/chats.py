@@ -404,7 +404,7 @@ def fix_failed_builds(app) -> list[int]:
                                  "AND ts > ?", (user["username"], time.time() - 86400)).fetchone()[0]
             if limit and spent >= limit:
                 continue
-            out.append(start_fix(app, conn, job, user["username"], True))
+            out.append(start_fix(app, conn, job, user["username"], True, store["fix_provider"] or None))
     finally:
         conn.close()
     return out

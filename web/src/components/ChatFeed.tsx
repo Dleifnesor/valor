@@ -217,7 +217,17 @@ function Approvals({ m, steps, decide, readonly }: { m: Message; steps: Step[]; 
   return (
     <div className="approval card">
       <b>{pending.length === 1 ? "The assistant wants to:" : `The assistant wants to do ${pending.length} things:`}</b>
-      <ul>{pending.map((s) => <li key={s.id}><span className="mono">{s.summary}</span>{s.purpose ? <span className="muted"> - {s.purpose}</span> : null}</li>)}</ul>
+      <ul>{pending.map((s) => {
+        const body = s.name === "run_command" ? s.input?.command : s.name === "write_file" ? s.input?.content : undefined;
+        return (
+          <li key={s.id}>
+            {body ? (
+              <details><summary><span className="mono">{s.summary}</span>{s.purpose ? <span className="muted"> - {s.purpose}</span> : null}</summary>
+                <pre className="mono step-code">{String(body)}</pre></details>
+            ) : <><span className="mono">{s.summary}</span>{s.purpose ? <span className="muted"> - {s.purpose}</span> : null}</>}
+          </li>
+        );
+      })}</ul>
       {readonly ? <div className="muted small">Waiting for the chat's owner.</div> : (
         <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
           <button className="btn small primary" disabled={busy} onClick={() => go("approve")}>Approve</button>

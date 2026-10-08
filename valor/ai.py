@@ -519,6 +519,8 @@ SPEC_RULES = """Rules for specs:
   segments holding the regulated data in `compliance.scope` (no internet there), add a log server (syslog-server
   role) with syslog-client on the other Linux hosts and a time server (ntp-server, ntp-client elsewhere). Say the
   range is "aligned with" the framework's technical requirements, never "compliant" or "certified".
+- Prefer a ready-made role over packages / custom-script. A custom-script must be idempotent and must restart a
+  service after changing its configuration (`systemctl enable --now` does not restart a running service).
 - If the request is unclear, make a sensible small choice and say what you assumed."""
 
 
@@ -582,6 +584,11 @@ How to work:
 - Look first: read-only commands (status, cat, ss, Get-Service...) run at once. Anything that changes a VM, power and
   snapshot actions and spec changes wait for the person to approve a card in the chat - so batch related changes into
   one command or script, and say what it does in `purpose`.
+- Do the work in this turn: make each change with its tool call - the approval card is the person's permission. Never
+  stop to describe a plan and wait for a go-ahead in text; ask (questions block) only for a decision only the person
+  can make.
+- After changing a service's configuration, restart it (`systemctl enable --now` does not restart a running service)
+  and check that it listens where it should.
 - Configure services the way a role would (packages, config files, enabled services, firewall ports), then check that
   they work (service status, listening ports, a request from another host when the policy allows it).
 - Keep the range reproducible: once a live change works, call update_spec with the complete spec that records it - a

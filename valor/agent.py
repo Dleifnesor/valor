@@ -184,6 +184,29 @@ def _redis_cli(args):
                                                ["memory", "stats"], ["memory", "usage"], ["slowlog", "get"])
 
 
+SED_PRINT = re.compile(r"((\d+|\$|/[^/;]*/)(,(\d+|\$|/[^/;]*/))?!?[pdq]|[pdq=])(\s*;\s*((\d+|\$|/[^/;]*/)(,(\d+|\$|/[^/;]*/))?!?[pdq]|[pdq=]))*")
+
+
+def _sed(args):
+    """sed that only prints or skips lines (sed -n '1,120p', '/x/d', '5q'): no -i, no s/// (w and e flags), no files written."""
+    scripts, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-u", "--unbuffered", "-z"):
+            i += 1
+            continue
+        if a in ("-e", "--expression"):
+            scripts.append(args[i + 1] if i + 1 < len(args) else "")
+            i += 2
+            continue
+        if a.startswith("-"):
+            return False                # -i (in place), -f (script file), -s ...
+        if not scripts:
+            scripts.append(a)           # the script; the rest are files to read
+        i += 1
+    return bool(scripts) and all(SED_PRINT.fullmatch(x.strip()) for x in scripts)
+
+
 def _rpm(args):
     return bool(args) and (args[0].startswith("-q") or args[0] in ("--query", "-V", "--verify"))
 
@@ -223,6 +246,8 @@ LINUX_READ = {
         a in ("--exec", "--sh-exec", "--listen") or a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("ecl")
         for a in args),
     "curl": _curl,
+    "command": lambda args: bool(args) and args[0] in ("-v", "-V"),   # command -v X: is X installed
+    "sed": _sed,
     "wget": _wget,
     "redis-cli": _redis_cli,
     "fail2ban-client": _first_in("status", "ping", "version", "get", "banned"),
@@ -267,7 +292,11 @@ SAFE_REDIRECTS = {">/dev/null", "1>/dev/null", "2>/dev/null", "&>/dev/null", "2>
 WRAPPERS = ("sudo", "timeout", "nice", "stdbuf")
 
 
-def linux_readonly(command: str) -> bool:
+NET_DEVICE = re.compile(r"/dev/(tcp|udp)/[A-Za-z0-9.-]+/\d{1,5}")
+NET = "\x00net"                         # marks a command that opens a /dev/tcp|udp connection
+
+
+def linux_readonly(command: str, depth: int = 0) -> bool:
     text = command.strip()
     if not text or any(s in text for s in ("$(", "`", "<(", ">(", "<<")):
         return False
@@ -287,6 +316,12 @@ def linux_readonly(command: str) -> bool:
             if tok in ("(", ")", "&", ">>", "&>>"):
                 return False            # subshells, background jobs, appending to files
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
+            if tok in ("<", ">", "<>") and NET_DEVICE.fullmatch(target):
+                if segments[-1] and segments[-1][-1].isdigit():
+                    segments[-1].pop()  # 3<>/dev/tcp/10.0.0.5/5432: a connection test ...
+                segments[-1].append(NET)            # ... only for exec / echo / true (no data sent out)
+                i += 2
+                continue
             fd = segments[-1].pop() if segments[-1] and segments[-1][-1].isdigit() and tok.startswith(">") else ""
             if tok != "<" and f"{fd}{tok}{target}" not in SAFE_REDIRECTS:
                 return False            # only 2>/dev/null, 2>&1 ... (and reading input with <)
@@ -295,10 +330,12 @@ def linux_readonly(command: str) -> bool:
         else:
             segments[-1].append(tok)
         i += 1
-    return all(_linux_segment_ok(s) for s in segments if s) and any(segments)
+    return all(_linux_segment_ok(s, depth) for s in segments if s) and any(segments)
 
 
-def _linux_segment_ok(words: list[str]) -> bool:
+def _linux_segment_ok(words: list[str], depth: int = 0) -> bool:
+    if NET in words:
+        return [w for w in words if w != NET] in ([], ["exec"], ["echo"], ["true"], [":"])
     words = list(words)
     while words and words[0] in WRAPPERS:           # sudo X, timeout 10 X, nice -n 5 X: judge X
         w = words.pop(0)
@@ -307,6 +344,10 @@ def _linux_segment_ok(words: list[str]) -> bool:
     if not words or "=" in words[0]:
         return False                    # nothing left, or an environment assignment (FOO=bar cmd)
     cmd, args = words[0].rsplit("/", 1)[-1], words[1:]
+    if cmd == "exec" and not args:
+        return True                     # exec 3<>/dev/tcp/...: only its (checked) redirections
+    if cmd in ("bash", "sh") and len(args) == 2 and args[0] == "-c" and depth < 2:
+        return linux_readonly(args[1], depth + 1)       # bash -c '<a read-only script>'
     if args == ["--version"] and re.fullmatch(r"[a-z][a-z0-9._+-]*", cmd):
         return True                     # any program's version
     if cmd not in LINUX_READ:
@@ -467,7 +508,9 @@ def summary(name: str, args: dict) -> str:
     """One line for the feed and the approval card."""
     a = args or {}
     if name == "run_command":
-        return f"{a.get('host')}: {a.get('command', '').strip().splitlines()[0][:200] if a.get('command') else ''}"
+        lines = str(a.get("command") or "").strip().splitlines()
+        more = f" … (+{len(lines) - 1} line{'' if len(lines) == 2 else 's'})" if len(lines) > 1 else ""
+        return f"{a.get('host')}: {lines[0][:200] if lines else ''}{more}"     # the card says when there is more
     if name in ("read_file", "write_file"):
         return f"{a.get('host')}: {'read' if name == 'read_file' else 'write'} {a.get('path')}"
     if name == "power":

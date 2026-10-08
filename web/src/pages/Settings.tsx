@@ -210,6 +210,7 @@ interface Ai {
   providers: AiProvider[];
   daily_tokens_per_user: number;
   fix_failed_builds: boolean;
+  fix_provider: string;
   kinds?: AiKind[];
   anthropic_models?: string[];
 }
@@ -323,9 +324,17 @@ function AiSettings() {
           </label>
           <label className="checkbox">
             <input type="checkbox" checked={s.fix_failed_builds} onChange={(e) => setS({ ...s, fix_failed_builds: e.target.checked })} />
-            When a build fails, the assistant (default provider) starts finding and fixing the cause in a range chat of
-            the person who started it - it looks inside the VMs and asks before it changes anything
+            When a build fails, the assistant starts finding and fixing the cause in a range chat of the person who
+            started it - it looks inside the VMs and asks before it changes anything
           </label>
+          {s.fix_failed_builds && (
+            <label className="field" style={{ maxWidth: 420 }}>Failed builds go to
+              <select value={s.fix_provider} onChange={(e) => setS({ ...s, fix_provider: e.target.value })}>
+                <option value="">the default provider</option>
+                {s.providers.filter((p) => p.id).map((p) => <option key={p.id} value={p.id}>{p.name} - {p.model}</option>)}
+              </select>
+            </label>
+          )}
           {msg && <div className={`alert ${msg.ok ? "info" : "error"}`}>{msg.text}</div>}
           <ErrorBox error={err} />
         </div>
