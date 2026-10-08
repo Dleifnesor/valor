@@ -413,3 +413,54 @@ def test_a_chat_uses_its_own_provider(lab, monkeypatch):
     wait(op, chat["id"], say(op, h, chat["id"], "once more", "build"))
     assert used[-1][0] == "Claude"                                        # falls back to the default
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
+
+
+def _failed_build(cfg, origin="web:olivia", error="role_failed", age=0):
+    from valor import jobs
+    jid = jobs.create(cfg, "apply", {"spec": "lab.yaml", "verify": True}, origin)
+    jobs.finish(cfg, jid, {"ok": False, "error": error, "message": "role 'nginx' failed on web (exit 1)",
+                           "step": "role nginx", "host": "web", "details": "apt_install failed for: nginx",
+                           "hint": "Fix roles/nginx/ or the role params in the spec, then re-apply.",
+                           "completed_steps": ["validate", "plan", "create VM [web]"]})
+    jobs.update(cfg, jid, state="failed", finished=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - age)))
+    return jid
+
+
+def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
+    app, wcfg, cfg, pve = lab
+    fake = Script([("Looking.", [("run_command", {"host": "web", "command": "systemctl status nginx", "purpose": "look"})]),
+                   "apt was locked by the boot-time refresh; nginx installs on the next apply. Re-apply the range.",
+                   "Same chat."])
+    adm, ah, op, h = start(app, monkeypatch, fake)
+    chats._fix_seen.clear()
+    jid = _failed_build(cfg)
+    assert chats.fix_failed_builds(app) and chats.fix_failed_builds(app) == []          # once per build
+    found = op.get(f"/api/jobs/{jid}/fix").json()["chats"]
+    assert len(found) == 1 and found[0]["owner"] == "olivia" and found[0]["range"] == "lab"
+    assert found[0]["title"] == "Fix: role 'nginx' failed on web (exit 1)"
+    chat = op.get(f"/api/chats/{found[0]['id']}").json()
+    ask, answer = chat["messages"]
+    assert ask["role"] == "user" and ask["mode"] == "code" and f"job {jid}" in ask["content"]
+    for words in ("Failed step: role nginx on web", "apt_install failed for: nginx", "VALOR's hint: Fix roles/nginx/",
+                  "create VM [web]", "whether I should re-apply"):
+        assert words in ask["content"], words
+    m = wait(op, chat["id"], answer["id"])
+    assert m["status"] == "done" and "Re-apply" in m["content"] and len(pve.ran) == 1       # it looked inside web
+    assert "run_command" in fake.calls[0]["tools"] and "update_spec" in fake.calls[0]["tools"]  # Code mode
+    # the button on the job page opens the same chat; another failed build gets its own
+    assert op.post(f"/api/jobs/{jid}/fix", headers=h).json() == {"chat": chat["id"], "range": "lab"}
+    jid2 = _failed_build(cfg, origin="cli")                                    # not started by a person: not automatic
+    assert chats.fix_failed_builds(app) == []
+    r = op.post(f"/api/jobs/{jid2}/fix", headers=h).json()
+    assert r["chat"] != chat["id"] and wait(op, r["chat"], op.get(f"/api/chats/{r['chat']}").json()["messages"][1]["id"])
+    # nothing automatic for an interrupted worker, an old failure, or with the setting off
+    for kw in ({"error": "interrupted"}, {"age": 7200}):
+        _failed_build(cfg, **kw)
+    assert chats.fix_failed_builds(app) == []
+    st = adm.get("/api/settings/ai").json()
+    assert st["fix_failed_builds"] is True
+    adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_failed_builds": False}, headers=ah)
+    _failed_build(cfg)
+    assert chats.fix_failed_builds(app) == []
+    assert op.post("/api/jobs/20990101-000000-abcdef/fix", headers=h).status_code == 404
+    op.__exit__(None, None, None), adm.__exit__(None, None, None)

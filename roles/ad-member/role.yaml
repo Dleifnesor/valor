@@ -3,6 +3,8 @@ families: [windows]
 wait_for: [dc, dc2]
 params:
   domain:
+    raw: true
+    pattern: '^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$'
     required: true
     description: DNS name of the domain
   dc:

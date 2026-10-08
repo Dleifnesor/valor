@@ -438,6 +438,7 @@ ol.asked { margin: 8px 0 0; padding-left: 18px; }
   color: var(--muted); }
 .qw-other { width: 100%; }
 .qw-review { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 10px; }
+.job-details { white-space: pre-wrap; max-height: 220px; overflow: auto; margin: 6px 0; }
 .allow-all { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; }
 .chat-pick { max-width: 210px; margin: 0 6px; font-size: 13px; }
 .provider-pick { max-width: 240px; font-size: 13px; }

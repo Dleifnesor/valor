@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -39,14 +40,19 @@ API_ROUTERS = (auth.router, users.router, settings.router, status.router, ranges
                access.router, blueprints.router, builder.router, editing.router, chats.router)
 
 
-def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_dir: str | None = None) -> FastAPI:
+def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_dir: str | None = None,
+               watch_builds: bool = True) -> FastAPI:
     cfg = cfg or load_config()
     wcfg = wcfg or load_web_config()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         db.migrate(wcfg.db)
+        stop = threading.Event()
+        if watch_builds:                            # failed builds -> the assistant (chats.fix_failed_builds)
+            threading.Thread(target=chats.watch_failed_builds, args=(app, stop), daemon=True, name="fix-builds").start()
         yield
+        stop.set()
 
     app = FastAPI(title="VALOR", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.cfg, app.state.wcfg = cfg, wcfg

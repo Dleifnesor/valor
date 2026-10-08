@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ApiError, post } from "../api";
 import { JobSummary } from "../types";
 import { ago, go, useApi, when } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
@@ -79,9 +81,11 @@ export function JobDetail({ id }: { id: string }) {
         <div className="alert error">
           <b>{r.error}</b>: {r.message}
           {r.step && <div className="small">Step: {r.step}{r.host ? ` on ${r.host}` : ""}</div>}
+          {r.details && <pre className="mono small job-details">{String(r.details).slice(-2000)}</pre>}
           {r.hint && <div className="small">Hint: {r.hint}</div>}
         </div>
       )}
+      {data.kind === "apply" && data.state === "failed" && name && <FixWithAssistant id={id} range={name} />}
       {r && r.ok && (
         <div className="alert ok">
           Finished{r.seconds ? ` in ${r.seconds} s` : ""}.
@@ -108,5 +112,35 @@ export function JobDetail({ id }: { id: string }) {
         )}
       </Card>
     </>
+  );
+}
+
+/** A failed build goes to the assistant (VALOR starts it by itself when the setting is on): open its chat or ask. */
+function FixWithAssistant({ id, range }: { id: string; range: string }) {
+  const { data } = useApi<{ chats: { id: number; owner: string; title: string }[] }>(`/api/jobs/${id}/fix`, 10000);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const open = (chat: number) => go(`ranges/${range}/chat/${chat}`);
+  const ask = async () => {
+    setBusy(true); setErr(null);
+    try { open((await post<{ chat: number }>(`/api/jobs/${id}/fix`)).chat); }
+    catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  const chats = data?.chats ?? [];
+  return (
+    <div className="alert info row" style={{ gap: 10, flexWrap: "wrap" }}>
+      <span className="grow">
+        {chats.length ? "The assistant is working on this failure in the range's chat: it looks inside the VMs and "
+          + "asks before it changes anything." : "The assistant can find the cause and fix it: it looks inside the VMs "
+          + "and asks before it changes anything."}
+      </span>
+      {chats.map((c) => (
+        <button key={c.id} className="btn small primary" onClick={() => open(c.id)}>
+          Open the chat{chats.length > 1 ? ` (${c.owner})` : ""}
+        </button>
+      ))}
+      {!chats.length && <button className="btn small primary" disabled={busy} onClick={ask}>Ask the assistant to fix it</button>}
+      <ErrorBox error={err} />
+    </div>
   );
 }

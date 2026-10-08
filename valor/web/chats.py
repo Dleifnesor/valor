@@ -16,12 +16,13 @@ import logging
 import re
 import threading
 import time
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import agent, ai, drafts, state
+from .. import agent, ai, drafts, jobs, state
 from ..cluster import load_catalog, range_vms
 from ..errors import ValorError
 from ..plan import make_plan
@@ -290,6 +291,137 @@ def stop(chat_id: int, msg_id: int, s: Session = Depends(require("operator"))) -
                        "content = CASE WHEN content = '' THEN '(stopped)' ELSE content END WHERE id = ?",
                        (json.dumps(meta), msg_id))
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------- failed builds: the assistant fixes them
+FIX_WINDOW = 1800                 # seconds after a build failed in which VALOR starts the assistant on it by itself
+NOT_FIXABLE = {"interrupted", "runner_died"}      # the worker stopped (reboot, crash): run it again, nothing to fix
+JOB_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}")
+_fix_seen: set[str] = set()
+
+
+def _job_range(job: dict) -> str:
+    t = job.get("target") or {}
+    return t.get("range") or str(t.get("spec", "")).removesuffix(".yaml")
+
+
+def fix_prompt(job: dict) -> str:
+    """What the assistant is told about a failed build (sent as the chat's first message)."""
+    r = job.get("result") or {}
+    lines = [f"[VALOR] The build of range {_job_range(job)} failed (job {job['id']}). Find the cause and fix it so "
+             "that the next apply succeeds.",
+             f"Error: {r.get('error', 'error')}: {r.get('message', '')}"]
+    if r.get("step"):
+        lines.append(f"Failed step: {r['step']}" + (f" on {r['host']}" if r.get("host") else ""))
+    if r.get("details"):
+        lines.append("Output from the host:\n" + str(r["details"])[-3000:])
+    if r.get("hint"):
+        lines.append(f"VALOR's hint: {r['hint']}")
+    if r.get("completed_steps"):
+        lines.append("Steps that completed before it: " + ", ".join(map(str, r["completed_steps"][-15:])))
+    lines.append("Look inside the affected VMs first, then fix the cause where it is: in the VMs (commands that change "
+                 "something wait for my approval), in the spec with update_spec when the spec is wrong, or both. The "
+                 "failed step runs again on the next apply, so make sure it will succeed then. Finish with what you "
+                 "found, what you changed, and whether I should re-apply.")
+    return "\n".join(lines)[:7900]
+
+
+def start_fix(app, conn, job: dict, username: str, auto: bool) -> int:
+    """The range chat (Code mode) in which the assistant works on a failed build: one per build and person."""
+    name = _job_range(job)
+    for r in conn.execute("SELECT id, state FROM chats WHERE owner = ? AND kind = 'range' AND range = ?",
+                          (username, name)).fetchall():
+        if json.loads(r["state"] or "{}").get("job") == job["id"]:
+            return r["id"]
+    now = time.time()
+    res = job.get("result") or {}
+    title = f"Fix: {res.get('message') or res.get('error') or 'failed build'}"[:120]
+    cid = conn.execute("INSERT INTO chats(owner, kind, range, title, created, updated, state) VALUES "
+                       "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now, json.dumps({"job": job["id"]}))).lastrowid
+    conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
+                 (cid, now, fix_prompt(job)))
+    with _lock:
+        a = conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', "
+                         "'code', 'running', ?)", (cid, now, json.dumps({"steps": []}))).lastrowid
+        ev = _active[a] = threading.Event()
+    db.audit(conn, "chat.fix", "ok", username=username, target=name, detail={"chat": cid, "job": job["id"], "auto": auto})
+    _spawn(app, cid, a, username, False, ev)
+    return cid
+
+
+def fix_failed_builds(app) -> list[int]:
+    """Builds that failed in the last FIX_WINDOW s: the assistant starts on each once, in a chat of the person who
+    started the build, while 'Fix failed builds' is on, a provider is connected and their daily budget lasts."""
+    cfg, out = app.state.cfg, []
+    conn = db.connect(app.state.wcfg.db)
+    try:
+        store = ai_settings(conn, app.state.box)
+        if not store["providers"] or not store["fix_failed_builds"]:
+            return out
+        for j in jobs.list_jobs(cfg, 20):
+            if j.get("kind") != "apply" or j.get("state") != "failed" or j["id"] in _fix_seen:
+                continue
+            _fix_seen.add(j["id"])
+            try:
+                finished = datetime.strptime(str(j.get("finished")), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+            except ValueError:
+                continue
+            job = jobs.status(cfg, j["id"], tail=1)
+            origin = str(job.get("origin", ""))
+            user = conn.execute("SELECT username, role, disabled FROM users WHERE username = ?",
+                                (origin.removeprefix("web:"),)).fetchone()
+            if (time.time() - finished > FIX_WINDOW or not origin.startswith("web:") or user is None or user["disabled"]
+                    or user["role"] not in ("operator", "admin") or (job.get("result") or {}).get("error") in NOT_FIXABLE
+                    or not (cfg.ranges_dir / f"{_job_range(job)}.yaml").exists()):
+                continue
+            limit = int(store["daily_tokens_per_user"] or 0)
+            spent = conn.execute("SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM ai_usage WHERE username = ? "
+                                 "AND ts > ?", (user["username"], time.time() - 86400)).fetchone()[0]
+            if limit and spent >= limit:
+                continue
+            out.append(start_fix(app, conn, job, user["username"], True))
+    finally:
+        conn.close()
+    return out
+
+
+def watch_failed_builds(app, stop: threading.Event, every: float = 10.0) -> None:
+    """The web service's thread that hands failed builds to the assistant (builds run in the worker service)."""
+    while not stop.wait(every):
+        try:
+            fix_failed_builds(app)
+        except Exception:                            # pragma: no cover - logged, the next round tries again
+            log.exception("handing failed builds to the assistant")
+
+
+@router.post("/jobs/{job_id}/fix")
+def fix_job(job_id: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+    """Hand a failed build to the assistant (or open the chat that already works on it)."""
+    if not JOB_ID.fullmatch(job_id):
+        raise ApiError(400, "invalid_job", "Invalid job id.")
+    try:
+        job = jobs.status(_cfg(request), job_id, tail=1)
+    except ValorError:
+        raise ApiError(404, "no_job", "There is no such job.")
+    if job.get("kind") != "apply" or job.get("state") != "failed":
+        raise ApiError(409, "not_failed", "Only a failed build can be handed to the assistant.")
+    name = _job_range(job)
+    _load(_cfg(request), _name(name))
+    for r in s.conn.execute("SELECT id, state FROM chats WHERE owner = ? AND kind = 'range' AND range = ?",
+                            (s.username, name)).fetchall():
+        if json.loads(r["state"] or "{}").get("job") == job_id:
+            return {"chat": r["id"], "range": name}
+    start_ai(request, s)                         # rate limit, provider, daily budget
+    return {"chat": start_fix(request.app, s.conn, job, s.username, False), "range": name}
+
+
+@router.get("/jobs/{job_id}/fix")
+def fix_chats(job_id: str, s: Session = Depends(require("viewer"))) -> dict:
+    """The chats in which the assistant works on this build that the person may open."""
+    if not JOB_ID.fullmatch(job_id):
+        raise ApiError(400, "invalid_job", "Invalid job id.")
+    rows = s.conn.execute("SELECT * FROM chats WHERE kind = 'range' AND state LIKE ?", (f'%"job": "{job_id}"%',)).fetchall()
+    return {"chats": [_chat_row(r) for r in rows if r["owner"].lower() == s.username.lower() or s.user["role"] == "admin"]}
 
 
 # ---------------------------------------------------------------------- the background turn

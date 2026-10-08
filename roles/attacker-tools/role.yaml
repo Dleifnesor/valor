@@ -3,5 +3,7 @@ families: [debian, rhel]
 ports: []
 params:
   extra_packages:
+    raw: true
+    pattern: '^[a-z0-9][a-z0-9.+-]+$'
     default: ""
     description: Additional packages to install (space separated; apt names on Debian/Ubuntu/Kali, dnf names on Rocky/Alma)

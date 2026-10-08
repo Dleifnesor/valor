@@ -38,7 +38,7 @@ def env(tmp_path):
         conn.execute("INSERT INTO users(username, role, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                      (name, role, hash_password(PASSWORD), now, now))
     conn.close()
-    app = create_app(cfg, wcfg)
+    app = create_app(cfg, wcfg, watch_builds=False)
     return app, wcfg
 
 

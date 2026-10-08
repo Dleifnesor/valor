@@ -6,5 +6,6 @@ params:
     default: 80
     description: TCP port nginx listens on
   server_name:
+    raw: true
     default: "_"
     description: server_name of the site (default catch-all)

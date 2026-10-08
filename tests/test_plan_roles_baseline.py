@@ -63,6 +63,24 @@ def test_role_env_and_script(ref_spec):
     assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
 
 
+def test_names_are_not_turned_into_addresses(ref_spec):
+    """A share or database named like a host or segment stays a name (a share 'cui' in a segment 'cui' became
+    '10.171.0.0/24'); names the role would reject fail the spec check, not the build."""
+    db = ref_spec.host("db")
+    env = role_env(ref_spec, db, load_role(ROOT / "roles", "postgresql"), {"database": "web", "user": "dmz", "allow_from": ["web"]})
+    assert (env["VALOR_PARAM_DATABASE"], env["VALOR_PARAM_USER"], env["VALOR_PARAM_ALLOW_FROM"]) == ("web", "dmz", "10.110.0.10/32")
+    for role, params in (("samba-share", {"share": "dmz"}), ("windows-file-share", {"share": "dmz"}),
+                         ("mariadb", {"database": "web", "user": "web"}), ("nginx", {"server_name": "web"}),
+                         ("ad-member", {"domain": "dmz.lab", "dc": "web"})):
+        env = role_env(ref_spec, db, load_role(ROOT / "roles", role), params)
+        assert all(env[f"VALOR_PARAM_{k.upper()}"] == v for k, v in params.items() if k != "dc"), role
+    for role, params in (("windows-file-share", {"share": "10.0.0.0/24"}), ("postgresql", {"database": "My-DB"}),
+                         ("ad-dc", {"domain": "corp", "netbios": "corp"}), ("dhcp-server", {"lease": "forever"})):
+        with pytest.raises(ValorError) as e:
+            role_env(ref_spec, db, load_role(ROOT / "roles", role), params)
+        assert e.value.code == "role_param_invalid", role
+
+
 def test_baseline_bundle():
     b = load_baseline(ROOT / "baselines", "ubuntu-l1")
     assert len(b.controls) == 10

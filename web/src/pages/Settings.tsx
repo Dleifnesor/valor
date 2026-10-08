@@ -209,6 +209,7 @@ interface AiProvider {
 interface Ai {
   providers: AiProvider[];
   daily_tokens_per_user: number;
+  fix_failed_builds: boolean;
   kinds?: AiKind[];
   anthropic_models?: string[];
 }
@@ -319,6 +320,11 @@ function AiSettings() {
           ))}
           <label className="field" style={{ maxWidth: 320 }}>Daily token budget per user <span className="hint">all providers together; 0 = unlimited</span>
             <input type="number" min={0} value={s.daily_tokens_per_user} onChange={(e) => setS({ ...s, daily_tokens_per_user: Number(e.target.value) })} />
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={s.fix_failed_builds} onChange={(e) => setS({ ...s, fix_failed_builds: e.target.checked })} />
+            When a build fails, the assistant (default provider) starts finding and fixing the cause in a range chat of
+            the person who started it - it looks inside the VMs and asks before it changes anything
           </label>
           {msg && <div className={`alert ${msg.ok ? "info" : "error"}`}>{msg.text}</div>}
           <ErrorBox error={err} />

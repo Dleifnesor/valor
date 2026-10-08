@@ -5,6 +5,8 @@ families: [debian, rhel]
 ports: [25]
 params:
   domain:
+    raw: true
+    pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
     default: ""
     description: Mail domain (default <range name>.lab)
   allow_from:
