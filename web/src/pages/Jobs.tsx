@@ -5,6 +5,9 @@ import { ago, go, useApi, when } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
 
 const target = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
+/** Who started a job: web:<user>, assistant:<user>:<chat> (rebuild after an automatic fix), rerun:<origin>. */
+const who = (origin: string): string => origin.startsWith("rerun:") ? `${who(origin.slice(6))}, run again by VALOR`
+  : origin.startsWith("assistant:") ? `the assistant (for ${origin.split(":")[1]})` : origin.replace(/^web:/, "");
 
 export function Jobs() {
   const { data, error, loading } = useApi<{ jobs: JobSummary[] }>("/api/jobs?limit=100", 5000);
@@ -73,7 +76,7 @@ export function JobDetail({ id }: { id: string }) {
       <div className="row">
         <StateBadge state={data.state} />
         <b>{data.kind}{data.target.verify ? " + verify" : ""} · {name}</b>
-        <span className="muted">by {String(data.origin).replace(/^web:/, "")} · {when(data.created)}</span>
+        <span className="muted">by {who(String(data.origin))} · {when(data.created)}</span>
         <span className="grow" />
         {name && <a className="btn" href={`#/ranges/${name}`}>Open range</a>}
       </div>
@@ -130,9 +133,8 @@ function FixWithAssistant({ id, range }: { id: string; range: string }) {
   return (
     <div className="alert info row" style={{ gap: 10, flexWrap: "wrap" }}>
       <span className="grow">
-        {chats.length ? "The assistant is working on this failure in the range's chat: it looks inside the VMs and "
-          + "asks before it changes anything." : "The assistant can find the cause and fix it: it looks inside the VMs "
-          + "and asks before it changes anything."}
+        {chats.length ? "The assistant is working on this failure in the range's chat - it looks inside the VMs, "
+          + "fixes the cause and (if set so) rebuilds the range." : "The assistant can find the cause and fix it."}
       </span>
       {chats.map((c) => (
         <button key={c.id} className="btn small primary" onClick={() => open(c.id)}>

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -22,7 +23,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import agent, ai, drafts, jobs, state
+from .. import agent, ai, drafts, jobs, ops, state
 from ..cluster import load_catalog, range_vms
 from ..errors import ValorError
 from ..plan import make_plan
@@ -347,8 +348,78 @@ def fix_prompt(job: dict, failures: list[str] | None = None) -> str:
     return "\n".join(lines)[:7900]
 
 
-def start_fix(app, conn, job: dict, username: str, auto: bool, provider: str | None = None) -> int:
-    """The range chat (Code mode) in which the assistant works on a failed build: one per build and person."""
+FIX_ROUNDS = 3                     # automatic fix-and-rebuild rounds for one failed build
+FIX_MODES = ("auto", "fix", "prepare")      # fix and rebuild on its own / fix on its own / prepare, the person approves
+PROVIDER_FAILED = {"ai_context_full", "ai_unreachable", "ai_auth", "ai_credits", "ai_rate_limited", "ai_error",
+                   "ai_no_tools", "ai_truncated", "ai_not_configured"}      # another provider may well manage
+RISKY = ("replace", "remove")      # plan actions an automatic rebuild leaves to the person (VMs lost or rebuilt)
+
+
+def _origin(origin: str) -> dict:
+    """Who started a build: web:<user>, assistant:<user>:<chat> (the rebuild after an automatic fix), rerun:<origin>
+    (VALOR ran a build again after the worker stopped), cli / mcp."""
+    if origin.startswith("rerun:"):
+        return {**_origin(origin[len("rerun:"):]), "rerun": True}
+    kind, _, rest = origin.partition(":")
+    if kind == "web":
+        return {"user": rest}
+    if kind == "assistant":
+        user, _, chat = rest.rpartition(":")
+        return {"user": user, "chat": int(chat) if chat.isdigit() else None}
+    return {}
+
+
+def _owner(conn, origin: str) -> str | None:
+    """Whose chat fixes a build: the operator who started it, else the first administrator (builds from the CLI/MCP)."""
+    user = _origin(origin).get("user")
+    if user:
+        u = conn.execute("SELECT username, role, disabled FROM users WHERE username = ?", (user,)).fetchone()
+        if u is not None and not u["disabled"] and u["role"] in ("operator", "admin"):
+            return u["username"]
+    a = conn.execute("SELECT username FROM users WHERE role = 'admin' AND disabled = 0 ORDER BY id LIMIT 1").fetchone()
+    return a["username"] if a else None
+
+
+def _signature(cfg, job: dict) -> str:
+    """How a build failed - the same signature after a fix means the fix did not help."""
+    r = job.get("result") or {}
+    return json.dumps([r.get("error"), r.get("step"), r.get("host")] if r.get("error") else
+                      sorted(_verify_failures(cfg, job)))
+
+
+def _ask(app, conn, chat_id: int, username: str, text: str) -> int:
+    """VALOR's message in a fix chat, and the assistant's turn on it (Code mode)."""
+    now = time.time()
+    conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
+                 (chat_id, now, text))
+    with _lock:
+        a = conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', "
+                         "'code', 'running', ?)", (chat_id, now, json.dumps({"steps": []}))).lastrowid
+        ev = _active[a] = threading.Event()
+    conn.execute("UPDATE chats SET updated = ? WHERE id = ?", (now, chat_id))
+    _spawn(app, chat_id, a, username, False, ev)
+    return a
+
+
+def _say(conn, chat_id: int, text: str) -> None:
+    """A note from VALOR at the end of a fix chat (no model turn)."""
+    now = time.time()
+    conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, content, meta) VALUES (?, ?, 'assistant', "
+                 "'code', 'done', ?, ?)", (chat_id, now, text, json.dumps({"steps": [], "valor": True})))
+    conn.execute("UPDATE chats SET updated = ? WHERE id = ?", (now, chat_id))
+
+
+def _set_state(conn, chat_id: int, **fields) -> dict:
+    row = conn.execute("SELECT state FROM chats WHERE id = ?", (chat_id,)).fetchone()
+    st = {**json.loads(row["state"] or "{}"), **fields}
+    conn.execute("UPDATE chats SET state = ? WHERE id = ?", (json.dumps(st), chat_id))
+    return st
+
+
+def start_fix(app, conn, job: dict, username: str, auto: bool, provider: str | None = None,
+              mode: str = "prepare") -> int:
+    """The range chat (Code mode) in which the assistant works on a failed build: one per build and person. In the
+    modes 'auto' and 'fix' its actions run without approval cards; 'auto' also rebuilds when it is done."""
     name = _job_range(job)
     for r in conn.execute("SELECT id, state FROM chats WHERE owner = ? AND kind = 'range' AND range = ?",
                           (username, name)).fetchall():
@@ -360,23 +431,75 @@ def start_fix(app, conn, job: dict, username: str, auto: bool, provider: str | N
     title = f"Fix: {res.get('message') or res.get('error') or ''}" if not failures else \
         f"Fix: verification failed ({len(failures)} check{'' if len(failures) == 1 else 's'})"
     title = (title if title != "Fix: " else "Fix: failed build")[:120]
+    state_ = {"job": job["id"], "fix": mode, "round": 1, "sig": _signature(app.state.cfg, job), "jobs": [job["id"]],
+              **({"provider": provider} if provider else {}), **({"allow_all": True} if mode in ("auto", "fix") else {})}
     cid = conn.execute("INSERT INTO chats(owner, kind, range, title, created, updated, state) VALUES "
-                       "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now,
-                                                        json.dumps({"job": job["id"], **({"provider": provider} if provider else {})}))).lastrowid
-    conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
-                 (cid, now, fix_prompt(job, failures)))
-    with _lock:
-        a = conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', "
-                         "'code', 'running', ?)", (cid, now, json.dumps({"steps": []}))).lastrowid
-        ev = _active[a] = threading.Event()
-    db.audit(conn, "chat.fix", "ok", username=username, target=name, detail={"chat": cid, "job": job["id"], "auto": auto})
-    _spawn(app, cid, a, username, False, ev)
+                       "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now, json.dumps(state_))).lastrowid
+    db.audit(conn, "chat.fix", "ok", username=username, target=name,
+             detail={"chat": cid, "job": job["id"], "auto": auto, "mode": mode})
+    _ask(app, conn, cid, username, fix_prompt(job, failures))
     return cid
 
 
+def continue_fix(app, conn, chat, job: dict) -> int | None:
+    """The automatic rebuild failed: the same chat goes on (round 2, 3) - unless it failed the same way again."""
+    cfg, cs = app.state.cfg, json.loads(chat["state"] or "{}")
+    rnd, sig = int(cs.get("round", 1)) + 1, _signature(cfg, job)
+    if sig == cs.get("sig") or rnd > FIX_ROUNDS:
+        why = "the rebuild failed the same way again" if sig == cs.get("sig") else f"{FIX_ROUNDS} rounds did not fix it"
+        _say(conn, chat["id"], f"VALOR stopped fixing this on its own: {why} (job {job['id']}). Read what the assistant "
+                               "found above; ask it to try something else, or fix the spec and apply it yourself.")
+        _set_state(conn, chat["id"], done="stopped")
+        return None
+    _set_state(conn, chat["id"], round=rnd, sig=sig, jobs=[*cs.get("jobs", []), job["id"]])
+    res = job.get("result") or {}
+    _ask(app, conn, chat["id"], chat["owner"], f"[VALOR] Round {rnd} of {FIX_ROUNDS}: the rebuild failed too.\n" +
+         fix_prompt(job, [] if res.get("error") else _verify_failures(cfg, job)))
+    return chat["id"]
+
+
+def _rebuild(app, conn, chat, username: str) -> dict:
+    """Mode 'auto': build the range again once the assistant is done - its draft when it recorded one. A plan that
+    would replace or remove a VM waits for the person."""
+    cfg, name = app.state.cfg, chat["range"]
+    d = drafts.load(cfg, name)
+    try:
+        text = d[0] if d else _load(cfg, name)[1]
+        spec = normalize(parse_spec(text), cfg.default_os)
+        pve = PVE(cfg)
+        v = validate_cluster(pve, spec)
+        if not v["ok"]:
+            return {"note": "VALOR did not rebuild: the spec has problems - " +
+                            "; ".join(f"{e['location']}: {e['message']}" for e in v["errors"])[:600]}
+        p = make_plan(pve, spec)
+    except ValorError as e:
+        return {"note": f"VALOR did not rebuild: {e.message}"}
+    risky = [f"{a['action']} {a['host']}" for a in p["actions"] if a["action"] in RISKY]
+    if risky:
+        return {"note": f"VALOR did not rebuild on its own: the plan would {', '.join(risky)}. Review the plan on the "
+                        "range page and apply it there."}
+    if d:                                    # the assistant's draft becomes the range's spec, as an approved apply does
+        path = cfg.ranges_dir / f"{name}.yaml"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
+        drafts.discard(cfg, name)
+        db.audit(conn, "range.spec.save", "ok", username=username, target=name,
+                 detail={"from": "draft", "by": "assistant", "chat": chat["id"]})
+    job = ops.start(cfg, "apply", {"spec": f"{name}.yaml", "verify": True}, f"assistant:{username}:{chat['id']}",
+                    background=True)
+    _set_state(conn, chat["id"], rebuild=job["job"])
+    db.audit(conn, "range.apply", "ok", username=username, target=name,
+             detail={"job": job["job"], "by": "assistant", "chat": chat["id"], "changes": p["summary"]})
+    changes = ", ".join(f"{n} {k}" for k, n in p["summary"].items() if n and k != "keep") or "no changes"
+    return {"job": job["job"], "note": f"VALOR rebuilds the range now ({changes})."}
+
+
 def fix_failed_builds(app) -> list[int]:
-    """Builds that failed in the last FIX_WINDOW s: the assistant starts on each once, in a chat of the person who
-    started the build, while 'Fix failed builds' is on, a provider is connected and their daily budget lasts."""
+    """Builds that ended in the last FIX_WINDOW s, while 'fix failed builds' is on and a provider is connected:
+    a failed one goes to the assistant (a chat of the person who started it, or the first admin for CLI/MCP builds;
+    a failed automatic rebuild continues its chat); one the worker did not finish runs once more; a successful
+    automatic rebuild closes its chat."""
     cfg, out = app.state.cfg, []
     conn = db.connect(app.state.wcfg.db)
     try:
@@ -384,30 +507,65 @@ def fix_failed_builds(app) -> list[int]:
         if not store["providers"] or not store["fix_failed_builds"]:
             return out
         for j in jobs.list_jobs(cfg, 20):
-            if j.get("kind") != "apply" or j.get("state") != "failed" or j["id"] in _fix_seen:
+            if j.get("kind") != "apply" or j.get("state") not in ("failed", "succeeded") or j["id"] in _fix_seen:
                 continue
             _fix_seen.add(j["id"])
             try:
                 finished = datetime.strptime(str(j.get("finished")), "%Y-%m-%dT%H:%M:%S%z").timestamp()
             except ValueError:
                 continue
+            if time.time() - finished > FIX_WINDOW:
+                continue
             job = jobs.status(cfg, j["id"], tail=1)
             origin = str(job.get("origin", ""))
-            user = conn.execute("SELECT username, role, disabled FROM users WHERE username = ?",
-                                (origin.removeprefix("web:"),)).fetchone()
-            if (time.time() - finished > FIX_WINDOW or not origin.startswith("web:") or user is None or user["disabled"]
-                    or user["role"] not in ("operator", "admin") or (job.get("result") or {}).get("error") in NOT_FIXABLE
-                    or not (cfg.ranges_dir / f"{_job_range(job)}.yaml").exists()):
+            o = _origin(origin)
+            chat = conn.execute("SELECT * FROM chats WHERE id = ?", (o["chat"],)).fetchone() if o.get("chat") else None
+            if j["state"] == "succeeded":
+                if chat is not None:
+                    v = ((job.get("result") or {}).get("verify") or {}).get("summary") or {}
+                    tests = f" Verification: tests {v.get('tests_passed')}/{v.get('tests_total')}, baseline " \
+                            f"{v.get('baseline_passed')}/{v.get('baseline_total')}." if v else ""
+                    _say(conn, chat["id"], f"VALOR rebuilt the range: the build succeeded (job {job['id']}).{tests}")
+                    _set_state(conn, chat["id"], done="fixed")
                 continue
+            name = _job_range(job)
+            if not (cfg.ranges_dir / f"{name}.yaml").exists():
+                continue
+            if (job.get("result") or {}).get("error") in NOT_FIXABLE:
+                if not o.get("rerun"):           # the worker stopped (reboot, crash): run the same build once more
+                    r = ops.start(cfg, "apply", job["target"], f"rerun:{origin}", background=True)
+                    db.audit(conn, "range.apply", "ok", username=o.get("user", ""), target=name,
+                             detail={"job": r["job"], "rerun_of": job["id"], "by": "valor"})
+                continue
+            owner = chat["owner"] if chat is not None else _owner(conn, origin)
             limit = int(store["daily_tokens_per_user"] or 0)
             spent = conn.execute("SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM ai_usage WHERE username = ? "
-                                 "AND ts > ?", (user["username"], time.time() - 86400)).fetchone()[0]
-            if limit and spent >= limit:
+                                 "AND ts > ?", (owner, time.time() - 86400)).fetchone()[0] if owner else 0
+            if owner is None or (limit and spent >= limit):
                 continue
-            out.append(start_fix(app, conn, job, user["username"], True, store["fix_provider"] or None))
+            cid = continue_fix(app, conn, chat, job) if chat is not None else \
+                start_fix(app, conn, job, owner, True, store["fix_provider"] or None, store["fix_mode"])
+            if cid:
+                out.append(cid)
     finally:
         conn.close()
     return out
+
+
+def _fallback(app, conn, chat, st: dict, e: ValorError) -> dict | None:
+    """A fix chat whose provider could not answer (context too small, unreachable, credits, ...) moves on to the
+    next one: the failed-builds provider, the default, then the others."""
+    cs = json.loads(chat["state"] or "{}")
+    if "job" not in cs or e.code not in PROVIDER_FAILED:
+        return None
+    store = ai_settings(conn, app.state.box)
+    first = store["fix_provider"] or store["default"]
+    order = sorted(store["providers"], key=lambda p: (p["id"] != first, p["id"] != store["default"]))
+    tried = {*(cs.get("tried") or []), st.get("id")}
+    nxt = next((p for p in order if p["id"] not in tried), None)
+    if nxt is not None:
+        _set_state(conn, chat["id"], provider=nxt["id"], tried=sorted(t for t in tried if t))
+    return nxt
 
 
 def watch_failed_builds(app, stop: threading.Event, every: float = 10.0) -> None:
@@ -438,7 +596,8 @@ def fix_job(job_id: str, request: Request, body: FixIn = FixIn(), s: Session = D
             return {"chat": r["id"], "range": name}
     _known_provider(request, s, body.provider)
     start_ai(request, s, body.provider)          # rate limit, provider, daily budget
-    return {"chat": start_fix(request.app, s.conn, job, s.username, False, body.provider), "range": name}
+    mode = ai_settings(s.conn, request.app.state.box)["fix_mode"]
+    return {"chat": start_fix(request.app, s.conn, job, s.username, False, body.provider, mode), "range": name}
 
 
 @router.get("/jobs/{job_id}/fix")
@@ -446,7 +605,7 @@ def fix_chats(job_id: str, s: Session = Depends(require("viewer"))) -> dict:
     """The chats in which the assistant works on this build that the person may open."""
     if not JOB_ID.fullmatch(job_id):
         raise ApiError(400, "invalid_job", "Invalid job id.")
-    rows = s.conn.execute("SELECT * FROM chats WHERE kind = 'range' AND state LIKE ?", (f'%"job": "{job_id}"%',)).fetchall()
+    rows = s.conn.execute("SELECT * FROM chats WHERE kind = 'range' AND state LIKE ?", (f'%"{job_id}"%',)).fetchall()
     return {"chats": [_chat_row(r) for r in rows if r["owner"].lower() == s.username.lower() or s.user["role"] == "admin"]}
 
 
@@ -538,10 +697,29 @@ def _run(app, chat_id: int, msg_id: int, username: str, resume: bool, ev: thread
         feed = Feed(conn, msg_id, ev)
         chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
         msg = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
-        prov, st = _provider(app, conn, chat)
-        turn = Turn(app, conn, chat, msg, username, prov, st, feed)
-        content, status = turn.run(resume)
+        while True:
+            prov, st = _provider(app, conn, chat)
+            turn = Turn(app, conn, chat, msg, username, prov, st, feed)
+            try:
+                content, status = turn.run(resume)
+                break
+            except ValorError as e:
+                nxt = _fallback(app, conn, chat, st, e)
+                if nxt is None:
+                    raise
+                used = e.details if isinstance(e.details, dict) else {}
+                if used:
+                    record_usage(conn, username, st, int(used.get("input_tokens", 0)), int(used.get("output_tokens", 0)), False)
+                feed.close()
+                feed.add({"type": "check", "text": f"{st.get('name', 'The AI provider')} could not answer "
+                                                   f"({e.message[:240]}) - VALOR asks {nxt['name']} instead."})
+                chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
+                msg = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
+                resume = False                   # the next provider starts the turn over
         feed.close()
+        chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
+        if status == "done" and json.loads(chat["state"] or "{}").get("fix") == "auto":
+            feed.meta["rebuild"] = _rebuild(app, conn, chat, username)
         feed.flush(True, status=status, content=content)
     except Stopped:
         feed.close()

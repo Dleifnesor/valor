@@ -211,6 +211,7 @@ interface Ai {
   daily_tokens_per_user: number;
   fix_failed_builds: boolean;
   fix_provider: string;
+  fix_mode: "auto" | "fix" | "prepare";
   kinds?: AiKind[];
   anthropic_models?: string[];
 }
@@ -324,11 +325,20 @@ function AiSettings() {
           </label>
           <label className="checkbox">
             <input type="checkbox" checked={s.fix_failed_builds} onChange={(e) => setS({ ...s, fix_failed_builds: e.target.checked })} />
-            When a build fails, the assistant starts finding and fixing the cause in a range chat of the person who
-            started it - it looks inside the VMs and asks before it changes anything
+            When a build fails, the assistant finds and fixes the cause in a range chat of the person who started it
+            (builds from the CLI: the first administrator's)
           </label>
           {s.fix_failed_builds && (
-            <label className="field" style={{ maxWidth: 420 }}>Failed builds go to
+            <label className="field" style={{ maxWidth: 420 }}>How far it goes
+              <select value={s.fix_mode} onChange={(e) => setS({ ...s, fix_mode: e.target.value as Ai["fix_mode"] })}>
+                <option value="auto">Fix and rebuild on its own (3 rounds at most; never replaces or removes a VM)</option>
+                <option value="fix">Fix on its own; the person rebuilds</option>
+                <option value="prepare">Prepare the fix; the person approves each change</option>
+              </select>
+            </label>
+          )}
+          {s.fix_failed_builds && (
+            <label className="field" style={{ maxWidth: 420 }}>Failed builds go to <span className="hint">then the other providers if it cannot answer</span>
               <select value={s.fix_provider} onChange={(e) => setS({ ...s, fix_provider: e.target.value })}>
                 <option value="">the default provider</option>
                 {s.providers.filter((p) => p.id).map((p) => <option key={p.id} value={p.id}>{p.name} - {p.model}</option>)}

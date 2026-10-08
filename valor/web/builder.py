@@ -52,6 +52,7 @@ class AiSettingsIn(_In):
     daily_tokens_per_user: int = Field(default=ai.DEFAULTS["daily_tokens_per_user"], ge=0, le=100_000_000)
     fix_failed_builds: bool = True              # a failed build starts the assistant on it (Code mode)
     fix_provider: str = Field(default="", max_length=32)    # with this provider ("" = the default one)
+    fix_mode: Literal["auto", "fix", "prepare"] = "auto"    # fix and rebuild / fix / prepare, the person approves
 
 
 class TestIn(_In):
@@ -80,8 +81,9 @@ def ai_settings(conn, box) -> dict:
     if "providers" in st:
         return {"providers": st["providers"], "default": st.get("default", ""),
                 "daily_tokens_per_user": st.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"]),
-                "fix_failed_builds": st.get("fix_failed_builds", True), "fix_provider": st.get("fix_provider", "")}
-    new = {"providers": [], "default": "", "fix_failed_builds": True, "fix_provider": "",
+                "fix_failed_builds": st.get("fix_failed_builds", True), "fix_provider": st.get("fix_provider", ""),
+                "fix_mode": st.get("fix_mode", "auto")}
+    new = {"providers": [], "default": "", "fix_failed_builds": True, "fix_provider": "", "fix_mode": "auto",
            "daily_tokens_per_user": st.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"])}
     if st.get("provider", "none") != "none":
         pid = secrets.token_hex(6)
@@ -117,7 +119,7 @@ def _masked(store: dict) -> dict:
     return {"providers": [{**p, "api_key": MASK if p.get("api_key") else "", "default": p["id"] == store["default"]}
                           for p in store["providers"]],
             "daily_tokens_per_user": store["daily_tokens_per_user"], "fix_failed_builds": store["fix_failed_builds"],
-            "fix_provider": store["fix_provider"]}
+            "fix_provider": store["fix_provider"], "fix_mode": store["fix_mode"]}
 
 
 def _check_url(url: str) -> None:
@@ -191,12 +193,14 @@ def put_ai(body: AiSettingsIn, request: Request, s: Session = Depends(require("a
     store = {"providers": new, "default": default or (new[0]["id"] if new else ""),
              "daily_tokens_per_user": body.daily_tokens_per_user, "fix_failed_builds": body.fix_failed_builds,
              # a removed provider: failed builds go to the default one again
-             "fix_provider": body.fix_provider if body.fix_provider in {p["id"] for p in new} else ""}
+             "fix_provider": body.fix_provider if body.fix_provider in {p["id"] for p in new} else "",
+             "fix_mode": body.fix_mode}
     db.put_setting(s.conn, "ai", store, by=s.username)
     s.audit("settings.ai", detail={"providers": [f"{p['provider']}:{p['name']}:{p['model']}" for p in new],
                                    "default": next((p["name"] for p in new if p["id"] == store["default"]), ""),
                                    "keys_changed": changed, "daily_tokens_per_user": body.daily_tokens_per_user,
-                                   "fix_failed_builds": body.fix_failed_builds, "fix_provider": store["fix_provider"]})
+                                   "fix_failed_builds": body.fix_failed_builds, "fix_provider": store["fix_provider"],
+                                   "fix_mode": body.fix_mode})
     return _masked(store)
 
 

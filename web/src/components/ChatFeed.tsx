@@ -20,6 +20,7 @@ export interface Meta {
   steps?: Step[]; preparing?: string; questions?: Question[]; problems?: string[]; fixed?: string[]; warnings?: string[];
   draft?: Record<string, number> | null; draft_changed?: boolean; plan?: PlanInfo; diff?: string; yaml?: string;
   usage?: { input_tokens: number; output_tokens: number }; error?: { code: string; message: string; hint?: string };
+  rebuild?: { job?: string; note: string };   // a fix chat in mode "fix and rebuild": what VALOR did next
 }
 export interface Message {
   id: number; chat_id: number; ts: number; role: "user" | "assistant"; mode: Mode; content: string;
@@ -416,6 +417,11 @@ export function AssistantMessage({ m, last, readonly, decide, stop, onAnswer, on
       {m.status === "waiting" && <Approvals m={m} steps={steps} decide={decide} readonly={readonly} />}
       {m.status === "waiting" && !readonly && <button className="btn ghost small" onClick={() => stop(m)}>Stop this answer</button>}
       {m.content && <div className="answer">{m.content}</div>}
+      {meta.rebuild && (
+        <div className="alert info small" style={{ marginTop: 8 }}>
+          {meta.rebuild.note}{meta.rebuild.job && <> <a href={`#/jobs/${meta.rebuild.job}`}>Follow the build</a></>}
+        </div>
+      )}
       {meta.error && (
         <div className="alert error small" style={{ marginTop: 8 }}>
           {meta.error.message}{meta.error.hint && <div className="muted">{meta.error.hint}</div>}

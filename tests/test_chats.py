@@ -450,12 +450,103 @@ def _failed_build(cfg, origin="web:olivia", error="role_failed", age=0):
     return jid
 
 
+def _fake_builds(monkeypatch, cfg, plan_actions=(("web", "converge"),)):
+    """Builds the automatic fix starts are recorded as jobs, not run; its plan check sees a valid spec."""
+    from valor import jobs
+    started = []
+
+    def start(c, kind, target, origin, background):
+        jid = jobs.create(cfg, kind, target, origin)
+        started.append((jid, origin))
+        return {"job": jid, "state": "queued"}
+    monkeypatch.setattr(chats.ops, "start", start)
+    monkeypatch.setattr(chats, "validate_cluster", lambda p, s: {"ok": True, "errors": []})
+    actions = [{"host": h, "action": a} for h, a in plan_actions]
+    monkeypatch.setattr(chats, "make_plan", lambda p, s: {"actions": actions, "summary": {a: 1 for _, a in plan_actions}})
+    return started
+
+
+def _end_build(cfg, jid, ok=True, error="baseline_failed"):
+    from valor import jobs
+    jobs.finish(cfg, jid, {"ok": True, "verify": {"summary": {"tests_passed": 3, "tests_total": 3}}} if ok else
+                {"ok": False, "error": error, "message": f"{error} on web", "step": "baseline", "host": "web"})
+    jobs.update(cfg, jid, state="succeeded" if ok else "failed", finished=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+
+
+def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
+    """Mode 'auto': the assistant's actions run without approval cards, VALOR rebuilds when it is done, a failed
+    rebuild goes on in the same chat (3 rounds, not when it fails the same way), a successful one closes it. A plan
+    that would replace a VM waits for the person. A provider that cannot answer hands over to the next one."""
+    app, wcfg, cfg, pve = lab
+    fake = Script([("Restarting nginx.", [("run_command", {"host": "web", "command": "systemctl restart nginx", "purpose": "fix"})]),
+                   "Restarted nginx; the build will pass now.", "Round 2: fixed the baseline.",
+                   "Fixed for good.", "Changed the OS of web.", "Answered by the second provider."])
+    adm, ah, op, h = start(app, monkeypatch, fake)
+    started = _fake_builds(monkeypatch, cfg)
+    chats._fix_seen.clear()
+    _failed_build(cfg)
+    [cid] = chats.fix_failed_builds(app)
+    chat = op.get(f"/api/chats/{cid}").json()
+    m = wait(op, cid, chat["messages"][1]["id"])
+    assert chat["allow_all"] and m["status"] == "done" and pve.ran and "systemctl restart nginx" in pve.ran[-1][1]
+    [(rjob, origin)] = started
+    assert origin == f"assistant:olivia:{cid}" and m["meta"]["rebuild"]["job"] == rjob     # rebuilt on its own
+    assert "VALOR rebuilds the range now (1 converge)" in m["meta"]["rebuild"]["note"]
+    assert op.get(f"/api/jobs/{rjob}/fix").json()["chats"][0]["id"] == cid
+    # the rebuild failed another way: round 2 in the same chat; then the same way again: VALOR stops
+    _end_build(cfg, rjob, ok=False)
+    assert chats.fix_failed_builds(app) == [cid]
+    msgs = op.get(f"/api/chats/{cid}").json()["messages"]
+    assert msgs[2]["content"].startswith("[VALOR] Round 2 of 3: the rebuild failed too.")
+    wait(op, cid, msgs[3]["id"])
+    _end_build(cfg, started[-1][0], ok=False)
+    assert chats.fix_failed_builds(app) == []
+    last = op.get(f"/api/chats/{cid}").json()["messages"][-1]
+    assert last["role"] == "assistant" and "the rebuild failed the same way again" in last["content"]
+    # a fix that works: the successful rebuild closes the chat
+    _failed_build(cfg)
+    [cid2] = chats.fix_failed_builds(app)
+    wait(op, cid2, op.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
+    _end_build(cfg, started[-1][0], ok=True)
+    chats.fix_failed_builds(app)
+    assert "VALOR rebuilt the range: the build succeeded" in op.get(f"/api/chats/{cid2}").json()["messages"][-1]["content"]
+    # a plan that would replace a VM is left to the person
+    n = len(started)
+    _fake_builds(monkeypatch, cfg, plan_actions=(("web", "replace"),))
+    _failed_build(cfg)
+    [cid3] = chats.fix_failed_builds(app)
+    m = wait(op, cid3, op.get(f"/api/chats/{cid3}").json()["messages"][1]["id"])
+    assert "did not rebuild on its own: the plan would replace web" in m["meta"]["rebuild"]["note"]
+    # a provider that cannot answer (LM Studio with an 8k context) hands over to the next one
+    claude = adm.get("/api/settings/ai").json()["providers"][0]
+    local = {"name": "Local", "provider": "openai", "model": "q", "base_url": "http://192.168.1.50:1234/v1", "default": True}
+    adm.put("/api/settings/ai", json={"providers": [local, {**claude, "default": False}]}, headers=ah)
+
+    class Small(ai.Provider):
+        def complete(self, *a, **k):
+            raise ai.ValorError("ai_context_full", "the model's context window is too small: 8192 tokens")
+    monkeypatch.setattr(ai, "provider_from", lambda st, key: Small("q") if st["name"] == "Local" else fake)
+    _fake_builds(monkeypatch, cfg)
+    _failed_build(cfg)
+    [cid4] = chats.fix_failed_builds(app)
+    m = wait(op, cid4, op.get(f"/api/chats/{cid4}").json()["messages"][1]["id"])
+    assert m["status"] == "done" and m["content"] == "Answered by the second provider."
+    assert any(s["type"] == "check" and "Local could not answer" in s["text"] and "VALOR asks Claude instead" in s["text"]
+               for s in m["meta"]["steps"])
+    assert op.get(f"/api/chats/{cid4}").json()["provider"] == claude["id"]
+    op.__exit__(None, None, None), adm.__exit__(None, None, None)
+
+
 def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
     fake = Script([("Looking.", [("run_command", {"host": "web", "command": "systemctl status nginx", "purpose": "look"})]),
                    "apt was locked by the boot-time refresh; nginx installs on the next apply. Re-apply the range.",
-                   "Same chat.", "Fixed with the other provider."])
+                   "Same chat.", "The CLI build: looked at it.", "Fixed with the other provider."])
     adm, ah, op, h = start(app, monkeypatch, fake)
+    started = _fake_builds(monkeypatch, cfg)
+    st = adm.get("/api/settings/ai").json()
+    assert st["fix_mode"] == "auto"
+    adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_mode": "prepare"}, headers=ah)  # approvals
     chats._fix_seen.clear()
     jid = _failed_build(cfg)
     assert chats.fix_failed_builds(app) and chats.fix_failed_builds(app) == []          # once per build
@@ -473,17 +564,21 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     assert "run_command" in fake.calls[0]["tools"] and "update_spec" in fake.calls[0]["tools"]  # Code mode
     # the button on the job page opens the same chat; another failed build gets its own
     assert op.post(f"/api/jobs/{jid}/fix", headers=h).json() == {"chat": chat["id"], "range": "lab"}
-    jid2 = _failed_build(cfg, origin="cli")                                    # not started by a person: not automatic
-    assert chats.fix_failed_builds(app) == []
+    jid2 = _failed_build(cfg, origin="cli")                     # not started in the web UI: the first admin's chat
+    [cid2] = chats.fix_failed_builds(app)
+    assert adm.get(f"/api/chats/{cid2}").json()["owner"] == "admin"
+    wait(adm, cid2, adm.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
     claude = adm.get("/api/settings/ai").json()["providers"][0]["id"]
     assert op.post(f"/api/jobs/{jid2}/fix", json={"provider": "nope"}, headers=h).status_code == 400
     r = op.post(f"/api/jobs/{jid2}/fix", json={"provider": claude}, headers=h).json()
     assert r["chat"] != chat["id"] and wait(op, r["chat"], op.get(f"/api/chats/{r['chat']}").json()["messages"][1]["id"])
     assert op.get(f"/api/chats/{r['chat']}").json()["provider"] == claude
-    # nothing automatic for an interrupted worker, an old failure, or with the setting off
+    # the worker stopped: the same build runs once more (no chat), never a third time; an old failure: nothing
     for kw in ({"error": "interrupted"}, {"age": 7200}):
         _failed_build(cfg, **kw)
-    assert chats.fix_failed_builds(app) == []
+    assert chats.fix_failed_builds(app) == [] and [o for _, o in started] == ["rerun:web:olivia"]
+    _failed_build(cfg, origin="rerun:web:olivia", error="interrupted")
+    assert chats.fix_failed_builds(app) == [] and len(started) == 1
     st = adm.get("/api/settings/ai").json()
     assert st["fix_failed_builds"] is True and st["fix_provider"] == ""
     # failed builds can go to another provider than the default (e.g. a hosted one while a local one is small)
