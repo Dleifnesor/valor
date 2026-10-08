@@ -287,18 +287,27 @@ def test_range_chat_moves_into_saved_chats(tmp_path):
     assert not c.execute("SELECT name FROM sqlite_master WHERE name = 'range_chat'").fetchone()
 
 
-READ_ONLY = ["systemctl status nginx --no-pager", "ss -ltnp | grep 80", "cat /etc/os-release", "ip -br a",
-             "journalctl -u nginx -n 50 --no-pager", "curl -sS -m 5 http://10.0.0.5/", "ls -la /etc 2>/dev/null",
-             "dpkg -l | grep nginx", "rpm -qa | sort", "docker ps -a", "firewall-cmd --list-all", "iptables -L -n",
-             "find /etc -name '*.conf'", "timeout 5 nc -zv 10.0.0.1 22", "sudo cat /etc/shadow", "wc -l < /etc/passwd",
-             "systemctl", "nft list ruleset", "date +%s", "ping -c 2 10.0.0.1", "semanage port -l | grep http"]
-CHANGES = ["systemctl restart nginx", "rm -rf /tmp/x", "echo hi > /etc/motd", "cat a >> b", "apt-get install -y x",
-           "curl -o /tmp/x http://e", "curl -sSo x http://e", "find / -delete", "sed -i s/a/b/ f", "hostname evil",
-           "date 01010000", "ip link set eth0 down", "iptables -F", "ss -K dst 1.2.3.4", "nginx", "$(rm x)",
-           "echo `id`", "FOO=1 ls", "ls & rm x", "(cd /; ls)", "ls; reboot", "cat <<EOF\nx\nEOF", "docker run x",
-           "chronyc makestep", "env rm x", "nc -l 9999", "sysctl -w a=1", "sysctl net.ipv4.ip_forward=1",
-           "firewall-cmd --add-port=80/tcp", "tee /etc/x", "xargs rm", "rpm -i x.rpm", "wg showconf wg0", "ping 1.2.3.4",
-           "journalctl --vacuum-size=1M", "awk '{system(\"id\")}'", "ls 'unbalanced"]
+READ_ONLY = [
+    # status-code checks, printed pages, versions, fail2ban and Redis reads (seen in live Mistral runs)
+    "curl -s -m 5 -o /dev/null -w '%{http_code}\\n' http://10.86.2.10:8080/", "curl -so /dev/null -w '%{http_code}' http://x/",
+    "wget -qO- http://x/", "wget -q -O /dev/null http://x/", "psql --version", "fail2ban-client status sshd",
+    "redis-cli ping", "redis-cli -h 10.0.0.5 -p 6379 info replication", "redis-cli config get maxmemory",
+    "systemctl status nginx --no-pager", "ss -ltnp | grep 80", "cat /etc/os-release", "ip -br a",
+    "journalctl -u nginx -n 50 --no-pager", "curl -sS -m 5 http://10.0.0.5/", "ls -la /etc 2>/dev/null",
+    "dpkg -l | grep nginx", "rpm -qa | sort", "docker ps -a", "firewall-cmd --list-all", "iptables -L -n",
+    "find /etc -name '*.conf'", "timeout 5 nc -zv 10.0.0.1 22", "sudo cat /etc/shadow", "wc -l < /etc/passwd",
+    "systemctl", "nft list ruleset", "date +%s", "ping -c 2 10.0.0.1", "semanage port -l | grep http"]
+CHANGES = [
+    "curl -so /tmp/x http://x/", "curl -sSo /dev/null -d a=1 http://x/", "wget http://x/f.tgz", "wget -qO /tmp/f http://x/",
+    "wget -qO- --post-data=a http://x/", "wget -rO- http://x/", "redis-cli flushall", "redis-cli", "redis-cli config set maxmemory 1",
+    "fail2ban-client set sshd banip 1.2.3.4", "rm --version; rm -rf /", "psql -c 'drop table x'",
+    "systemctl restart nginx", "rm -rf /tmp/x", "echo hi > /etc/motd", "cat a >> b", "apt-get install -y x",
+    "curl -o /tmp/x http://e", "curl -sSo x http://e", "find / -delete", "sed -i s/a/b/ f", "hostname evil",
+    "date 01010000", "ip link set eth0 down", "iptables -F", "ss -K dst 1.2.3.4", "nginx", "$(rm x)",
+    "echo `id`", "FOO=1 ls", "ls & rm x", "(cd /; ls)", "ls; reboot", "cat <<EOF\nx\nEOF", "docker run x",
+    "chronyc makestep", "env rm x", "nc -l 9999", "sysctl -w a=1", "sysctl net.ipv4.ip_forward=1",
+    "firewall-cmd --add-port=80/tcp", "tee /etc/x", "xargs rm", "rpm -i x.rpm", "wg showconf wg0", "ping 1.2.3.4",
+    "journalctl --vacuum-size=1M", "awk '{system(\"id\")}'", "ls 'unbalanced"]
 PS_READ_ONLY = ["Get-Service W32Time", "Get-Service | Where-Object { $_.Status -eq 'Running' } | Select-Object Name",
                 "ipconfig /all", "Get-WinEvent -LogName System -MaxEvents 10 | Format-List", "w32tm /query /status",
                 "net user", "net user bob", "Test-NetConnection 10.0.0.1 -Port 445", "(Get-Service x).Status",

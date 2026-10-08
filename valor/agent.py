@@ -115,12 +115,73 @@ def _curl(args):
     bad = {"-o", "--output", "-O", "--remote-name", "-d", "--data", "--data-binary", "--data-raw", "--data-urlencode",
            "-F", "--form", "-T", "--upload-file", "-X", "--request", "-K", "--config", "-c", "--cookie-jar", "--json",
            "-D", "--dump-header", "--remote-name-all", "-J"}
-    for a in args:
+    skip = False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        nxt = args[i + 1] if i + 1 < len(args) else ""
+        if a in ("-o", "--output") and nxt == "/dev/null" or a in ("--output=/dev/null", "-o/dev/null"):
+            skip = a in ("-o", "--output")                  # the body thrown away (e.g. -w '%{http_code}' checks)
+            continue
+        if a.startswith("-") and not a.startswith("--") and len(a) > 2 and a.endswith("o") and nxt == "/dev/null" \
+                and not set(a[1:-1]) & set("oOdFTXKcDJ"):
+            skip = True                                     # -so /dev/null
+            continue
         if a.split("=", 1)[0] in bad:
             return False
         if a.startswith("-") and not a.startswith("--") and len(a) > 2 and set(a[1:]) & set("oOdFTXKcDJ"):
             return False                # combined short flags such as -sSo
     return True
+
+
+def _wget(args):
+    """Only printing a page (-O- / -qO-) or throwing it away (-O /dev/null): no files, posts or recursion."""
+    bad = {"--post-data", "--post-file", "--method", "--body-data", "--body-file", "-r", "--recursive", "-m",
+           "--mirror", "-P", "--directory-prefix", "-o", "--output-file", "-a", "--append-output", "-N", "-c",
+           "--continue", "-x", "-e", "--execute", "-i", "--input-file", "-B", "--save-cookies", "--save-headers",
+           "--delete-after", "-k", "--convert-links", "-p", "--page-requisites"}
+    out = None
+    for i, a in enumerate(args):
+        if a.split("=", 1)[0] in bad:
+            return False
+        if a in ("-O", "--output-document"):
+            out = args[i + 1] if i + 1 < len(args) else None
+        elif a.startswith("--output-document="):
+            out = a.split("=", 1)[1]
+        elif a.startswith("-") and not a.startswith("--") and "O" in a[1:]:
+            flags, rest = a[1:a.index("O")], a[a.index("O") + 1:]
+            if set(flags) & set("rmPoacxeiNBkp"):
+                return False
+            out = rest or (args[i + 1] if i + 1 < len(args) else None)
+        elif a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("rmPoacxeiNBkp"):
+            return False
+    return out in ("-", "/dev/null")
+
+
+REDIS_READ = {"ping", "info", "dbsize", "role", "time", "lastsave", "get", "mget", "exists", "type", "ttl", "pttl",
+              "strlen", "llen", "lrange", "scard", "smembers", "hlen", "hget", "hgetall", "zcard", "zrange", "keys", "scan"}
+
+
+def _redis_cli(args):
+    words, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-h", "-p", "-n", "-a", "--user", "--pass", "-u", "-s"):
+            i += 2
+            continue
+        if a.startswith("-"):
+            if a in ("--eval", "-x", "--pipe", "--rdb", "--functions-rdb", "-r", "--replica", "--bigkeys", "--memkeys"):
+                return False
+            i += 1
+            continue
+        words.append(a.lower())
+        i += 1
+    if not words:
+        return False                                        # an interactive shell
+    two = words[:2]
+    return words[0] in REDIS_READ or two in (["config", "get"], ["client", "list"], ["client", "info"],
+                                               ["memory", "stats"], ["memory", "usage"], ["slowlog", "get"])
 
 
 def _rpm(args):
@@ -162,6 +223,9 @@ LINUX_READ = {
         a in ("--exec", "--sh-exec", "--listen") or a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("ecl")
         for a in args),
     "curl": _curl,
+    "wget": _wget,
+    "redis-cli": _redis_cli,
+    "fail2ban-client": _first_in("status", "ping", "version", "get", "banned"),
     "ip": _ip,
     "env": lambda args: not args,
     "systemctl": _first_in("status", "is-active", "is-enabled", "is-failed", "list-units", "list-unit-files", "show",
@@ -243,6 +307,8 @@ def _linux_segment_ok(words: list[str]) -> bool:
     if not words or "=" in words[0]:
         return False                    # nothing left, or an environment assignment (FOO=bar cmd)
     cmd, args = words[0].rsplit("/", 1)[-1], words[1:]
+    if args == ["--version"] and re.fullmatch(r"[a-z][a-z0-9._+-]*", cmd):
+        return True                     # any program's version
     if cmd not in LINUX_READ:
         return False
     check = LINUX_READ[cmd]
