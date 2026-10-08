@@ -451,8 +451,11 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     assert op.post(f"/api/jobs/{jid}/fix", headers=h).json() == {"chat": chat["id"], "range": "lab"}
     jid2 = _failed_build(cfg, origin="cli")                                    # not started by a person: not automatic
     assert chats.fix_failed_builds(app) == []
-    r = op.post(f"/api/jobs/{jid2}/fix", headers=h).json()
+    claude = adm.get("/api/settings/ai").json()["providers"][0]["id"]
+    assert op.post(f"/api/jobs/{jid2}/fix", json={"provider": "nope"}, headers=h).status_code == 400
+    r = op.post(f"/api/jobs/{jid2}/fix", json={"provider": claude}, headers=h).json()
     assert r["chat"] != chat["id"] and wait(op, r["chat"], op.get(f"/api/chats/{r['chat']}").json()["messages"][1]["id"])
+    assert op.get(f"/api/chats/{r['chat']}").json()["provider"] == claude
     # nothing automatic for an interrupted worker, an old failure, or with the setting off
     for kw in ({"error": "interrupted"}, {"age": 7200}):
         _failed_build(cfg, **kw)

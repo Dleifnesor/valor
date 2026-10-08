@@ -124,5 +124,7 @@ access:                         # optional remote access to the range
 ## Choosing addresses and VLANs
 
 - Pick VLANs not listed in `cluster_info.vlans_in_use` and inside `segment_bridge.usable_vlans`.
-- Keep segment networks distinct per range; `10.<vlan>.0.0/24` style is easy to read.
+- Keep segment networks distinct per range. Each of the four numbers of an address is 0-255, so
+  `10.<vlan>.0.0/24` works only for VLANs below 256: for VLAN 340 use e.g. `10.34.0.0/24` or
+  `10.3.40.0/24`, never `10.340.0.0/24`.
 - Avoid `reserved_networks` (home LAN 192.168.1.0/24, cluster 10.10.10.0/24).

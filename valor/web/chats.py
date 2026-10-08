@@ -64,6 +64,11 @@ class MessageIn(BaseModel):
     mode: Literal["build", "question", "plan", "code"] = "build"
 
 
+class FixIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str | None = Field(default=None, max_length=32)      # an AI provider's id (default: the default one)
+
+
 class DecideIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decisions: dict[str, Literal["approve", "deny"]] = Field(max_length=64)
@@ -326,7 +331,7 @@ def fix_prompt(job: dict) -> str:
     return "\n".join(lines)[:7900]
 
 
-def start_fix(app, conn, job: dict, username: str, auto: bool) -> int:
+def start_fix(app, conn, job: dict, username: str, auto: bool, provider: str | None = None) -> int:
     """The range chat (Code mode) in which the assistant works on a failed build: one per build and person."""
     name = _job_range(job)
     for r in conn.execute("SELECT id, state FROM chats WHERE owner = ? AND kind = 'range' AND range = ?",
@@ -337,7 +342,8 @@ def start_fix(app, conn, job: dict, username: str, auto: bool) -> int:
     res = job.get("result") or {}
     title = f"Fix: {res.get('message') or res.get('error') or 'failed build'}"[:120]
     cid = conn.execute("INSERT INTO chats(owner, kind, range, title, created, updated, state) VALUES "
-                       "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now, json.dumps({"job": job["id"]}))).lastrowid
+                       "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now,
+                                                        json.dumps({"job": job["id"], **({"provider": provider} if provider else {})}))).lastrowid
     conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
                  (cid, now, fix_prompt(job)))
     with _lock:
@@ -395,7 +401,7 @@ def watch_failed_builds(app, stop: threading.Event, every: float = 10.0) -> None
 
 
 @router.post("/jobs/{job_id}/fix")
-def fix_job(job_id: str, request: Request, s: Session = Depends(require("operator"))) -> dict:
+def fix_job(job_id: str, request: Request, body: FixIn = FixIn(), s: Session = Depends(require("operator"))) -> dict:
     """Hand a failed build to the assistant (or open the chat that already works on it)."""
     if not JOB_ID.fullmatch(job_id):
         raise ApiError(400, "invalid_job", "Invalid job id.")
@@ -411,8 +417,9 @@ def fix_job(job_id: str, request: Request, s: Session = Depends(require("operato
                             (s.username, name)).fetchall():
         if json.loads(r["state"] or "{}").get("job") == job_id:
             return {"chat": r["id"], "range": name}
-    start_ai(request, s)                         # rate limit, provider, daily budget
-    return {"chat": start_fix(request.app, s.conn, job, s.username, False), "range": name}
+    _known_provider(request, s, body.provider)
+    start_ai(request, s, body.provider)          # rate limit, provider, daily budget
+    return {"chat": start_fix(request.app, s.conn, job, s.username, False, body.provider), "range": name}
 
 
 @router.get("/jobs/{job_id}/fix")

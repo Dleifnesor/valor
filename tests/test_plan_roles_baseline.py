@@ -206,3 +206,20 @@ def test_apt_settles_before_every_update(tmp_path):
             if "update" in line and ("apt-get" in line or "$APT" in line):
                 assert "apt_settle" in line or line.strip().startswith("apt-get -o DPkg::Lock::Timeout=900 -qq update"), (where, line)
         assert "apt_settle()" in script, where
+
+
+def test_nginx_reverse_proxy_and_address_errors(ref_spec):
+    role = load_role(ROOT / "roles", "nginx")
+    env = role_env(ref_spec, ref_spec.host("web"), role, {"proxy_to": "db", "proxy_port": 8080})
+    assert (env["VALOR_PARAM_PROXY_TO"], env["VALOR_PARAM_PROXY_PORT"]) == (f"{ref_spec.host('db').address}/32", "8080")
+    script = build_script(role, env)
+    assert "proxy_pass http://${UPSTREAM}:${UPORT}" in script and "httpd_can_network_connect" in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
+    with pytest.raises(ValorError):
+        role_env(ref_spec, ref_spec.host("web"), role, {"proxy_to": "db", "proxy_port": "http"})
+    from valor.spec import parse_spec
+    with pytest.raises(ValorError) as e:                 # models write 10.<vlan>.0.0/24 for VLANs above 255
+        parse_spec("name: t1\nsegments: [{name: lan, vlan: 340, cidr: 10.340.0.0/24}]\n"
+                   "hosts: [{name: aa, segment: lan, address: 10.340.0.10}]\n")
+    msgs = {d["location"]: d["message"] for d in e.value.details}
+    assert "not 10.340.0.0/24" in msgs["segments.0.cidr"] and "0-255" in msgs["hosts.0.address"]
