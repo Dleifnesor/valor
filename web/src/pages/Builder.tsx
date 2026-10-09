@@ -93,7 +93,7 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
         </div>
         {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (
           <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(input); }}>
-            <textarea rows={3} value={input} onChange={(e) => setInput(e.target.value)} disabled={sending || ctl.busy}
+            <textarea name="message" rows={3} value={input} onChange={(e) => setInput(e.target.value)} disabled={sending || ctl.busy}
               placeholder={ctl.busy ? "The assistant is working…" : spec ? "Ask for a change, e.g. add a second web server behind the same policy" : "Describe the lab you need"}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} />
             <button className="btn primary" disabled={sending || ctl.busy || !input.trim()}>Send</button>

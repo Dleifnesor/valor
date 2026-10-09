@@ -27,7 +27,7 @@ export function Chats({ isAdmin }: { isAdmin: boolean }) {
     <section className="card">
       <div className="card-head">
         <h2 className="grow">Conversations</h2>
-        <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind">
+        <select name="kind" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind">
           <option value="">All kinds</option><option value="builder">Chat builder</option><option value="range">Range chats</option>
         </select>
         {isAdmin && (

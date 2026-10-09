@@ -351,7 +351,7 @@ function DestroyModal({ name, onClose }: { name: string; onClose: () => void }) 
       </>
     }>
       <div>This deletes every VM of the range (its spec stays, so you can build it again). Type <b>{name}</b> to confirm.</div>
-      <input value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus aria-label="Range name" />
+      <input name="confirm-name" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus aria-label="Range name" />
       <ErrorBox error={err} />
     </Modal>
   );

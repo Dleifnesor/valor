@@ -194,7 +194,7 @@ function RoleParams({ role, values, onChange }: { role: CatalogRole; values: Rec
       {entries.map(([k, p]) => (
         <label className="field" key={k}>{role.name}: {k}{p.required ? " (required)" : ""}
           {p.description && <span className="hint">{p.description}</span>}
-          <input value={values[k] ?? ""} placeholder={p.default !== undefined ? String(p.default) : ""} required={!!p.required}
+          <input name={`param-${k}`} value={values[k] ?? ""} placeholder={p.default !== undefined ? String(p.default) : ""} required={!!p.required}
             onChange={(e) => onChange({ ...values, [k]: e.target.value })} />
         </label>
       ))}
@@ -209,7 +209,7 @@ function AllowFrom({ segments, own, value, onChange }: { segments: string[]; own
     <div className="field">Who may reach the new services <span className="hint">adds router rules for their ports; the VM's own segment always can</span>
       <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
         {others.map((s) => (
-          <label key={s} className="checkbox"><input type="checkbox" checked={value.includes(s)}
+          <label key={s} className="checkbox"><input name="allow-from" type="checkbox" checked={value.includes(s)}
             onChange={(e) => onChange(e.target.checked ? [...value, s] : value.filter((x) => x !== s))} /> {s}</label>
         ))}
       </div>
@@ -250,20 +250,20 @@ function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
       <form id="addvm" className="stack" onSubmit={submit}>
         <div className="grid cols-2">
           <label className="field">Name <span className="hint">2-15 lowercase letters, digits, dashes</span>
-            <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} autoFocus required placeholder="web2" />
+            <input name="vm-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} autoFocus required placeholder="web2" />
           </label>
           <label className="field">Segment
-            <select value={seg} onChange={(e) => setSeg(e.target.value)}>{segments.map((s) => <option key={s}>{s}</option>)}</select>
+            <select name="segment" value={seg} onChange={(e) => setSeg(e.target.value)}>{segments.map((s) => <option key={s}>{s}</option>)}</select>
           </label>
           <label className="field">Operating system
-            <select value={os} onChange={(e) => { setOs(e.target.value); setRoles([]); }}>
+            <select name="os" value={os} onChange={(e) => { setOs(e.target.value); setRoles([]); }}>
               {osList.map((o) => <option key={o.name} value={o.name}>{o.name}</option>)}
             </select>
           </label>
           <div className="size-row">
-            <label className="field">vCPU<input type="number" min={1} max={16} value={size.cores} onChange={(e) => setSize({ ...size, cores: Number(e.target.value) })} /></label>
-            <label className="field">MiB<input type="number" min={512} step={512} value={size.memory} onChange={(e) => setSize({ ...size, memory: Number(e.target.value) })} /></label>
-            <label className="field">GiB<input type="number" min={8} value={size.disk} onChange={(e) => setSize({ ...size, disk: Number(e.target.value) })} /></label>
+            <label className="field">vCPU<input name="cores" type="number" min={1} max={16} value={size.cores} onChange={(e) => setSize({ ...size, cores: Number(e.target.value) })} /></label>
+            <label className="field">MiB<input name="memory" type="number" min={512} step={512} value={size.memory} onChange={(e) => setSize({ ...size, memory: Number(e.target.value) })} /></label>
+            <label className="field">GiB<input name="disk" type="number" min={8} value={size.disk} onChange={(e) => setSize({ ...size, disk: Number(e.target.value) })} /></label>
           </div>
         </div>
         {windows && <div className="muted small">Windows gets at least the memory and disk its template needs, whatever you enter here.</div>}
@@ -271,7 +271,7 @@ function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
           <div className="role-pick">
             {available.map((r) => (
               <label key={r.name} className="checkbox" title={r.description}>
-                <input type="checkbox" checked={roles.includes(r.name)} onChange={(e) => setRoles(e.target.checked ? [...roles, r.name] : roles.filter((x) => x !== r.name))} />
+                <input name="roles" type="checkbox" checked={roles.includes(r.name)} onChange={(e) => setRoles(e.target.checked ? [...roles, r.name] : roles.filter((x) => x !== r.name))} />
                 <span><b>{r.name}</b> <span className="muted small">{r.description}</span></span>
               </label>
             ))}
@@ -303,7 +303,7 @@ function AddServiceModal({ host, segments, catalog, onClose, onSubmit }: {
       {!available.length ? <div className="empty">No other service supports {host.os}.</div> : (
         <div className="stack">
           <label className="field">Service
-            <select value={role} onChange={(e) => { setRole(e.target.value); setParams({}); }}>
+            <select name="role" value={role} onChange={(e) => { setRole(e.target.value); setParams({}); }}>
               {available.map((a) => <option key={a.name} value={a.name}>{a.name} - {a.description}</option>)}
             </select>
           </label>
@@ -328,15 +328,15 @@ function EditVmModal({ host, catalog, onClose, onSubmit }: { host: TopoNode; cat
     }>
       <div className="stack">
         <label className="field">Operating system
-          <select value={os} onChange={(e) => setOs(e.target.value)}>
+          <select name="os" value={os} onChange={(e) => setOs(e.target.value)}>
             {catalog.os.filter((o) => o.template || o.name === host.os).map((o) => <option key={o.name} value={o.name}>{o.name}</option>)}
           </select>
         </label>
         {osChanged && <div className="alert warn">A new OS means a new VM: its disk is replaced when the plan runs.</div>}
         <div className="size-row">
-          <label className="field">vCPU<input type="number" min={1} max={16} value={size.cores} onChange={(e) => setSize({ ...size, cores: Number(e.target.value) })} /></label>
-          <label className="field">MiB<input type="number" min={512} step={512} value={size.memory} onChange={(e) => setSize({ ...size, memory: Number(e.target.value) })} /></label>
-          <label className="field">GiB<input type="number" min={host.disk ?? 8} value={size.disk} onChange={(e) => setSize({ ...size, disk: Number(e.target.value) })} /></label>
+          <label className="field">vCPU<input name="cores" type="number" min={1} max={16} value={size.cores} onChange={(e) => setSize({ ...size, cores: Number(e.target.value) })} /></label>
+          <label className="field">MiB<input name="memory" type="number" min={512} step={512} value={size.memory} onChange={(e) => setSize({ ...size, memory: Number(e.target.value) })} /></label>
+          <label className="field">GiB<input name="disk" type="number" min={host.disk ?? 8} value={size.disk} onChange={(e) => setSize({ ...size, disk: Number(e.target.value) })} /></label>
         </div>
         <div className="muted small">More CPU or memory restarts the VM; disks can grow, never shrink.</div>
       </div>
@@ -354,7 +354,7 @@ function YamlModal({ name, yaml, onClose, onSaved }: { name: string; yaml: strin
     <Modal title={`Draft spec of ${name}`} onClose={onClose} wide footer={
       <><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={save}>Save draft</button></>
     }>
-      <textarea className="mono" rows={24} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} style={{ width: "100%" }} />
+      <textarea name="spec" className="mono" rows={24} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} style={{ width: "100%" }} />
       <ErrorBox error={err} />
     </Modal>
   );
@@ -413,7 +413,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
     <aside className="range-chat card" aria-label="Range chat">
       <div className="card-head">
         <h2>Chat</h2>
-        <select className="chat-pick grow" value={current ?? ""} aria-label="Conversation"
+        <select name="conversation" className="chat-pick grow" value={current ?? ""} aria-label="Conversation"
           onChange={(e) => setCurrent(e.target.value ? Number(e.target.value) : null)}>
           <option value="">New conversation</option>
           {(list.data?.chats ?? []).map((c) => <option key={c.id} value={c.id}>{c.title || `Conversation ${c.id}`}</option>)}
@@ -438,7 +438,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
           )}
           {mode === "code" && chat && !readonly && (
             <label className="allow-all small">
-              <input type="checkbox" checked={chat.allow_all} onChange={(e) => {
+              <input name="allow-all" type="checkbox" checked={chat.allow_all} onChange={(e) => {
                 if (!e.target.checked || window.confirm("Let the assistant run commands and other changes in this chat without asking first?"))
                   ctl.setAllowAll(e.target.checked).catch((x) => setErr(x as ApiError));
               }} /> Run changes without asking (this conversation)
@@ -452,7 +452,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
           <ErrorBox error={err ?? ctl.error} />
           {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (
             <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(text); }}>
-              <textarea rows={3} value={text} disabled={sending || ctl.busy} placeholder={ctl.busy ? "The assistant is working…" : def.placeholder}
+              <textarea name="message" rows={3} value={text} disabled={sending || ctl.busy} placeholder={ctl.busy ? "The assistant is working…" : def.placeholder}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }} />
               <button className="btn primary" disabled={sending || ctl.busy || !text.trim()}>Send</button>

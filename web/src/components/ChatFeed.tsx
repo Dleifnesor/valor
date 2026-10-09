@@ -42,7 +42,7 @@ export function ProviderPick({ info, value, onChange, disabled }: {
   const current = info.providers.find((p) => p.id === value) ?? info.providers.find((p) => p.id === info.default);
   if (info.providers.length < 2) return <span className="muted small">{current?.model}</span>;
   return (
-    <select className="provider-pick" value={current?.id ?? ""} disabled={disabled} aria-label="AI provider"
+    <select name="provider" className="provider-pick" value={current?.id ?? ""} disabled={disabled} aria-label="AI provider"
       title={current ? `${current.name}: ${current.model}` : ""}
       onChange={(e) => onChange(e.target.value === info.default ? "" : e.target.value)}>
       {info.providers.map((p) => (
@@ -361,7 +361,7 @@ function QuestionDialog({ questions, picked, setPicked, other, setOther, answere
                 </button>
               );
             })}
-            <input className="qw-other" value={other[q.id] ?? ""}
+            <input name="answer-other" className="qw-other" value={other[q.id] ?? ""}
               placeholder={q.options.length ? "Other - type your own answer" : "Your answer"}
               onChange={(e) => {
                 confirm(q.id);
