@@ -249,10 +249,10 @@ tr.clickable { cursor: pointer; }
 .alert.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); border-left-color: var(--ok); }
 .alert ul { margin: 6px 0 0; padding-left: 18px; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; }
 .tabs button {
   background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 12px; font: inherit;
-  font-weight: 500; color: var(--muted); cursor: pointer; white-space: nowrap; margin-bottom: -1px;
+  font-weight: 500; color: var(--muted); cursor: pointer; white-space: nowrap;
 }
 .tabs button:hover { color: var(--text); }
 .tabs button.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
@@ -324,6 +324,12 @@ tr.clickable { cursor: pointer; }
 .change-replace { border-color: var(--c-replace) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-replace) 22%, transparent); }
 .change-remove { border-color: var(--c-remove) !important; opacity: 0.75; text-decoration: line-through; }
 .side-panel { position: absolute; right: 12px; top: 12px; z-index: 6; width: 280px; }
+/* edge labels are HTML above the nodes (Topology.tsx): a segment box or another line never covers them */
+.edge-label { position: absolute; z-index: 1000; pointer-events: none; font-family: var(--mono); font-size: 11px; line-height: 16px;
+  padding: 1px 5px; background: var(--surface); border-radius: 2px; white-space: nowrap; color: var(--muted); }
+.edge-label.rule { color: var(--accent-strong); font-weight: 600; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.edge-label.clickable { pointer-events: all; cursor: pointer; }
+.edge-label.clickable:hover { border-color: var(--accent); }
 
 /* ---------------------------------------------------------------- events */
 .events { font-family: var(--mono); font-size: 12px; display: flex; flex-direction: column; gap: 2px; max-height: 520px; overflow: auto; }
