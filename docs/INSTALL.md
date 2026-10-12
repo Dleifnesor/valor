@@ -70,8 +70,10 @@ app) and receive 10 recovery codes.
 | `reserved_networks` | every network the node is on or routes to | Segments never overlap them and range egress never reaches them |
 | `nameservers` | 1.1.1.1, 9.9.9.9 | DNS for range VMs (public, because range egress may only reach public addresses) |
 | `internet_probe` | `1.1.1.1:443` | What the egress tests try to reach |
-| `templates` | `ubuntu-24.04` | Also `ubuntu-26.04`, `debian-13`, `debian-12`; add more later with `--template` |
+| `templates` | `ubuntu-24.04` | Linux templates to build now (`ubuntu-24.04` is required). Also `ubuntu-26.04`, `debian-13`, `debian-12`, `kali`, `rocky-10`, `alma-10`; add more later, including Windows: [More operating systems](#more-operating-systems) |
 | `snippets_storage` | a storage with snippets, else `local` | |
+| `iso_storage` | the ISO storage with the most free space, shared storage first | Where the ISO library downloads and uploads media |
+| `iso_storages` | every active storage with ISO content | ISO storages VALOR may list (read-only except `iso_storage`) |
 | `allowed_networks` | the management network | Add VPN subnets that should reach the web UI |
 | `tls` | `valor-ca` | `valor-ca`: VALOR's own CA (download `https://<vm>/ca.crt` and trust it once). `own`: your certificate (`tls_cert`, `tls_key`: PEM files on the node). ACME DNS-01 is planned (issue #7). |
 | `admin_user` | `admin` | |
@@ -106,10 +108,10 @@ allowed_networks = ["192.168.10.0/24", "10.8.0.0/24"]   # LAN + WireGuard client
 
 | Object | Name | Removed by `--uninstall` |
 |---|---|---|
-| Roles | `ValorEngine`, `ValorTemplateUser`, `ValorStorage`, `ValorNodeAudit` | yes, if VALOR created them and nothing else uses them |
+| Roles | `ValorEngine`, `ValorTemplateUser`, `ValorStorage`, `ValorNodeAudit`, `ValorISO`, `ValorISOReader`, `ValorDownload` | yes, if VALOR created them and nothing else uses them |
 | User + token | `<id>@pve`, `<id>@pve!appliance` (privilege-separated) | token yes; user only if VALOR created it |
 | Pools | `<id>-ranges`, `<id>-templates`, `<id>-system` | if empty |
-| ACLs | the paths above | yes |
+| ACLs | the pools above, the range storage, the two bridges, node status, the ISO storages | yes |
 | Bridge | `vmbrN` | if VALOR created it and no VM uses it (same rollback safety net) |
 | Templates | `tpl-<os>` in `<id>-templates` | the ones VALOR built, once no range depends on them |
 | VALOR VM | `<hostname>`, VMID `start+999`, pool `<id>-system` | yes |
@@ -126,6 +128,7 @@ again.
 ./install.sh --status                       # what is installed, and does the web UI answer?
 ./install.sh --upgrade                      # push this checkout's version into the VALOR VM (data is kept)
 ./install.sh --template debian-13           # build another OS template
+./install.sh --template rocky-10 --rebuild  # a fresh build (current updates); the old template is removed
 ./install.sh --uninstall                    # remove VALOR, keep range VMs
 ./install.sh --uninstall --purge-ranges     # remove VALOR and every range VM
 ```
@@ -137,16 +140,36 @@ qm guest exec <vmid> -- valor-web unlock admin       # clear a lockout
 qm guest exec <vmid> -- valor-web reset-mfa admin    # set up MFA again at the next sign-in
 ```
 
-## Security model in one table
+## More operating systems
 
-| Layer | What protects it |
-|---|---|
-| Proxmox | One privilege-separated token. VM rights end at the range pool; it can clone only from the template pool and gets HTTP 403 on everything else, including the VALOR VM. |
-| VALOR VM | nftables default deny: HTTPS only from `allowed_networks`; SSH (keys only) only from the Proxmox nodes. Hardened systemd units with an unprivileged user. Automatic security updates. |
-| Web | TLS 1.2+, HSTS, a strict CSP, no framing. Argon2id passwords. Mandatory TOTP with replay protection and recovery codes. `__Host-` session cookies (HttpOnly, Secure, SameSite=Strict) with idle/absolute timeouts and a new ID at sign-in. CSRF token + Origin checks. Rate limits and lockout. Full audit log. |
-| Secrets | The API token exists only inside the VALOR VM (`/etc/valor`, readable by the service). TOTP seeds, LDAP and SMTP passwords and webhook URLs are encrypted at rest (AES-256-GCM). |
-| Ranges | Segments sit on a bridge with no physical port. Range routers deny everything not in the spec, and their internet egress excludes private and reserved networks. |
-| Changes | Every build and every destroy runs only after a person approves the exact plan shown. |
+**Linux** templates come from official cloud images whose checksums (and, where the publisher signs them, the
+checksum list's signature) are verified:
+
+```bash
+./install.sh --template kali
+./install.sh --template alma-10
+```
+
+**Windows** templates are built from evaluation ISOs with an unattended setup, the VirtIO guest tools and sysprep.
+The installer takes the ISOs from VALOR's ISO library, so download them there first (**ISO library -> Download to
+the cluster**): the Windows evaluation medium and the VirtIO drivers (`virtio-win`). Then:
+
+```bash
+./install.sh --template windows-server-2022          # also -2022-core, windows-server-2025(-core), windows-11
+```
+
+A Windows build takes a while (setup, updates, sysprep). Evaluation media expire; bring your own license for longer
+use. `--rebuild` builds a fresh template and removes the old one (or keeps it, with a warning, while linked clones
+of it still exist). Ranges use the newest template: the next plan of an existing range shows `replace` for its hosts
+on that OS, so they are rebuilt from the new template only when someone approves that plan.
+
+The OS list and how to add one: [CONTENT.md](CONTENT.md#os-catalog).
+
+## Security
+
+The token, pools, firewall, web and secrets protections are described in the README's
+[security model](../README.md#security-model). The installer checks the two that matter most before it finishes: the
+web UI answers with a valid certificate, and the engine's token gets HTTP 403 on the VALOR VM.
 
 ## Troubleshooting
 

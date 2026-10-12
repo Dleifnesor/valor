@@ -108,11 +108,12 @@ access:                         # optional remote access to the range
 
 ## What the engine does with it
 
-- **Router `rtr`**: NIC 0 on the uplink bridge (DHCP from the home LAN, NAT), one NIC per segment on the internal
+- **Router `rtr`**: NIC 0 on the uplink bridge (DHCP from the LAN, NAT), one NIC per segment on the internal
   VLAN bridge with the segment's first address. nftables: input closed, forward default **drop**, one accept per
   policy rule, egress only for `internet: true` segments and never to private addresses.
 - **Hosts**: linked clones of the OS template, one NIC on their segment's VLAN, static address, gateway = router,
-  DNS 1.1.1.1 / 9.9.9.9, user `valor` with the engine's SSH key (break-glass only; management uses the guest agent).
+  DNS from VALOR's settings (default 1.1.1.1 / 9.9.9.9), user `valor` with the engine's SSH key (break-glass only;
+  management uses the guest agent).
 - **Build order**: VMs -> temporary build egress for every segment (package installs) -> roles -> baseline ->
   router baseline -> **final policy last** -> WireGuard on the router (when `access.wireguard` is set).
 - **WireGuard**: the router listens on `port` on its uplink address; peers' tunnel addresses may reach only the
@@ -127,4 +128,4 @@ access:                         # optional remote access to the range
 - Keep segment networks distinct per range. Each of the four numbers of an address is 0-255, so
   `10.<vlan>.0.0/24` works only for VLANs below 256: for VLAN 340 use e.g. `10.34.0.0/24` or
   `10.3.40.0/24`, never `10.340.0.0/24`.
-- Avoid `reserved_networks` (home LAN 192.168.1.0/24, cluster 10.10.10.0/24).
+- Avoid `reserved_networks`: the networks the cluster itself uses (listed with the cluster's facts).
