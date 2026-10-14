@@ -4,7 +4,7 @@ import { JobSummary } from "../types";
 import { ago, go, useApi, when } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
 
-const target = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
+export const jobTarget = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
 /** Who started a job: web:<user>, assistant:<user>:<chat> (rebuild after an automatic fix), rerun:<origin>. */
 const who = (origin: string): string => origin.startsWith("rerun:") ? `${who(origin.slice(6))}, run again by VALOR`
   : origin.startsWith("assistant:") ? `the assistant (for ${origin.split(":")[1]})` : origin.replace(/^web:/, "");
@@ -25,7 +25,7 @@ export function Jobs() {
                 <tr key={j.id} className="clickable" onClick={() => go(`jobs/${j.id}`)}>
                   <td className="mono">{j.id}</td>
                   <td>{j.kind}{j.target.verify ? " + verify" : ""}</td>
-                  <td>{target(j.target)}</td>
+                  <td>{jobTarget(j.target)}</td>
                   <td><StateBadge state={j.state} /></td>
                   <td className="nowrap">{ago(j.created)}</td>
                   <td className="nowrap">{j.finished ? when(j.finished) : "–"}</td>
@@ -70,7 +70,7 @@ export function JobDetail({ id }: { id: string }) {
   const { data, error } = useApi<JobDetailData>(`/api/jobs/${id}?tail=400`, 2500);
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />;
   const r = data.result;
-  const name = target(data.target);
+  const name = jobTarget(data.target);
   return (
     <>
       <div className="row">

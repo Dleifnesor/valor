@@ -46,7 +46,9 @@ export function RangeDetail({ name, canOperate, chatId }: { name: string; canOpe
   if (loading && !data) return <Loading />;
   if (!data) return <ErrorBox error={error} />;
 
-  const built = Object.keys(data.vms).length > 0;
+  const vmCount = Object.keys(data.vms).length;
+  const running = Object.values(data.vms).filter((v) => v.status === "running").length;
+  const built = vmCount > 0;
   const deployed = Object.values(data.vms)[0]?.spec;
   const doPlan = async () => {
     setPlanning(true);
@@ -71,20 +73,22 @@ export function RangeDetail({ name, canOperate, chatId }: { name: string; canOpe
 
   return (
     <>
-      <div className="row">
+      <div className="page-head">
         <div className="grow">
-          <div className="muted">{data.spec.description || "No description."}</div>
-          <div className="row small" style={{ marginTop: 6, gap: 8 }}>
-            <span className="badge">spec {data.version}</span>
-            {built ? <span className="badge ok">{Object.values(data.vms).filter((v) => v.status === "running").length}/{Object.keys(data.vms).length} VMs running</span>
-              : <span className="badge">not built</span>}
-            {built && deployed && deployed !== data.version && <span className="badge info">spec changed since the last build</span>}
-            {data.verify && <StateBadge state={data.verify.ok ? "ok" : "failed"}
-              label={`verification ${data.verify.ok ? "PASS" : "FAIL"} · ${ago(data.verify.finished)}`} />}
+          <p className="lede">{data.spec.description || "No description."}</p>
+          <div className="facts">
+            <span>spec <span className="mono">{data.version}</span></span>
+            {built ? <StateBadge state={running === vmCount ? "ok" : running ? "warn" : "unknown"} label={`${running}/${vmCount} VMs running`} />
+              : <span>not built</span>}
+            {built && deployed && deployed !== data.version && <StateBadge state="warn" label="spec changed since the last build" />}
+            {data.last_apply && <span>last build <StateBadge state={data.last_apply.ok ? "ok" : "failed"}
+              label={data.last_apply.ok ? "succeeded" : "failed"} /> · {ago(data.last_apply.started)}</span>}
+            {data.verify && <span>verification <StateBadge state={data.verify.ok ? "ok" : "failed"}
+              label={`${data.verify.ok ? "passed" : "failed"} ${data.verify.summary?.tests_passed ?? ""}/${data.verify.summary?.tests_total ?? ""}`} /> · {ago(data.verify.finished)}</span>}
           </div>
         </div>
         {canOperate && (
-          <div className="row">
+          <div className="actions">
             <button className="btn" onClick={() => go(`ranges/${name}/edit`)}>Edit spec</button>
             {built && data.logins && <button className="btn" onClick={() => setShowLogin(true)}>Login</button>}
             {built && <PowerMenu range={name} onError={setActionError} />}
@@ -92,7 +96,8 @@ export function RangeDetail({ name, canOperate, chatId }: { name: string; canOpe
             <button className="btn primary" onClick={doPlan} disabled={planning}>
               {planning ? <><span className="spinner" /> Planning…</> : built ? "Plan changes" : "Plan build"}
             </button>
-            {built && <button className="btn danger" onClick={() => setDestroying(true)}>Destroy</button>}
+            {built && <><span className="divider" aria-hidden="true" />
+              <button className="btn danger" onClick={() => setDestroying(true)}>Destroy</button></>}
           </div>
         )}
       </div>
@@ -185,7 +190,7 @@ function Verification({ data }: { data: Detail }) {
   return (
     <div className="card-body stack">
       <div className="row">
-        <StateBadge state={v.ok ? "ok" : "failed"} label={v.ok ? "PASS" : "FAIL"} />
+        <StateBadge state={v.ok ? "ok" : "failed"} label={v.ok ? "passed" : "failed"} />
         <span>tests {v.summary.tests_passed}/{v.summary.tests_total}</span>
         <span>· isolation {v.summary.isolation_passed}/{v.summary.isolation_total}</span>
         <span>· baseline {v.summary.baseline_passed}/{v.summary.baseline_total}</span>
@@ -318,7 +323,7 @@ function History({ data }: { data: Detail }) {
           {[...data.history].reverse().map((h, i) => (
             <tr key={i} className={h.job ? "clickable" : ""} onClick={() => h.job && go(`jobs/${h.job}`)}>
               <td className="nowrap">{when(h.started)}</td><td>{h.kind}</td>
-              <td><StateBadge state={h.ok ? "ok" : "failed"} label={h.ok ? "OK" : "failed"} /></td>
+              <td><StateBadge state={h.ok ? "ok" : "failed"} label={h.ok ? "succeeded" : "failed"} /></td>
               <td>{h.seconds ? `${h.seconds} s` : "–"}</td>
               <td className="small">{h.error ? `${h.error}: ${h.message ?? ""}` : ""}</td>
             </tr>

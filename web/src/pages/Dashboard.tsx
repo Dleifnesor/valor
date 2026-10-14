@@ -1,6 +1,16 @@
-import { Check } from "../types";
-import { useApi } from "../hooks";
+import { Check, JobSummary } from "../types";
+import { ago, go, useApi } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
+import { jobTarget } from "./Jobs";
+
+interface RangeRow {
+  name: string;
+  has_spec: boolean;
+  description?: string;
+  vms: number;
+  running: number;
+  last_verify: null | { ok: boolean; finished: string; summary: Record<string, any> };
+}
 
 interface Status {
   version: string;
@@ -27,6 +37,8 @@ const gib = (mib: number) => `${(mib / 1024).toFixed(0)} GiB`;
 
 export function Dashboard() {
   const { data, error, loading } = useApi<Status>("/api/status", 30000);
+  const list = useApi<{ ranges: RangeRow[] }>("/api/ranges", 30000);
+  const jobs = useApi<{ jobs: JobSummary[] }>("/api/jobs?limit=8", 10000);
   if (loading && !data) return <Loading label="Checking the cluster…" />;
   if (!data) return <ErrorBox error={error} />;
   const c = data.cluster;
@@ -34,13 +46,11 @@ export function Dashboard() {
   const ranges = c ? Object.values(c.ranges) : [];
   return (
     <>
-      {problems.length > 0 ? (
+      {problems.length > 0 && (
         <div className="alert error">
           {problems.length === 1 ? "One check needs attention" : `${problems.length} checks need attention`}:{" "}
           {problems.map((p) => p.name).join(", ")}.
         </div>
-      ) : (
-        <div className="alert ok">VALOR is healthy and can build ranges.</div>
       )}
       {c && (
         <div className="card stats">
@@ -69,8 +79,44 @@ export function Dashboard() {
           </div>
         </div>
       )}
-      <div className="grid cols-2">
-        <Card title="Health checks">
+      <div className="dash">
+        <Card title="Ranges" bodyClass="" actions={<a className="small" href="#/ranges">All ranges</a>}>
+          {list.data && !list.data.ranges.length && <div className="empty">No ranges yet.</div>}
+          {!!list.data?.ranges.length && (
+            <table>
+              <tbody>
+                {list.data.ranges.map((r) => (
+                  <tr key={r.name} className="clickable" onClick={() => r.has_spec && go(`ranges/${r.name}`)}>
+                    <td className="fill"><b>{r.name}</b><div className="muted small clip">{r.description}</div></td>
+                    <td className="nowrap">{r.vms ? <StateBadge state={r.running === r.vms ? "ok" : r.running ? "warn" : "unknown"}
+                      label={`${r.running}/${r.vms} running`} /> : <span className="muted">not built</span>}</td>
+                    <td className="nowrap">{r.last_verify ? <StateBadge state={r.last_verify.ok ? "ok" : "failed"}
+                      label={`${r.last_verify.ok ? "passed" : "failed"} ${r.last_verify.summary?.tests_passed}/${r.last_verify.summary?.tests_total}`} />
+                      : <span className="muted">not verified</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+        <Card title="Recent jobs" bodyClass="" actions={<a className="small" href="#/jobs">All jobs</a>}>
+          {jobs.data && !jobs.data.jobs.length && <div className="empty">No jobs yet.</div>}
+          {!!jobs.data?.jobs.length && (
+            <table>
+              <tbody>
+                {jobs.data.jobs.map((j) => (
+                  <tr key={j.id} className="clickable" onClick={() => go(`jobs/${j.id}`)}>
+                    <td className="fill"><div className="clip">{j.kind}{j.target.verify ? " + verify" : ""} <span className="muted">· {jobTarget(j.target)}</span></div></td>
+                    <td className="nowrap"><StateBadge state={j.state} /></td>
+                    <td className="nowrap muted right hide-narrow">{ago(j.created)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+        <Card title="Health checks" bodyClass="" actions={problems.length === 0 &&
+          <StateBadge state="ok" label={`all ${data.checks.length} pass`} />}>
           <table>
             <tbody>
               {data.checks.map((x) => (

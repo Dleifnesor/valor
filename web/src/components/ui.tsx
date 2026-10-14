@@ -97,13 +97,14 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
 
 const STATE_CLASS: Record<string, string> = {
   succeeded: "ok", ok: "ok", pass: "ok", running: "info", queued: "", failed: "bad", fail: "bad", problem: "bad",
-  stopped: "", unknown: "",
+  stopped: "", unknown: "", warn: "warn",
 };
 
+/** A state as a coloured mark and words: "● succeeded", spinner while running. */
 export function StateBadge({ state, label }: { state: string; label?: string }) {
   return (
-    <span className={`badge ${STATE_CLASS[state] ?? ""}`}>
-      {state === "running" && <span className="spinner" style={{ width: 10, height: 10 }} />}
+    <span className={`status ${STATE_CLASS[state] ?? ""}`}>
+      {state === "running" ? <span className="spinner" /> : <i aria-hidden="true" />}
       {label ?? state}
     </span>
   );
