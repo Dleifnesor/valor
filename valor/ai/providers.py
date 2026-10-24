@@ -1,8 +1,8 @@
-"""Chat builder: describe an environment, an AI model writes the range spec.
+"""Talking to AI models: one streamed request, its answer as a Reply (text, reasoning, tool calls, token counts).
 
-Providers are pluggable (any OpenAI-compatible endpoint such as a local model server, OpenRouter, or none). The model only ever produces text: VALOR extracts the YAML, validates it against the schema and the cluster,
-and asks the model to fix what fails. Nothing is saved or built without a person: the spec goes to the editor,
-then plan -> approve like any other range.
+Two kinds of provider: any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API, ...) and OpenRouter.
+Local models' quirks are smoothed over here: reasoning inside <think> tags, tool calls written as text, and a full
+context window that looks like a cut-off answer.
 """
 
 from __future__ import annotations
@@ -12,28 +12,17 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-
-import requests
-import yaml
 from urllib.parse import urlparse
 
-from . import compliance
-from .errors import ValorError
+import requests
+
+from ..errors import ValorError
 
 PROVIDERS = ("openai", "openrouter")
 KIND_NAMES = {"openai": "An OpenAI-compatible server", "openrouter": "OpenRouter"}
 # max_tokens is a ceiling, not a cost (only generated tokens count): high enough that a large spec is never cut off
 DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max_tokens": 32768,
             "daily_tokens_per_user": 400_000, "timeout": 300}
-MAX_TURNS = 24
-MAX_CHARS = 60_000
-FIX_ROUNDS = 2
-YAML_BLOCK = re.compile(r"```(?:yaml|yml)\s*\n(.*?)```", re.S | re.I)
-SPEC_BLOCK = re.compile(r"```[ \t]*\n(\s*apiVersion:.*?)```", re.S)     # a spec in a fence without a language
-SPEC_TEXT = re.compile(r"^\s*apiVersion:", re.M)
-QUESTIONS_BLOCK = re.compile(r"```questions\s*\n(.*?)```", re.S)
-MAX_QUESTIONS, MAX_OPTIONS = 12, 10
 
 
 @dataclass
@@ -348,247 +337,6 @@ def provider_from(settings: dict, api_key: str) -> Provider:
                      hint="An administrator can connect one in Settings -> AI providers.")
 
 
-# ---------------------------------------------------------------------- prompt
-SPEC_REFERENCE = Path(__file__).with_name("spec-reference.md")      # the spec format, for people and models alike
-
-
-def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
-    """What every VALOR prompt needs: the spec format, the OSes and roles this cluster has, and its facts."""
-    oses = "\n".join(f"- {name}{' (default)' if name == cfg.default_os else ''}: {e.get('description', '')} "
-                     f"[{e.get('family', 'debian')}]" for name, e in catalog.items() if name in present)
-    role_lines = []
-    for r in roles:
-        params = "; ".join(f"{k}{'' if not v.get('required') else ' (required)'}: {' '.join(v.get('description', '').split())}"
-                           + (f" (default {v['default']!r})" if 'default' in v else "")
-                           for k, v in (r.get("params") or {}).items())
-        ports = (f"TCP ports from its '{r['ports_param']}' param" if r.get("ports_param")
-                 else "TCP " + ", ".join(map(str, r["ports"])) if r.get("ports") else "")
-        role_lines.append(f"- {r['name']} [{', '.join(r.get('families') or ['debian'])}]"
-                          f"{' (generic)' if r.get('category') == 'generic' else ''}: {' '.join(r['description'].split())}"
-                          + (f" | serves: {ports}" if ports else "") + (f" | params: {params}" if params else ""))
-    frameworks = compliance.reference(Path(cfg.baselines_dir))
-    return f"""# Spec reference
-{SPEC_REFERENCE.read_text()}
-
-# Compliance frameworks (compliance.frameworks)
-{frameworks or '- (none available)'}
-
-# Available operating systems (templates on this cluster)
-{oses or '- (none built yet)'}
-
-# Roles
-{chr(10).join(role_lines)}
-
-# Cluster facts
-{json.dumps(facts, indent=1, sort_keys=True)}
-"""
-
-
-SPEC_RULES = """Rules for specs:
-- Follow the spec reference below exactly; the spec is validated and you will be told about any problem.
-- Use only operating systems from the list of available templates and roles from the role list; a role only works
-  on the OS families shown in brackets.
-- Never put passwords, keys or other secrets in the spec (VALOR generates logins itself).
-- Keep a spec you were given and change only what the person asks for; always return the whole spec.
-- Deny by default: only add policy rules the environment needs, and say which flows you allowed.
-- Pick unused VLANs and private networks that avoid the networks listed under cluster facts.
-- Leave `baseline` out (or at ubuntu-l1): VALOR hardens Linux hosts with it and Windows hosts with windows-l1
-  automatically. Never set a Windows profile as baseline, and only use 'none' when the person asks for no hardening.
-- Compliance: when the person wants a framework, set `compliance.frameworks` and `baseline: linux-moderate`, list the
-  segments holding the regulated data in `compliance.scope` (no internet there), add a log server (syslog-server
-  role) with syslog-client on the other Linux hosts and a time server (ntp-server, ntp-client elsewhere). Say the
-  range is "aligned with" the framework's technical requirements, never "compliant" or "certified".
-- Prefer a ready-made role over packages / custom-script. A custom-script must be idempotent and must restart a
-  service after changing its configuration (`systemctl enable --now` does not restart a running service).
-- If the request is unclear, make a sensible small choice and say what you assumed."""
-
-
-QUESTIONS_FORMAT = """To ask the person questions, end your answer with one ```questions block (YAML) and nothing after it.
-VALOR shows each question as a card with clickable options plus a free-text "Other" answer:
-```questions
-- header: Compliance                 # a short label (optional)
-  question: Should the range be built toward a compliance framework?
-  options: [NIST SP 800-171 (CUI / CMMC L2), NIST SP 800-53 Moderate, PCI DSS, HIPAA, CIS Level 1 only, None]
-  recommended: None                  # optional; one of the options
-- question: Which services should the web tier run?
-  options: [nginx, Apache, MariaDB, PostgreSQL, Juice Shop (vulnerable app)]
-  multiple: true                     # several answers allowed
-```
-At most 12 questions per round, 2-10 short options each. The answers come back in the person's next message."""
-
-
-def builder_prompt(ref: str) -> str:
-    return f"""You design cyber ranges (isolated lab networks of virtual machines) for VALOR, which builds them on
-Proxmox VE. The person describes an environment; you find out what they need, then write the range spec.
-
-Asking first: unless the person already answered everything that matters, or asks you to just build it / use your
-defaults, reply to a new request with questions instead of a spec - as many as are useful, formed from what they
-described: what the range is for (training, red or blue team, testing, a demo), whether to build it toward a compliance
-framework (offer NIST SP 800-171 / CMMC L2, NIST SP 800-53 Low or Moderate, PCI DSS, HIPAA, CIS Level 1 only, or none),
-which services each server runs and how they are configured (web, database, DNS, DHCP, file shares, mail, logging,
-time, Active Directory, containers, deliberately vulnerable apps), operating systems, how many clients, which segments
-get internet access, remote access (WireGuard) and who may reach what. Ask again in later rounds while something
-important is still open, but never ask what they already told you.
-
-Writing the spec: answer with a short explanation (a few sentences: what you built and any assumption you made)
-followed by exactly one complete range spec in a ```yaml code block. When the person asks something else (about the
-spec you wrote, VALOR, a choice you made), answer in plain text without a spec.
-
-{QUESTIONS_FORMAT}
-
-{SPEC_RULES}
-
-{ref}"""
-
-
-RANGE_MODES = {
-    "question": """You answer questions about one VALOR range (shown below with its live state). Answer in plain,
-concise text: what the range contains, who can reach what under its policy, why a test failed, how to use a service.
-You may look inside the VMs with read-only commands (run_command, read_file, range_status) to check facts; you cannot
-change anything in this mode. If the person wants a change, tell them to switch to Plan or Code mode.""",
-    "plan": f"""You plan changes to one VALOR range (shown below with its live state). Start with a short plan: a few
-bullet points saying what you change and why, and which traffic you allow. Then give the complete updated spec in
-exactly one ```yaml code block. VALOR shows it as a draft on the map; nothing is built until a person approves the plan.
-
-{SPEC_RULES}""",
-    "code": f"""You operate one VALOR range (shown below with its spec and live state) for the person: you run commands
-inside its VMs over the QEMU guest agent (bash as root on Linux, PowerShell as SYSTEM on Windows), read and write files,
-power VMs, take and roll back snapshots, and record changes in the range's spec.
-
-How to work:
-- Look first: read-only commands (status, cat, ss, Get-Service...) run at once. Anything that changes a VM, power and
-  snapshot actions and spec changes wait for the person to approve a card in the chat - so batch related changes into
-  one command or script, and say what it does in `purpose`.
-- Do the work in this turn: make each change with its tool call - the approval card is the person's permission. Never
-  stop to describe a plan and wait for a go-ahead in text; ask (questions block) only for a decision only the person
-  can make.
-- After changing a service's configuration, restart it (`systemctl enable --now` does not restart a running service)
-  and check that it listens where it should.
-- Configure services the way a role would (packages, config files, enabled services, firewall ports), then check that
-  they work (service status, listening ports, a request from another host when the policy allows it).
-- Keep the range reproducible: once a live change works, call update_spec with the complete spec that records it - a
-  ready-made role when one fits, otherwise packages / windows-features / custom-script with the same commands - so a
-  rebuild gives the same result. Network changes (segments, policy, internet access) are made in the spec only; VALOR
-  builds them after the person approves the plan.
-- Hosts reach only what the policy allows, and segments without internet access cannot download packages; say so and
-  propose a spec change instead of working around the policy.
-- If something is unclear, ask (questions block below) and stop. Finish with a short summary of what you changed and
-  how you verified it.
-
-{QUESTIONS_FORMAT}
-
-{SPEC_RULES}""",
-}
-
-
-def range_prompt(mode: str, ref: str, spec_yaml: str, live: dict) -> str:
-    return f"""{RANGE_MODES[mode]}
-
-# The range's current spec{' (with unsaved draft changes)' if live.get('draft') else ''}
-```yaml
-{spec_yaml.strip()}
-```
-
-# Live state
-{json.dumps(live, indent=1, sort_keys=True, default=str)}
-
-{ref}"""
-
-
-QUESTION_ITEM = re.compile(r"^-[ \t]+(?:header|question)[ \t]*:", re.M)
-# what is left of a mangled opening fence before such a list: "```questions", "```yaml", "...below:questions"
-QUESTIONS_LABEL = re.compile(r"(?:```[ \t]*(?:questions|ya?ml)?|(?<=[^\w\s])questions|(?:^|\n)[ \t]*questions)[ \t]*\Z")
-
-
-def extract_questions(text: str) -> tuple[list[dict] | None, str]:
-    """(the questions of the last ```questions block, normalized; the text without the block). A list of questions
-    that ends the answer counts too when the model dropped or mangled the opening fence (seen with Mistral)."""
-    blocks = QUESTIONS_BLOCK.findall(text)
-    if blocks:
-        out = _questions(blocks[-1])
-        return (None, text) if out is None else ((out or None), QUESTIONS_BLOCK.sub("", text).strip())
-    m = QUESTION_ITEM.search(text)
-    if not m:
-        return None, text
-    body = re.sub(r"\n[ \t]*```[ \t]*\Z", "", text[m.start():].rstrip())
-    out = _questions(body) if "```" not in body else None
-    if not out:
-        return None, text                       # shown as written
-    return out, QUESTIONS_LABEL.sub("", text[:m.start()].rstrip()).rstrip()
-
-
-def _questions(block: str) -> list[dict] | None:
-    """The normalized questions of a questions block (None: not YAML)."""
-    try:
-        data = yaml.safe_load(repair_yaml(block))
-    except yaml.YAMLError:
-        return None
-    if isinstance(data, dict):
-        data = data.get("questions")
-    out = []
-    for q in data if isinstance(data, list) else []:
-        if isinstance(q, str):
-            q = {"question": q}
-        if not isinstance(q, dict) or not str(q.get("question") or "").strip():
-            continue
-        opts = q.get("options") if isinstance(q.get("options"), list) else []
-        options = list(dict.fromkeys(str(o).strip()[:200] for o in opts if str(o).strip()))[:MAX_OPTIONS]
-        rec = str(q.get("recommended") or "").strip()
-        out.append({"id": len(out) + 1, "header": str(q.get("header") or "").strip()[:40],
-                    "question": str(q["question"]).strip()[:500], "options": options,
-                    "multiple": bool(q.get("multiple") or q.get("multi")),
-                    "recommended": rec if rec in options else None})
-        if len(out) == MAX_QUESTIONS:
-            break
-    return out
-
-
-def extract_yaml(text: str) -> tuple[str | None, str]:
-    """(the last ```yaml block, repaired; the text without it)."""
-    fence = YAML_BLOCK if YAML_BLOCK.search(text) else SPEC_BLOCK
-    blocks = fence.findall(text)
-    if not blocks:
-        return None, text.strip()
-    return repair_yaml(blocks[-1].strip() + "\n"), fence.sub("", text).strip()
-
-
-PLAIN_VALUE = re.compile(r"^(\s*(?:-\s+)?[A-Za-z_][\w-]*:\s+)([^\s\"'\[{|>&*!#%@`].*?)(\s+#.*)?\s*$")
-
-
-def repair_yaml(text: str) -> str:
-    """Quote the plain values that contain ": " (`description: Data tier: files`), the YAML slip models make most:
-    a whole fix round with a slow local model otherwise. Only lines YAML rejects change, and only if it then parses."""
-    lines = text.split("\n")
-    for _ in range(50):
-        try:
-            yaml.safe_load("\n".join(lines))
-            return "\n".join(lines)
-        except yaml.MarkedYAMLError as e:
-            n = e.problem_mark.line if e.problem_mark else -1
-            m = PLAIN_VALUE.match(lines[n]) if "mapping values are not allowed" in (e.problem or "") and \
-                0 <= n < len(lines) else None
-            if not m:
-                return text
-            lines[n] = m[1] + json.dumps(m[2], ensure_ascii=False) + (m[3] or "")
-        except yaml.YAMLError:
-            return text
-    return text
-
-
-def trim(messages: list[dict]) -> list[dict]:
-    """The newest turns that fit the size limits, starting with a user turn."""
-    out, size = [], 0
-    for m in reversed(messages[-MAX_TURNS:]):
-        size += len(m["content"])
-        if size > MAX_CHARS:
-            break
-        out.append(m)
-    out.reverse()
-    while out and out[0]["role"] != "user":
-        out.pop(0)
-    return out
-
-
 THINK = re.compile(r"<think>(.*?)(?:</think>|$)", re.S)
 
 
@@ -617,56 +365,3 @@ def cut_off(provider: Provider, r: Reply) -> ValorError:
     return ValorError("ai_truncated", f"the model's answer was cut off at {provider.max_tokens:,} tokens{thought}",
                       hint="Raise 'Max tokens per answer' in Settings -> AI providers (it is a ceiling: only the tokens "
                            "the model writes count).", details=details)
-
-
-def _complete(provider: Provider, system: str, convo: list[dict], on_delta) -> Reply:
-    # providers written before streaming callbacks (tests' fakes) take (system, messages) only
-    return provider.complete(system, convo, on_delta=on_delta) if on_delta else provider.complete(system, convo)
-
-
-def build(provider: Provider, system: str, messages: list[dict], check, on_delta=None, on_check=None) -> dict:
-    """Ask the model; validate its spec with check(yaml) -> list of problems; ask for fixes (FIX_ROUNDS times).
-    An answer with questions and no spec ends the round (the person answers first).
-    Returns {reply, yaml, questions, problems, attempts, fixed (the problems the model corrected), reasoning,
-    input_tokens, output_tokens}. on_check(problems) is told about every failed check."""
-    convo = trim(messages)
-    if not convo:
-        raise ValorError("ai_no_message", "Say what environment you want.")
-    used_in = used_out = 0
-    reply = yaml_text = None
-    questions = None
-    problems: list[str] = []
-    fixed: list[str] = []                   # problems found in earlier attempts (the model corrected them)
-    reasoning: list[str] = []
-    for attempt in range(1, FIX_ROUNDS + 2):
-        r = _complete(provider, system, convo, on_delta)
-        used_in += r.input_tokens
-        used_out += r.output_tokens
-        if r.reasoning:
-            reasoning.append(r.reasoning)
-        if r.truncated:                 # asking again would be cut off at the same place
-            e = cut_off(provider, r)
-            e.details = {"input_tokens": used_in, "output_tokens": used_out}
-            raise e
-        questions, text = extract_questions(r.text)
-        yaml_text, reply = extract_yaml(text)
-        if yaml_text is None and (questions or not SPEC_TEXT.search(text)):
-            problems = []               # questions, or a plain answer to something that asked for no spec
-            break
-        if yaml_text is None:
-            problems = ["the spec is not in a ```yaml block"]
-        else:
-            problems = check(yaml_text)
-        if not problems:
-            break
-        fixed += problems
-        if on_check and attempt <= FIX_ROUNDS:
-            on_check(problems)
-        convo = [*convo, {"role": "assistant", "content": r.text},
-                 {"role": "user", "content": "[Automatic check by VALOR - the person does not see this message or your "
-                  "previous answer.] VALOR could not use that spec:\n" + "\n".join(f"- {p}" for p in problems)
-                  + "\nWrite your answer to the person's request again, as if for the first time: a short explanation "
-                  "of the environment (do not apologize or mention this check), then the corrected complete spec in "
-                  "one ```yaml block."}]
-    return {"reply": reply, "yaml": yaml_text, "questions": questions, "problems": problems, "attempts": attempt,
-            "fixed": fixed, "reasoning": "\n\n".join(reasoning), "input_tokens": used_in, "output_tokens": used_out}

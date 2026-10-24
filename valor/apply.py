@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import credentials, isos, kickstart, windows, wireguard
-from .baseline import baseline_for, bundle, load_baseline, parse_results
+from .baseline import baseline_for, bundle, parse_results
 from .cluster import load_catalog, range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
 from .netpolicy import render, router_script

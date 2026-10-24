@@ -64,7 +64,7 @@ def write(cfg, pve: PVE, spec: RangeSpec, spec_path: Path | None = None) -> Path
     w("|---|---|---|---|---|---|---|---|")
     r = spec.router
     rv = vms.get(ROUTER)
-    w(f"| rtr (router) | all | uplink DHCP; " + ", ".join(str(s.gateway) for s in spec.segments) +
+    w("| rtr (router) | all | uplink DHCP; " + ", ".join(str(s.gateway) for s in spec.segments) +
       f" | {r.os} | {r.cores} / {r.memory} MiB / {r.disk} GiB | routing, NAT, policy | {rv.vmid if rv else '-'} | {rv.status if rv else 'absent'} |")
     for h in spec.hosts:
         v = vms.get(h.name)

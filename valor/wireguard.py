@@ -141,7 +141,6 @@ def reach_cidrs(spec: RangeSpec) -> list[str]:
 
 
 def peer_conf(data: dict, spec: RangeSpec, peer: str, endpoint: str) -> str:
-    wg = spec.access.wireguard
     p = data["peers"][peer]
     allowed = ", ".join([*reach_cidrs(spec), data["network"]])
     return "\n".join([
