@@ -32,8 +32,8 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
       <section className="card"><div className="card-body">
         <h2 style={{ marginTop: 0 }}>The chat builder is off</h2>
         <p className="muted">
-          It needs an AI provider (Anthropic's Claude, OpenRouter, or an OpenAI-compatible endpoint such as a model server
-          on your network). {isAdmin ? <>Connect one in <button className="link" onClick={() => go("settings")}>Settings → AI providers</button>.</>
+          It needs an AI provider (OpenRouter, or an OpenAI-compatible endpoint such as a model server on your
+          network). {isAdmin ? <>Connect one in <button className="link" onClick={() => go("settings")}>Settings → AI providers</button>.</>
             : "Ask an administrator to connect one in Settings."}
         </p>
         <p className="muted">You can always write a spec yourself: <button className="link" onClick={() => go("ranges/new")}>New range</button>.</p>

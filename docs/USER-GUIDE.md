@@ -295,7 +295,7 @@ and the outcome. Searchable.
 |---|---|
 | Where VALOR reports builds and problems | Notification channels: email (SMTP), Discord, Slack, Microsoft Teams, and in-app notifications (the bell). Each channel gets problems only or all events; **Test** sends a test message. |
 | Sign in with LDAP or Active Directory | Server, service account, user search, and the groups that map to admin / operator / viewer. **Test** checks a user lookup. |
-| AI providers for the chats | One or more providers: Anthropic, OpenRouter, or any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API...). One is the default; a chat can pick another. Per provider: model, base URL, API key (encrypted, never shown again), max tokens per answer, and a silence timeout for slow local models. Also: the daily token budget per user (0 = unlimited) and where failed builds go. |
+| AI providers for the chats | One or more providers: OpenRouter (hosted models, Claude among them) or any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API...). One is the default; a chat can pick another. Per provider: model, base URL, API key (encrypted, never shown again), max tokens per answer, and a silence timeout for slow local models. Also: the daily token budget per user (0 = unlimited) and where failed builds go. |
 | Usage | AI tokens per user and day for the last 30 days. |
 | Web certificate | The certificate the web UI uses and when it expires. |
 | About | Version and instance. |

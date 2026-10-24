@@ -950,8 +950,7 @@ class Turn:
                 e = ai.cut_off(self.prov, r)
                 e.details = None                 # its tokens are counted already
                 raise e
-            state_["transcript"].append({"role": "assistant", "content": r.text, "tool_calls": r.tool_calls,
-                                         **({"raw": r.raw} if r.raw else {})})
+            state_["transcript"].append({"role": "assistant", "content": r.text, "tool_calls": r.tool_calls})
             if not r.tool_calls:
                 self.save_state(state_)
                 return self.finish_text(r.text), "done"
