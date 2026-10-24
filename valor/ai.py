@@ -465,12 +465,7 @@ def provider_from(settings: dict, api_key: str) -> Provider:
 
 
 # ---------------------------------------------------------------------- prompt
-def spec_reference(cfg) -> str:
-    for p in (Path(cfg.content_dir or cfg.project_dir) / "spec-reference.md",
-              Path(cfg.project_dir) / ".claude" / "skills" / "range-build" / "spec-reference.md"):
-        if p.is_file():
-            return p.read_text()
-    return ""
+SPEC_REFERENCE = Path(__file__).with_name("spec-reference.md")      # the spec format, for people and models alike
 
 
 def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
@@ -489,7 +484,7 @@ def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: d
                           + (f" | serves: {ports}" if ports else "") + (f" | params: {params}" if params else ""))
     frameworks = compliance.reference(Path(cfg.baselines_dir))
     return f"""# Spec reference
-{spec_reference(cfg)}
+{SPEC_REFERENCE.read_text()}
 
 # Compliance frameworks (compliance.frameworks)
 {frameworks or '- (none available)'}

@@ -5,8 +5,6 @@
 | [`./install.sh`](#installsh) | a Proxmox node | root | install, status, upgrade, more OS templates, uninstall |
 | [`valor`](#valor) | the VALOR VM (or a development install) | root or `valor` | the engine without the web UI: CI pipelines and break-glass |
 | [`valor-web`](#valor-web) | the VALOR VM | root | the web service, the worker, and account rescue |
-| [`valor-admin`](#valor-admin-and-valor-mcp-development-cluster) | the development cluster | root | the MVP's administrator tasks |
-| [`valor-mcp`](#valor-admin-and-valor-mcp-development-cluster) | the development cluster | `valor` | the engine as MCP tools for Claude Code |
 
 From a Proxmox node you reach commands inside the VALOR VM over the guest agent, which works even when the network
 does not:
@@ -66,9 +64,8 @@ Use the web UI where a person should approve each plan.
 | 4 | the engine is busy (another job holds the lock) |
 | 5 | another error |
 
-Example pipelines for GitHub Actions and GitLab CI are in [`ci/`](../ci/). They were written for the development
-cluster's harness (a self-hosted runner next to `/srv/valor`); on an installed VALOR, run the same commands in the
-VALOR VM.
+Example pipelines for GitHub Actions and GitLab CI are in [`ci/`](../ci/): a self-hosted runner inside the VALOR VM
+copies the specs into the ranges directory, then validates, plans, builds with verification and always destroys.
 
 ## valor-web
 
@@ -93,19 +90,3 @@ Break-glass from the Proxmox node, when nobody can sign in:
 qm guest exec <vmid> -- valor-web unlock admin
 qm guest exec <vmid> -- valor-web reset-mfa admin
 ```
-
-## valor-admin and valor-mcp (development cluster)
-
-These belong to the MVP's development harness, where the engine is installed under `/opt/valor` on a Proxmox node
-next to a checkout in `/srv/valor`. An installed VALOR does not use them: the installer does their work.
-
-```
-valor-admin template list | template build <os> [--force] | template test <os>
-valor-admin bridge create <name> [--node NODE] [--comment TEXT]
-valor-admin deploy                       copy the checkout's engine into /opt/valor
-```
-
-`valor-mcp` exposes the engine to Claude Code (configured in [`.mcp.json`](../.mcp.json)). Tools: `cluster_info`,
-`range_validate`, `range_plan`, `range_apply`, `range_verify`, `range_destroy`, `job_status` and `guest_run`.
-`range_apply`, `range_destroy` and `guest_run` ask the developer for approval
-([`.claude/settings.json`](../.claude/settings.json)).

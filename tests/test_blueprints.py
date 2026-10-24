@@ -43,7 +43,7 @@ access:
 def dcfg(cfg, tmp_path):
     """A data dir with the repository's example ranges already 'deployed'."""
     data = tmp_path / "data"
-    shutil.copytree(ROOT / "ranges", data / "ranges")
+    shutil.copytree(ROOT / "examples", data / "ranges")
     return dataclasses.replace(cfg, data_dir=str(data))
 
 

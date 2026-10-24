@@ -19,5 +19,5 @@ def cfg(tmp_path):
 
 @pytest.fixture
 def ref_spec():
-    spec, _ = load_spec("web2tier.yaml", ROOT / "ranges", "ubuntu-24.04")
+    spec, _ = load_spec("web2tier.yaml", ROOT / "examples", "ubuntu-24.04")
     return spec

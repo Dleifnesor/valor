@@ -4,9 +4,9 @@
 |---|---|
 | Install VALOR on a Proxmox VE cluster, upgrade or remove it | [INSTALL.md](INSTALL.md) |
 | Use the web UI: build ranges, change them, get into them, administer VALOR | [USER-GUIDE.md](USER-GUIDE.md) |
-| Write or read a range spec (the YAML format) | [spec reference](../.claude/skills/range-build/spec-reference.md) |
+| Write or read a range spec (the YAML format) | [spec reference](../valor/spec-reference.md) |
 | Look up the services, hardening baselines and compliance frameworks VALOR ships | [CONTENT.md](CONTENT.md) |
-| Use the command line (`install.sh`, `valor`, `valor-web`, `valor-admin`) | [CLI.md](CLI.md) |
+| Use the command line (`install.sh`, `valor`, `valor-web`) | [CLI.md](CLI.md) |
 | Understand how the code is put together | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Call the web API | [API.md](API.md) |
 | Work on VALOR: set up, test, change roles/baselines/OSes, ship | [DEVELOPMENT.md](DEVELOPMENT.md) |

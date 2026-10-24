@@ -6,8 +6,6 @@ import fcntl
 import json
 import os
 import secrets
-import subprocess
-import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -34,13 +32,6 @@ def create(cfg, kind: str, target: dict, origin: str) -> str:
     _write(d / "job.json", {"id": job_id, "kind": kind, "target": target, "origin": origin, "state": "queued",
                             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     return job_id
-
-
-def spawn(cfg, job_id: str) -> None:
-    d = _dir(cfg, job_id)
-    log = (d / "runner.log").open("a")
-    subprocess.Popen([sys.executable, "-m", "valor.cli", "_run-job", job_id], stdout=log, stderr=log,
-                     stdin=subprocess.DEVNULL, start_new_session=True, cwd="/")
 
 
 @contextmanager
@@ -108,7 +99,7 @@ def status(cfg, job_id: str, tail: int = 25) -> dict:
         job["result"] = json.loads((d / "result.json").read_text())
     if job.get("state") == "running" and job.get("pid") and not Path(f"/proc/{job['pid']}").exists():
         job["state"] = "failed"
-        job["result"] = {"error": "runner_died", "message": "the job process ended unexpectedly; see runner.log"}
+        job["result"] = {"error": "runner_died", "message": "the job process ended unexpectedly; see the valor-worker log"}
     return job
 
 

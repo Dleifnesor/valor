@@ -1,6 +1,6 @@
 # VALOR operating-system catalog.
 #
-# Each entry is an official cloud image that the installer (or `valor-admin template build <os>`) turns into a
+# Each entry is an official cloud image that the installer (`./install.sh --template <os>`) turns into a
 # Proxmox template with the QEMU guest agent baked in. Templates are found by their tags
 # (`valor-template` + `os-<name with dots as dashes>`) in VALOR's template pool, never by a fixed VMID, so they
 # can live wherever the cluster has room. Range hosts pick an OS with `os:`; hosts without `os:` use the

@@ -25,7 +25,7 @@ from .cluster import cluster_info, range_vms
 from .config import load_config
 from .errors import LockBusy, SpecError, ValorError
 from .netpolicy import render
-from .ops import execute, start
+from .ops import start
 from .plan import make_plan
 from .pve import PVE
 from .spec import effective_tests, load_spec, spec_hash
@@ -97,8 +97,6 @@ def main(argv: list[str] | None = None) -> int:
     s = js.add_parser("status")
     s.add_argument("id")
     js.add_parser("list")
-    r = sub.add_parser("_run-job")
-    r.add_argument("id")
     args = ap.parse_args(argv)
     cfg = load_config()
     try:
@@ -116,9 +114,6 @@ def main(argv: list[str] | None = None) -> int:
 
 def dispatch(cfg, args) -> int:
     J = args.json
-    if args.cmd == "_run-job":
-        res = execute(cfg, args.id)
-        return 0 if res.get("ok") else 2
     if args.cmd == "info":
         out(cluster_info(PVE(cfg)), True)
         return 0
