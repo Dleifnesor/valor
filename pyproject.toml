@@ -18,7 +18,7 @@ valor = "valor.cli:main"
 valor-web = "valor.web.cli:main"
 
 [tool.setuptools]
-packages = ["valor", "valor.web"]
+packages = ["valor", "valor.ai", "valor.agent", "valor.web", "valor.web.chats"]
 
 [tool.setuptools.package-data]
 valor = ["spec-reference.md"]

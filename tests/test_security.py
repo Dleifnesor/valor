@@ -5,7 +5,6 @@ someone decides (and reviews) who may call it."""
 import re
 
 import pytest
-from fastapi.routing import APIRoute
 
 from valor.web.app import API_ROUTERS, SECURITY_HEADERS
 
