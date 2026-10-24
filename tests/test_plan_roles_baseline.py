@@ -63,6 +63,24 @@ def test_role_env_and_script(ref_spec):
     assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
 
 
+def test_names_are_not_turned_into_addresses(ref_spec):
+    """A share or database named like a host or segment stays a name (a share 'cui' in a segment 'cui' became
+    '10.171.0.0/24'); names the role would reject fail the spec check, not the build."""
+    db = ref_spec.host("db")
+    env = role_env(ref_spec, db, load_role(ROOT / "roles", "postgresql"), {"database": "web", "user": "dmz", "allow_from": ["web"]})
+    assert (env["VALOR_PARAM_DATABASE"], env["VALOR_PARAM_USER"], env["VALOR_PARAM_ALLOW_FROM"]) == ("web", "dmz", "10.110.0.10/32")
+    for role, params in (("samba-share", {"share": "dmz"}), ("windows-file-share", {"share": "dmz"}),
+                         ("mariadb", {"database": "web", "user": "web"}), ("nginx", {"server_name": "web"}),
+                         ("ad-member", {"domain": "dmz.lab", "dc": "web"})):
+        env = role_env(ref_spec, db, load_role(ROOT / "roles", role), params)
+        assert all(env[f"VALOR_PARAM_{k.upper()}"] == v for k, v in params.items() if k != "dc"), role
+    for role, params in (("windows-file-share", {"share": "10.0.0.0/24"}), ("postgresql", {"database": "My-DB"}),
+                         ("ad-dc", {"domain": "corp", "netbios": "corp"}), ("dhcp-server", {"lease": "forever"})):
+        with pytest.raises(ValorError) as e:
+            role_env(ref_spec, db, load_role(ROOT / "roles", role), params)
+        assert e.value.code == "role_param_invalid", role
+
+
 def test_baseline_bundle():
     b = load_baseline(ROOT / "baselines", "ubuntu-l1")
     assert len(b.controls) == 10
@@ -163,3 +181,64 @@ def test_iso9660_writer(tmp_path):
         assert "KS.CFG;1" in listing and "README.TXT;1" in listing
         data = subprocess.run(["isoinfo", "-x", "/KS.CFG;1", "-i", str(p)], capture_output=True).stdout
         assert data == b"a" * 5000
+
+
+def test_apt_settles_before_every_update(tmp_path):
+    """A clone's overdue apt-daily refresh holds the package-list lock at boot (apt-get update does not wait):
+    VALOR stops it and waits for other holders before its own update - in roles, baselines and on the router."""
+    from valor import roles, wireguard
+    log = tmp_path / "log"
+    stubs = {"systemctl": f'echo "systemctl $*" >> {log}',
+             "fuser": f'n=$(cat {tmp_path}/n 2>/dev/null || echo 0); echo $((n+1)) > {tmp_path}/n; [ $n -lt 2 ]',
+             "sleep": f'echo "sleep $*" >> {log}'}
+    for name, body in stubs.items():
+        (tmp_path / name).write_text(f"#!/bin/bash\n{body}\n")
+        (tmp_path / name).chmod(0o755)
+    r = subprocess.run(["bash", "-c", roles.APT_SETTLE + "apt_settle; echo settled"], capture_output=True, text=True,
+                       env={"PATH": f"{tmp_path}:/usr/bin:/bin"})
+    assert r.stdout.strip() == "settled"
+    assert log.read_text().splitlines() == ["systemctl stop apt-daily.service", "sleep 5", "sleep 5"]  # lock held twice
+    scripts = {"role": roles.PRELUDE, "router": wireguard.router_script("[Interface]\n"),
+               "baseline": bundle(load_baseline(Path(__file__).parents[1] / "baselines", "ubuntu-l1"), False, fix=True)}
+    for where, script in scripts.items():
+        assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0, where
+        for line in script.splitlines():
+            if "update" in line and ("apt-get" in line or "$APT" in line):
+                assert "apt_settle" in line or line.strip().startswith("apt-get -o DPkg::Lock::Timeout=900 -qq update"), (where, line)
+        assert "apt_settle()" in script, where
+
+
+def test_nginx_reverse_proxy_and_address_errors(ref_spec):
+    role = load_role(ROOT / "roles", "nginx")
+    env = role_env(ref_spec, ref_spec.host("web"), role, {"proxy_to": "db", "proxy_port": 8080})
+    assert (env["VALOR_PARAM_PROXY_TO"], env["VALOR_PARAM_PROXY_PORT"]) == (f"{ref_spec.host('db').address}/32", "8080")
+    script = build_script(role, env)
+    assert "proxy_pass http://${UPSTREAM}:${UPORT}" in script and "httpd_can_network_connect" in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
+    with pytest.raises(ValorError):
+        role_env(ref_spec, ref_spec.host("web"), role, {"proxy_to": "db", "proxy_port": "http"})
+    from valor.spec import parse_spec
+    with pytest.raises(ValorError) as e:                 # models write 10.<vlan>.0.0/24 for VLANs above 255
+        parse_spec("name: t1\nsegments: [{name: lan, vlan: 340, cidr: 10.340.0.0/24}]\n"
+                   "hosts: [{name: aa, segment: lan, address: 10.340.0.10}]\n")
+    msgs = {d["location"]: d["message"] for d in e.value.details}
+    assert "not 10.340.0.0/24" in msgs["segments.0.cidr"] and "0-255" in msgs["hosts.0.address"]
+
+
+def test_write_file_with_unchanged_content_does_not_end_a_script(tmp_path):
+    """A model-written custom script re-run on a host it already fixed: write_file found nothing to change, returned 1
+    and set -e ended the script ("role 'custom-script' failed (exit 1)" with no message)."""
+    from valor.roles import PRELUDE
+    script = PRELUDE + f'''
+write_file {tmp_path}/a.conf 0644 <<'EOF'
+x = 1
+EOF
+echo "first=$VALOR_CHANGED"; VALOR_CHANGED=0
+write_file {tmp_path}/a.conf 0644 <<'EOF'
+x = 1
+EOF
+echo "second=$VALOR_CHANGED"
+'''
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["first=1", "second=0", "VALOR-ROLE-CHANGED=0"]

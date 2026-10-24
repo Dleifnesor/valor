@@ -107,6 +107,43 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX range_chat_range ON range_chat(range, id);
     """,
+    # 4: saved chats (chat builder and range chats), owned by their user; range_chat moves in (one chat per range+user)
+    """
+    CREATE TABLE chats (
+        id INTEGER PRIMARY KEY,
+        owner TEXT NOT NULL COLLATE NOCASE,
+        kind TEXT NOT NULL,                 -- builder | range
+        range TEXT,
+        title TEXT NOT NULL DEFAULT '',
+        created REAL NOT NULL,
+        updated REAL NOT NULL,
+        spec TEXT NOT NULL DEFAULT '',      -- builder: the spec the conversation produced
+        state TEXT NOT NULL DEFAULT '{}'    -- {allow_all}
+    );
+    CREATE INDEX chats_owner ON chats(owner, updated);
+    CREATE INDEX chats_range ON chats(range, updated);
+    CREATE TABLE chat_messages (
+        id INTEGER PRIMARY KEY,
+        chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        ts REAL NOT NULL,
+        role TEXT NOT NULL,                 -- user | assistant
+        mode TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'done',  -- running | waiting | done | failed | stopped
+        version INTEGER NOT NULL DEFAULT 0,
+        meta TEXT NOT NULL DEFAULT '{}',    -- the feed (steps), questions, problems, draft, plan, usage
+        model TEXT NOT NULL DEFAULT '{}'    -- the turn as the model saw it (system, history, tool calls): resumable
+    );
+    CREATE INDEX chat_messages_chat ON chat_messages(chat_id, id);
+    INSERT INTO chats(owner, kind, range, title, created, updated)
+        SELECT username, 'range', range, '', MIN(ts), MAX(ts) FROM range_chat GROUP BY range, username;
+    INSERT INTO chat_messages(chat_id, ts, role, mode, content, meta)
+        SELECT c.id, r.ts, r.role, r.mode, r.content, r.meta FROM range_chat r
+        JOIN chats c ON c.kind = 'range' AND c.range = r.range AND c.owner = r.username ORDER BY r.id;
+    UPDATE chats SET title = COALESCE((SELECT substr(content, 1, 80) FROM chat_messages m
+        WHERE m.chat_id = chats.id AND m.role = 'user' ORDER BY m.id LIMIT 1), '');
+    DROP TABLE range_chat;
+    """,
 ]
 
 

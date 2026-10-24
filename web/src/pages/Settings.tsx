@@ -22,7 +22,7 @@ export function Settings() {
       <div className="tabs" role="tablist">
         <button className={tab === "notifications" ? "active" : ""} onClick={() => setTab("notifications")}>Notifications</button>
         <button className={tab === "directory" ? "active" : ""} onClick={() => setTab("directory")}>Directory (LDAP / AD)</button>
-        <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI provider</button>
+        <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI providers</button>
         <button className={tab === "about" ? "active" : ""} onClick={() => setTab("about")}>Certificate & about</button>
       </div>
       {tab === "notifications" && <NotificationSettings />}
@@ -70,7 +70,7 @@ function NotificationSettings() {
   return (
     <Card title="Where VALOR reports builds and problems" actions={
       <div className="row">
-        <select defaultValue="" onChange={(e) => { if (e.target.value) add(e.target.value as Kind); e.target.value = ""; }} style={{ width: 200 }} aria-label="Add a channel">
+        <select name="add-channel" defaultValue="" onChange={(e) => { if (e.target.value) add(e.target.value as Kind); e.target.value = ""; }} style={{ width: 200 }} aria-label="Add a channel">
           <option value="">Add a channel…</option>
           {(Object.keys(KIND_LABEL) as Kind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
         </select>
@@ -89,36 +89,36 @@ function NotificationSettings() {
             <div className="row" style={{ marginBottom: 10 }}>
               <b>{KIND_LABEL[c.type]}</b>
               <span className="grow" />
-              <label className="checkbox"><input type="checkbox" checked={c.enabled} onChange={(e) => update(i, { enabled: e.target.checked })} /> enabled</label>
+              <label className="checkbox"><input name="enabled" type="checkbox" checked={c.enabled} onChange={(e) => update(i, { enabled: e.target.checked })} /> enabled</label>
               <button className="btn small" onClick={() => test(c.id)}>Send test</button>
               <button className="btn small danger" onClick={() => setChannels(channels.filter((_, j) => j !== i))}>Remove</button>
             </div>
             <div className="grid cols-2">
-              <label className="field">Name<input value={c.name} onChange={(e) => update(i, { name: e.target.value })} /></label>
+              <label className="field">Name<input name="channel-name" value={c.name} onChange={(e) => update(i, { name: e.target.value })} /></label>
               <label className="field">Send
-                <select value={c.events} onChange={(e) => update(i, { events: e.target.value as Channel["events"] })}>
+                <select name="events" value={c.events} onChange={(e) => update(i, { events: e.target.value as Channel["events"] })}>
                   <option value="problems">Problems only</option><option value="all">Everything</option>
                 </select>
               </label>
               {c.type === "email" ? (
                 <>
-                  <label className="field">SMTP server<input value={c.config.host ?? ""} onChange={(e) => setCfg(i, "host", e.target.value)} placeholder="smtp.example.com" /></label>
-                  <label className="field">Port<input type="number" value={c.config.port ?? 587} onChange={(e) => setCfg(i, "port", Number(e.target.value))} /></label>
+                  <label className="field">SMTP server<input name="smtp-host" value={c.config.host ?? ""} onChange={(e) => setCfg(i, "host", e.target.value)} placeholder="smtp.example.com" /></label>
+                  <label className="field">Port<input name="smtp-port" type="number" value={c.config.port ?? 587} onChange={(e) => setCfg(i, "port", Number(e.target.value))} /></label>
                   <label className="field">Security
-                    <select value={c.config.security ?? "starttls"} onChange={(e) => setCfg(i, "security", e.target.value)}>
+                    <select name="smtp-security" value={c.config.security ?? "starttls"} onChange={(e) => setCfg(i, "security", e.target.value)}>
                       <option value="starttls">STARTTLS (587)</option><option value="tls">TLS (465)</option>
                     </select>
                   </label>
-                  <label className="field">Username<input value={c.config.username ?? ""} onChange={(e) => setCfg(i, "username", e.target.value)} autoComplete="off" /></label>
-                  <label className="field">Password<input type="password" value={c.config.password ?? ""} onChange={(e) => setCfg(i, "password", e.target.value)} autoComplete="new-password" placeholder={c.id ? "unchanged" : ""} /></label>
-                  <label className="field">From<input value={c.config.from ?? ""} onChange={(e) => setCfg(i, "from", e.target.value)} placeholder="valor@example.com" /></label>
+                  <label className="field">Username<input name="smtp-username" value={c.config.username ?? ""} onChange={(e) => setCfg(i, "username", e.target.value)} autoComplete="off" /></label>
+                  <label className="field">Password<input name="smtp-password" type="password" value={c.config.password ?? ""} onChange={(e) => setCfg(i, "password", e.target.value)} autoComplete="new-password" placeholder={c.id ? "unchanged" : ""} /></label>
+                  <label className="field">From<input name="smtp-from" value={c.config.from ?? ""} onChange={(e) => setCfg(i, "from", e.target.value)} placeholder="valor@example.com" /></label>
                   <label className="field">To <span className="hint">comma-separated</span>
-                    <input value={(c.config.to ?? []).join(", ")} onChange={(e) => setCfg(i, "to", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} />
+                    <input name="smtp-to" value={(c.config.to ?? []).join(", ")} onChange={(e) => setCfg(i, "to", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} />
                   </label>
                 </>
               ) : (
                 <label className="field" style={{ gridColumn: "1 / -1" }}>Webhook URL
-                  <input value={c.config.url ?? ""} onChange={(e) => setCfg(i, "url", e.target.value)} placeholder="https://…" autoComplete="off" />
+                  <input name="webhook-url" value={c.config.url ?? ""} onChange={(e) => setCfg(i, "url", e.target.value)} placeholder="https://…" autoComplete="off" />
                 </label>
               )}
             </div>
@@ -158,33 +158,33 @@ function DirectorySettings() {
   };
   const text = (k: keyof Ldap, label: string, hint?: string, ph?: string) => (
     <label className="field">{label}{hint && <span className="hint">{hint}</span>}
-      <input value={String(s[k] ?? "")} onChange={(e) => set(k, e.target.value)} placeholder={ph} autoComplete="off" />
+      <input name={`ldap-${k}`} value={String(s[k] ?? "")} onChange={(e) => set(k, e.target.value)} placeholder={ph} autoComplete="off" />
     </label>
   );
   return (
     <Card title="Sign in with LDAP or Active Directory" actions={<button className="btn primary" onClick={save}>Save</button>}>
       <div className="stack">
-        <label className="checkbox"><input type="checkbox" checked={s.enabled} onChange={(e) => set("enabled", e.target.checked)} /> Allow directory accounts to sign in</label>
+        <label className="checkbox"><input name="ldap-enabled" type="checkbox" checked={s.enabled} onChange={(e) => set("enabled", e.target.checked)} /> Allow directory accounts to sign in</label>
         <div className="muted small">Directory users still set up VALOR's two-factor authentication. Their role comes from the groups below (checked at every sign-in).</div>
         <div className="grid cols-2">
           {text("url", "Server URL", "ldaps:// (or ldap:// with StartTLS)", "ldaps://dc1.example.com")}
-          <label className="checkbox" style={{ alignSelf: "end" }}><input type="checkbox" checked={s.starttls} onChange={(e) => set("starttls", e.target.checked)} /> Use StartTLS (ldap:// only)</label>
+          <label className="checkbox" style={{ alignSelf: "end" }}><input name="ldap-starttls" type="checkbox" checked={s.starttls} onChange={(e) => set("starttls", e.target.checked)} /> Use StartTLS (ldap:// only)</label>
           {text("bind_dn", "Service account DN", undefined, "CN=valor-svc,OU=Service,DC=example,DC=com")}
           <label className="field">Service account password
-            <input type="password" value={s.bind_password} onChange={(e) => set("bind_password", e.target.value)} autoComplete="new-password" />
+            <input name="ldap-bind-password" type="password" value={s.bind_password} onChange={(e) => set("bind_password", e.target.value)} autoComplete="new-password" />
           </label>
           {text("user_base", "Search base for users", undefined, "OU=People,DC=example,DC=com")}
           {text("user_filter", "User filter", "{username} is replaced (escaped)")}
           {text("group_admin", "Group for admins (DN)")}
           {text("group_operator", "Group for operators (DN)")}
           {text("group_viewer", "Group for viewers (DN)")}
-          <label className="checkbox" style={{ alignSelf: "end" }}><input type="checkbox" checked={s.nested_groups} onChange={(e) => set("nested_groups", e.target.checked)} /> Include nested groups (Active Directory)</label>
+          <label className="checkbox" style={{ alignSelf: "end" }}><input name="ldap-nested-groups" type="checkbox" checked={s.nested_groups} onChange={(e) => set("nested_groups", e.target.checked)} /> Include nested groups (Active Directory)</label>
         </div>
         <label className="field">CA certificate (PEM) <span className="hint">leave empty to trust the system CAs</span>
-          <textarea className="mono" rows={5} value={s.ca_pem} onChange={(e) => set("ca_pem", e.target.value)} placeholder="-----BEGIN CERTIFICATE-----" />
+          <textarea name="ldap-ca-pem" className="mono" rows={5} value={s.ca_pem} onChange={(e) => set("ca_pem", e.target.value)} placeholder="-----BEGIN CERTIFICATE-----" />
         </label>
         <div className="row">
-          <input style={{ maxWidth: 240 }} placeholder="Optional: a username to look up" value={testUser} onChange={(e) => setTestUser(e.target.value)} />
+          <input name="ldap-test-user" style={{ maxWidth: 240 }} placeholder="Optional: a username to look up" value={testUser} onChange={(e) => setTestUser(e.target.value)} />
           <button className="btn" onClick={test}>Test connection</button>
         </div>
         {msg && <div className={`alert ${msg.ok ? "info" : "error"}`}>{msg.text}</div>}
@@ -194,93 +194,157 @@ function DirectorySettings() {
   );
 }
 
-interface Ai {
-  provider: "none" | "anthropic" | "openai";
+type AiKind = "anthropic" | "openai" | "openrouter";
+interface AiProvider {
+  id?: string;
+  name: string;
+  provider: AiKind;
   model: string;
   base_url: string;
   api_key: string;
   max_tokens: number;
-  daily_tokens_per_user: number;
   timeout: number;
-  providers?: string[];
+  default: boolean;
+}
+interface Ai {
+  providers: AiProvider[];
+  daily_tokens_per_user: number;
+  fix_failed_builds: boolean;
+  fix_provider: string;
+  fix_mode: "auto" | "fix" | "prepare";
+  kinds?: AiKind[];
   anthropic_models?: string[];
 }
+
+const AI_KIND: Record<AiKind, string> = {
+  anthropic: "Anthropic (Claude)",
+  openrouter: "OpenRouter (hosted models, one key)",
+  openai: "OpenAI-compatible server (e.g. LM Studio)",
+};
+const AI_NAME: Record<AiKind, string> = { anthropic: "Claude", openrouter: "OpenRouter", openai: "Local model" };
 
 function AiSettings() {
   const [s, setS] = useState<Ai | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
   const usage = useApi<{ users: { username: string; requests: number; input: number; output: number; today: number }[] }>("/api/settings/ai/usage");
   useEffect(() => { get<Ai>("/api/settings/ai").then(setS).catch(setErr); }, []);
   if (!s) return err ? <ErrorBox error={err} /> : <Loading />;
-  const set = (k: keyof Ai, v: any) => setS({ ...s, [k]: v });
-  const save = async () => {
-    setErr(null); setMsg(null);
-    const { providers, anthropic_models, ...body } = s;
-    try { setS({ ...s, ...(await put<Ai>("/api/settings/ai", body)) }); setMsg({ ok: true, text: "Saved." }); } catch (e) { setErr(e as ApiError); }
+  const update = (i: number, p: Partial<AiProvider>) => setS({ ...s, providers: s.providers.map((x, j) => (i === j ? { ...x, ...p } : x)) });
+  const add = (kind: AiKind) => {
+    const taken = new Set(s.providers.map((p) => p.name.toLowerCase()));
+    let name = AI_NAME[kind];
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${AI_NAME[kind]} ${n}`;
+    setS({ ...s, providers: [...s.providers, {
+      name, provider: kind, model: kind === "anthropic" ? s.anthropic_models?.[0] ?? "" : "", base_url: "", api_key: "",
+      max_tokens: 32768, timeout: 300, default: !s.providers.length,
+    }] });
   };
-  const test = async () => {
-    setErr(null); setMsg({ ok: true, text: "Asking the model…" });
+  const save = async () => {
+    setBusy(true); setErr(null); setMsg(null);
+    const { kinds, anthropic_models, ...body } = s;
+    try { setS({ ...s, ...(await put<Ai>("/api/settings/ai", body)) }); setMsg({ ok: true, text: "Saved." }); }
+    catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  const test = async (p: AiProvider) => {
+    if (!p.id) { setMsg({ ok: false, text: "Save first, then test." }); return; }
+    setErr(null); setMsg({ ok: true, text: `Asking ${p.name}…` });
     try {
       const r = await post<{ seconds: number; model: string; reply: string; context_length?: number | null;
-        prompt_tokens: number; advice: string }>("/api/settings/ai/test");
+        prompt_tokens: number; advice: string }>("/api/settings/ai/test", { id: p.id });
       const ctx = r.context_length ? ` Context window: ${r.context_length.toLocaleString()} tokens;` : "";
-      setMsg({ ok: !r.advice, text: `${r.model} answered in ${r.seconds} s: "${r.reply}".${ctx} VALOR's prompt: about `
+      setMsg({ ok: !r.advice, text: `${p.name} (${r.model}) answered in ${r.seconds} s: "${r.reply}".${ctx} VALOR's prompt: about `
         + `${r.prompt_tokens.toLocaleString()} tokens.${r.advice ? " " + r.advice : ""}` });
     } catch (e) { setErr(e as ApiError); setMsg(null); }
   };
   return (
     <>
-      <Card title="AI provider for the chat builder" actions={<button className="btn primary" onClick={save}>Save</button>}>
+      <Card title="AI providers for the chats" actions={
+        <div className="row">
+          <select name="add-provider" defaultValue="" onChange={(e) => { if (e.target.value) add(e.target.value as AiKind); e.target.value = ""; }} style={{ width: 220 }} aria-label="Add a provider">
+            <option value="">Add a provider…</option>
+            {(Object.keys(AI_KIND) as AiKind[]).map((k) => <option key={k} value={k}>{AI_KIND[k]}</option>)}
+          </select>
+          <button className="btn primary" onClick={save} disabled={busy}>Save</button>
+        </div>
+      }>
         <div className="stack">
           <div className="muted small">
-            The chat builder turns a description into a range spec. VALOR sends the conversation, its spec reference and
-            the cluster's free VLANs/networks to the provider - no passwords or keys. Specs are validated, and nothing is
-            built until someone plans and approves it. The API key is stored encrypted and never shown again.
+            The chat builder and the range chats send the conversation, VALOR's spec reference and the cluster's free
+            VLANs/networks to the provider (range chats in Code mode also send command output) - no passwords or keys.
+            Specs are validated, and nothing is built until someone plans and approves it. Every chat uses the default
+            provider unless someone picks another one for it. API keys are stored encrypted and never shown again.
           </div>
-          <div className="grid cols-2">
-            <label className="field">Provider
-              <select value={s.provider} onChange={(e) => set("provider", e.target.value)}>
-                <option value="none">None (chat builder off)</option>
-                <option value="anthropic">Anthropic (Claude)</option>
-                <option value="openai">OpenAI-compatible endpoint (e.g. a local model server)</option>
+          {!s.providers.length && <div className="empty">No provider yet: the chats are off.</div>}
+          {s.providers.map((p, i) => (
+            <div key={p.id ?? `new-${i}`} className="card" style={{ padding: 14 }}>
+              <div className="row" style={{ marginBottom: 10 }}>
+                <b>{AI_KIND[p.provider]}</b>
+                <span className="grow" />
+                <label className="checkbox"><input type="radio" name="ai-default" checked={p.default}
+                  onChange={() => setS({ ...s, providers: s.providers.map((x, j) => ({ ...x, default: i === j })) })} /> default</label>
+                <button className="btn small" onClick={() => test(p)}>Test</button>
+                <button className="btn small danger" onClick={() => setS({ ...s, providers: s.providers.filter((_, j) => j !== i) })}>Remove</button>
+              </div>
+              <div className="grid cols-2">
+                <label className="field">Name<input name="provider-name" value={p.name} onChange={(e) => update(i, { name: e.target.value })} /></label>
+                {p.provider === "anthropic" ? (
+                  <label className="field">Model
+                    <select name="model" value={p.model || s.anthropic_models?.[0]} onChange={(e) => update(i, { model: e.target.value })}>
+                      {s.anthropic_models?.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="field">Model {p.provider === "openrouter" && <span className="hint">its id on openrouter.ai/models; Code mode needs tool support</span>}
+                    <input name="model" value={p.model} onChange={(e) => update(i, { model: e.target.value })}
+                      placeholder={p.provider === "openrouter" ? "qwen/qwen3.8-27b" : "llama-3.3-70b"} />
+                  </label>
+                )}
+                {p.provider === "openai" && (
+                  <label className="field">Base URL <span className="hint">ending in /v1; http:// only to a private IP</span>
+                    <input name="base-url" value={p.base_url} onChange={(e) => update(i, { base_url: e.target.value })} placeholder="http://192.168.1.50:1234/v1" />
+                  </label>
+                )}
+                <label className="field">API key {p.provider === "openai" && <span className="hint">optional for local servers</span>}
+                  <input name="api-key" type="password" value={p.api_key} onChange={(e) => update(i, { api_key: e.target.value })} autoComplete="new-password" />
+                </label>
+                <label className="field">Max tokens per answer <span className="hint">{p.provider === "openrouter"
+                  ? "a ceiling: only the tokens the model writes are billed, but OpenRouter needs credits for the whole ceiling"
+                  : "a ceiling, not a cost: only the tokens the model writes count. Local servers with a small context window may need less."}</span>
+                  <input name="max-tokens" type="number" min={1024} max={128000} value={p.max_tokens} onChange={(e) => update(i, { max_tokens: Number(e.target.value) })} />
+                </label>
+                <label className="field">Silence timeout (seconds) <span className="hint">how long the model may send nothing (loading, long thinking) before VALOR gives up</span>
+                  <input name="timeout" type="number" min={30} max={900} value={p.timeout} onChange={(e) => update(i, { timeout: Number(e.target.value) })} />
+                </label>
+              </div>
+            </div>
+          ))}
+          <label className="field" style={{ maxWidth: 320 }}>Daily token budget per user <span className="hint">all providers together; 0 = unlimited</span>
+            <input name="daily-tokens-per-user" type="number" min={0} value={s.daily_tokens_per_user} onChange={(e) => setS({ ...s, daily_tokens_per_user: Number(e.target.value) })} />
+          </label>
+          <label className="checkbox">
+            <input name="fix-failed-builds" type="checkbox" checked={s.fix_failed_builds} onChange={(e) => setS({ ...s, fix_failed_builds: e.target.checked })} />
+            When a build fails, the assistant finds and fixes the cause in a range chat of the person who started it
+            (builds from the CLI: the first administrator's)
+          </label>
+          {s.fix_failed_builds && (
+            <label className="field" style={{ maxWidth: 420 }}>How far it goes
+              <select name="fix-mode" value={s.fix_mode} onChange={(e) => setS({ ...s, fix_mode: e.target.value as Ai["fix_mode"] })}>
+                <option value="auto">Fix and rebuild on its own (3 rounds at most; never replaces or removes a VM)</option>
+                <option value="fix">Fix on its own; the person rebuilds</option>
+                <option value="prepare">Prepare the fix; the person approves each change</option>
               </select>
             </label>
-            {s.provider === "anthropic" && (
-              <label className="field">Model
-                <select value={s.model || s.anthropic_models?.[0]} onChange={(e) => set("model", e.target.value)}>
-                  {s.anthropic_models?.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </label>
-            )}
-            {s.provider === "openai" && (
-              <>
-                <label className="field">Base URL <span className="hint">ending in /v1; http:// only to a private IP</span>
-                  <input value={s.base_url} onChange={(e) => set("base_url", e.target.value)} placeholder="https://llm.example.org/v1" />
-                </label>
-                <label className="field">Model
-                  <input value={s.model} onChange={(e) => set("model", e.target.value)} placeholder="llama-3.3-70b" />
-                </label>
-              </>
-            )}
-            {s.provider !== "none" && (
-              <>
-                <label className="field">API key {s.provider === "openai" && <span className="hint">optional for local servers</span>}
-                  <input type="password" value={s.api_key} onChange={(e) => set("api_key", e.target.value)} autoComplete="new-password" />
-                </label>
-                <label className="field">Daily token budget per user <span className="hint">0 = unlimited</span>
-                  <input type="number" min={0} value={s.daily_tokens_per_user} onChange={(e) => set("daily_tokens_per_user", Number(e.target.value))} />
-                </label>
-                <label className="field">Max tokens per answer <span className="hint">a ceiling, not a cost: only the tokens the model writes count. Local servers with a small context window may need less.</span>
-                  <input type="number" min={1024} max={64000} value={s.max_tokens} onChange={(e) => set("max_tokens", Number(e.target.value))} />
-                </label>
-                <label className="field">Silence timeout (seconds) <span className="hint">answers stream in; this is how long the model may send nothing (loading, long thinking) before VALOR gives up</span>
-                  <input type="number" min={30} max={900} value={s.timeout} onChange={(e) => set("timeout", Number(e.target.value))} />
-                </label>
-              </>
-            )}
-          </div>
-          {s.provider !== "none" && <div className="row"><button className="btn" onClick={test}>Test connection</button></div>}
+          )}
+          {s.fix_failed_builds && (
+            <label className="field" style={{ maxWidth: 420 }}>Failed builds go to <span className="hint">then the other providers if it cannot answer</span>
+              <select name="fix-provider" value={s.fix_provider} onChange={(e) => setS({ ...s, fix_provider: e.target.value })}>
+                <option value="">the default provider</option>
+                {s.providers.filter((p) => p.id).map((p) => <option key={p.id} value={p.id}>{p.name} - {p.model}</option>)}
+              </select>
+            </label>
+          )}
           {msg && <div className={`alert ${msg.ok ? "info" : "error"}`}>{msg.text}</div>}
           <ErrorBox error={err} />
         </div>

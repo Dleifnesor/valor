@@ -143,9 +143,9 @@ export function SnapshotsTab({ range, canOperate }: { range: string; canOperate:
       <ErrorBox error={err ?? error} />
       {canOperate && (
         <form className="row" onSubmit={(e) => { e.preventDefault(); runJob(post(`/api/ranges/${range}/snapshots`, { name, description: desc }), setErr); }}>
-          <input style={{ maxWidth: 200 }} placeholder="snapshot name" value={name} onChange={(e) => setName(e.target.value)}
+          <input name="snapshot-name" style={{ maxWidth: 200 }} placeholder="snapshot name" value={name} onChange={(e) => setName(e.target.value)}
             pattern="[a-zA-Z][a-zA-Z0-9_\-]{1,39}" title="2-40 letters, digits, - or _, starting with a letter" required />
-          <input style={{ maxWidth: 320 }} placeholder="description (optional)" value={desc} onChange={(e) => setDesc(e.target.value)} />
+          <input name="snapshot-description" style={{ maxWidth: 320 }} placeholder="description (optional)" value={desc} onChange={(e) => setDesc(e.target.value)} />
           <button className="btn primary" disabled={!name}>Take snapshot</button>
           <button type="button" className="btn ghost" onClick={reload}>Refresh</button>
         </form>
@@ -199,11 +199,11 @@ function ResetModal({ range, snap, newer, onClose }: { range: string; snap: Snap
         The VMs start again and VALOR re-runs the verification.</div>
       {newer.length > 0 && (
         <label className="checkbox">
-          <input type="checkbox" checked={deleteNewer} onChange={(e) => setDeleteNewer(e.target.checked)} />
+          <input name="delete-newer" type="checkbox" checked={deleteNewer} onChange={(e) => setDeleteNewer(e.target.checked)} />
           Delete the newer snapshots ({newer.map((n) => n.name).join(", ")}) - storages like ZFS can only roll back to the newest one
         </label>
       )}
-      <label className="field">Type <b>{range}</b> to confirm<input value={confirmName} onChange={(e) => setConfirm(e.target.value)} autoFocus /></label>
+      <label className="field">Type <b>{range}</b> to confirm<input name="confirm-name" value={confirmName} onChange={(e) => setConfirm(e.target.value)} autoFocus /></label>
       <ErrorBox error={err} />
     </Modal>
   );

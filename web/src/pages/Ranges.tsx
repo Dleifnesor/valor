@@ -20,7 +20,7 @@ export function Ranges({ canOperate }: { canOperate: boolean }) {
   const { data, error, loading, reload } = useApi<{ ranges: RangeRow[]; cluster_error: string | null }>("/api/ranges", 15000);
   return (
     <Card
-      title="Ranges"
+      title={data ? `${data.ranges.length} range${data.ranges.length === 1 ? "" : "s"}` : "Ranges"}
       bodyClass=""
       actions={
         <div className="row">
@@ -63,19 +63,20 @@ export function Ranges({ canOperate }: { canOperate: boolean }) {
                     <div className="muted small">{r.error ?? r.description}</div>
                   </td>
                   <td className="nowrap">{r.segments ?? "–"} segments · {r.hosts ?? "–"} hosts</td>
-                  <td className="nowrap">{r.vms ? `${r.running}/${r.vms} running` : "not built"}</td>
+                  <td className="nowrap">{r.vms ? <StateBadge state={r.running === r.vms ? "ok" : r.running ? "warn" : "unknown"}
+                    label={`${r.running}/${r.vms} running`} /> : <span className="muted">not built</span>}</td>
                   <td className="nowrap">
                     {r.last_apply ? (
                       <>
-                        <StateBadge state={r.last_apply.ok ? "ok" : "failed"} label={r.last_apply.ok ? "OK" : "failed"} />{" "}
-                        <span className="muted small">{ago(r.last_apply.started)}</span>
+                        <StateBadge state={r.last_apply.ok ? "ok" : "failed"} label={r.last_apply.ok ? "succeeded" : "failed"} />{" "}
+                        <span className="muted small">· {ago(r.last_apply.started)}</span>
                       </>
                     ) : "–"}
                   </td>
                   <td className="nowrap">
                     {r.last_verify ? (
                       <StateBadge state={r.last_verify.ok ? "ok" : "failed"}
-                        label={`${r.last_verify.ok ? "PASS" : "FAIL"} · ${r.last_verify.summary?.tests_passed}/${r.last_verify.summary?.tests_total} tests`} />
+                        label={`${r.last_verify.ok ? "passed" : "failed"} · ${r.last_verify.summary?.tests_passed}/${r.last_verify.summary?.tests_total} tests`} />
                     ) : "–"}
                   </td>
                 </tr>

@@ -5,6 +5,8 @@ families: [debian, rhel]
 ports: [53]
 params:
   zone:
+    raw: true
+    pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
     default: ""
     description: The range's DNS zone (default <range name>.lab); every host gets <host>.<zone>
   allow_from:

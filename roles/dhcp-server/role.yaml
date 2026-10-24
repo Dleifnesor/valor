@@ -11,6 +11,8 @@ params:
     default: ""
     description: Last address to lease (default the network's .199)
   lease:
+    raw: true
+    pattern: '^[0-9]+[smhdw]?$'
     default: 12h
     description: Lease time (dnsmasq format, e.g. 1h, 12h, 7d)
   dns:

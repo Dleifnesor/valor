@@ -64,14 +64,14 @@ function RuleRow({ rule, self, onRemove }: { rule: Rule; self: string; onRemove:
 function RuleFields({ options, value, onChange }: { options: string[]; value: Rule; onChange: (r: Rule) => void }) {
   return (
     <div className="rule-fields">
-      <label className="field">From<select value={value.from} onChange={(e) => onChange({ ...value, from: e.target.value })}>
+      <label className="field">From<select name="from" value={value.from} onChange={(e) => onChange({ ...value, from: e.target.value })}>
         {options.map((o) => <option key={o} value={o}>{o === SELF ? "(this segment)" : o}</option>)}</select></label>
-      <label className="field">To<select value={value.to} onChange={(e) => onChange({ ...value, to: e.target.value })}>
+      <label className="field">To<select name="to" value={value.to} onChange={(e) => onChange({ ...value, to: e.target.value })}>
         {options.map((o) => <option key={o} value={o}>{o === SELF ? "(this segment)" : o}</option>)}</select></label>
-      <label className="field">Protocol<select value={value.proto} onChange={(e) => onChange({ ...value, proto: e.target.value as Rule["proto"] })}>
+      <label className="field">Protocol<select name="proto" value={value.proto} onChange={(e) => onChange({ ...value, proto: e.target.value as Rule["proto"] })}>
         <option value="tcp">tcp</option><option value="udp">udp</option><option value="icmp">icmp (ping)</option><option value="any">any</option></select></label>
       {(value.proto === "tcp" || value.proto === "udp") && (
-        <label className="field">Ports<input value={value.ports.join(",")} placeholder="80,443 or 8000-8100"
+        <label className="field">Ports<input name="ports" value={value.ports.join(",")} placeholder="80,443 or 8000-8100"
           onChange={(e) => onChange({ ...value, ports: parsePorts(e.target.value) })} /></label>
       )}
     </div>
@@ -135,19 +135,19 @@ export function AddSegmentModal({ name: range, topo, hasVpn, onClose, onSubmit }
         </div>
         <div className="grid cols-2">
           <label className="field">Name <span className="hint">2-15 lowercase letters, digits, dashes</span>
-            <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="servers" required />
+            <input name="segment-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="servers" required />
           </label>
-          <label className="field">Description<input value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+          <label className="field">Description<input name="description" value={description} onChange={(e) => setDescription(e.target.value)} /></label>
           <label className="field">VLAN <span className="hint">a free one is suggested ({range_[0]}-{range_[1]})</span>
-            <input value={vlan} onChange={(e) => setVlan(e.target.value.replace(/\D/g, ""))} inputMode="numeric" />
+            <input name="vlan" value={vlan} onChange={(e) => setVlan(e.target.value.replace(/\D/g, ""))} inputMode="numeric" />
           </label>
           <label className="field">Network <span className="hint">private, /16 to /29; a free /24 is suggested</span>
-            <input className="mono" value={cidr} onChange={(e) => setCidr(e.target.value.trim())} placeholder="10.100.5.0/24" />
+            <input name="cidr" className="mono" value={cidr} onChange={(e) => setCidr(e.target.value.trim())} placeholder="10.100.5.0/24" />
           </label>
         </div>
-        <label className="checkbox"><input type="checkbox" checked={internet} onChange={(e) => setInternet(e.target.checked)} />
+        <label className="checkbox"><input name="internet" type="checkbox" checked={internet} onChange={(e) => setInternet(e.target.checked)} />
           Internet egress (public addresses only, never your LAN or the cluster)</label>
-        {hasVpn && <label className="checkbox"><input type="checkbox" checked={vpnReach} onChange={(e) => setVpnReach(e.target.checked)} />
+        {hasVpn && <label className="checkbox"><input name="vpn-reach" type="checkbox" checked={vpnReach} onChange={(e) => setVpnReach(e.target.checked)} />
           WireGuard peers may reach this segment</label>}
         <div className="field">Traffic rules <span className="hint">everything else between segments stays blocked</span>
           {rules.length === 0 && <div className="muted small">No rules: hosts here reach only their own segment{internet ? " and the internet" : ""}.</div>}
@@ -181,12 +181,12 @@ export function EditSegmentModal({ seg, hasVpn, vpnReaches, onClose, onSubmit }:
       <><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={submit}>Add to the draft</button></>
     }>
       <div className="stack">
-        <label className="field">Description<input value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-        <label className="checkbox"><input type="checkbox" checked={internet} onChange={(e) => setInternet(e.target.checked)} /> Internet egress</label>
-        {hasVpn && <label className="checkbox"><input type="checkbox" checked={vpnReach} onChange={(e) => setVpnReach(e.target.checked)} /> WireGuard peers may reach it</label>}
+        <label className="field">Description<input name="description" value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+        <label className="checkbox"><input name="internet" type="checkbox" checked={internet} onChange={(e) => setInternet(e.target.checked)} /> Internet egress</label>
+        {hasVpn && <label className="checkbox"><input name="vpn-reach" type="checkbox" checked={vpnReach} onChange={(e) => setVpnReach(e.target.checked)} /> WireGuard peers may reach it</label>}
         <div className="grid cols-2">
-          <label className="field">VLAN<input value={vlan} onChange={(e) => setVlan(e.target.value.replace(/\D/g, ""))} /></label>
-          <label className="field">Network<input className="mono" value={cidr} onChange={(e) => setCidr(e.target.value.trim())} /></label>
+          <label className="field">VLAN<input name="vlan" value={vlan} onChange={(e) => setVlan(e.target.value.replace(/\D/g, ""))} /></label>
+          <label className="field">Network<input name="cidr" className="mono" value={cidr} onChange={(e) => setCidr(e.target.value.trim())} /></label>
         </div>
         {netChanged && <div className="alert warn small">A new VLAN or network rebuilds the router and every VM in this segment
           (new addresses keep their last part, e.g. .10 stays .10); their disks are replaced.</div>}
@@ -207,7 +207,7 @@ export function RuleModal({ topo, from, onClose, onSubmit }: { topo: Topology; f
     }>
       <div className="stack">
         <RuleFields options={options} value={rule} onChange={setRule} />
-        <label className="field">Why <span className="hint">optional, shown on the map</span><input value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+        <label className="field">Why <span className="hint">optional, shown on the map</span><input name="description" value={description} onChange={(e) => setDescription(e.target.value)} /></label>
         <div className="muted small">Traffic between two hosts in the same segment never passes the router, so it needs no rule.</div>
       </div>
     </Modal>

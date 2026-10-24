@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from .errors import ValorError
+from .roles import APT_SETTLE
 
 
 @dataclass
@@ -96,8 +97,9 @@ def bundle(baseline: Baseline, is_router: bool, *, fix: bool) -> str:
              "VALOR_FAMILY=debian; [ -f /etc/redhat-release ] && VALOR_FAMILY=rhel",
              "installed() { if [ $VALOR_FAMILY = rhel ]; then rpm -q \"$1\" >/dev/null 2>&1; "
              "else dpkg-query -W -f='${Status}' \"$1\" 2>/dev/null | grep -q 'install ok installed'; fi; }",
+             APT_SETTLE,
              "pkg_install() { if [ $VALOR_FAMILY = rhel ]; then dnf -q -y install \"$@\" >/dev/null; "
-             "else $APT update >/dev/null && $APT install \"$@\" >/dev/null; fi; }",
+             "else apt_settle; $APT update >/dev/null && $APT install \"$@\" >/dev/null; fi; }",
              # sshd -T / -t need /run/sshd, which only exists while sshd runs; Ubuntu 24.04 socket-activates ssh.
              "[ -d /run/sshd ] || install -d -m 0755 /run/sshd 2>/dev/null || true"]
     for c in baseline.controls:
