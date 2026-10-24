@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, get, post, put } from "../api";
 import { useApi } from "../hooks";
-import { Card, ErrorBox, Loading } from "../components/ui";
+import { Card, ErrorBox, IconName, Loading } from "../components/ui";
 
 type Kind = "email" | "discord" | "slack" | "teams";
 interface Channel {
@@ -15,22 +15,21 @@ interface Channel {
 
 const KIND_LABEL: Record<Kind, string> = { email: "Email (SMTP)", discord: "Discord webhook", slack: "Slack webhook", teams: "Microsoft Teams (Workflows webhook)" };
 
-export function Settings() {
-  const [tab, setTab] = useState<"notifications" | "directory" | "ai" | "about">("notifications");
-  return (
-    <>
-      <div className="tabs" role="tablist">
-        <button className={tab === "notifications" ? "active" : ""} onClick={() => setTab("notifications")}>Notifications</button>
-        <button className={tab === "directory" ? "active" : ""} onClick={() => setTab("directory")}>Directory (LDAP / AD)</button>
-        <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI providers</button>
-        <button className={tab === "about" ? "active" : ""} onClick={() => setTab("about")}>Certificate & about</button>
-      </div>
-      {tab === "notifications" && <NotificationSettings />}
-      {tab === "directory" && <DirectorySettings />}
-      {tab === "ai" && <AiSettings />}
-      {tab === "about" && <About />}
-    </>
-  );
+export type SettingsTab = "notifications" | "directory" | "ai" | "about";
+
+/** The settings, one section each in the Datacenter menu. */
+export const SETTINGS_TABS: { id: SettingsTab; label: string; icon: IconName }[] = [
+  { id: "directory", label: "Directory (LDAP)", icon: "users" },
+  { id: "ai", label: "AI providers", icon: "bot" },
+  { id: "notifications", label: "Notifications", icon: "mail" },
+  { id: "about", label: "Certificate", icon: "lock" },
+];
+
+export function Settings({ tab }: { tab: SettingsTab }) {
+  if (tab === "directory") return <DirectorySettings />;
+  if (tab === "ai") return <AiSettings />;
+  if (tab === "about") return <About />;
+  return <NotificationSettings />;
 }
 
 function NotificationSettings() {
@@ -79,7 +78,7 @@ function NotificationSettings() {
     }>
       <div className="stack">
         <div className="muted small">
-          In-app notifications (the bell) are always on. "Problems only" sends failed builds, failed verifications,
+          In-app notifications (next to Tasks at the bottom) are always on. "Problems only" sends failed builds, failed verifications,
           locked accounts and certificate warnings; "Everything" also sends successful builds. Secrets (webhook URLs,
           SMTP passwords) are stored encrypted and never shown again.
         </div>

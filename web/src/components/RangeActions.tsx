@@ -1,14 +1,16 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { ApiError, del, get, post } from "../api";
-import { go, useApi, when } from "../hooks";
+import { go, openTask, useApi, when } from "../hooks";
 import { ErrorBox, Loading, Modal } from "./ui";
 
 // Actions on a built range: its login, power, snapshots. Every change runs as an engine job (see Jobs).
 
-export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError) => void) {
+// The job opens in the task viewer; `started` closes the dialog it was started from.
+export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError) => void, started?: () => void) {
   try {
-    const r = await p;
-    go(`jobs/${r.job}`);
+    const { job } = await p;
+    started?.();
+    openTask(job);
   } catch (e) {
     onError(e as ApiError);
   }
@@ -65,7 +67,7 @@ export function LoginModal({ range, onClose }: { range: string; onClose: () => v
               A new password is set on every VM of the range (a short job; nothing else changes).
               <div className="row" style={{ marginTop: 8 }}>
                 <button className="btn" onClick={() => setRotating(false)}>Cancel</button>
-                <button className="btn primary" onClick={() => runJob(post(`/api/ranges/${range}/credentials/rotate`), setErr)}>
+                <button className="btn primary" onClick={() => runJob(post(`/api/ranges/${range}/credentials/rotate`), setErr, onClose)}>
                   Set a new password
                 </button>
               </div>
@@ -77,46 +79,13 @@ export function LoginModal({ range, onClose }: { range: string; onClose: () => v
   );
 }
 
-const POWER: { action: string; label: string; danger?: boolean }[] = [
-  { action: "start", label: "Start all VMs" },
-  { action: "shutdown", label: "Shut down all VMs" },
-  { action: "reboot", label: "Reboot all VMs" },
-  { action: "stop", label: "Force stop all VMs", danger: true },
-];
-
-export function PowerMenu({ range, onError }: { range: string; onError: (e: ApiError) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const on = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("mousedown", on);
-    return () => document.removeEventListener("mousedown", on);
-  }, [open]);
-  return (
-    <div style={{ position: "relative" }} ref={ref}>
-      <button className="btn" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>Power ▾</button>
-      {open && (
-        <div className="popover menu" role="menu" style={{ width: 220 }}>
-          {POWER.map((p) => (
-            <button key={p.action} role="menuitem" className={`menu-item${p.danger ? " danger" : ""}`}
-              onClick={() => { setOpen(false); runJob(post(`/api/ranges/${range}/power`, { action: p.action }), onError); }}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function HostPower({ range, host, status, onError }: {
   range: string; host: string; status?: string; onError: (e: ApiError) => void;
 }) {
   const act = (action: string) => runJob(post(`/api/ranges/${range}/power`, { action, hosts: [host] }), onError);
   return (
     <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
-      {status === "running" && <button className="btn small primary" onClick={() => go(`ranges/${range}/console/${host}/vnc`)}>Console</button>}
+      {status === "running" && <button className="btn small primary" onClick={() => go(`ranges/${range}/vm/${host}/console`)}>Console</button>}
       {status !== "running" && <button className="btn small" onClick={() => act("start")}>Start</button>}
       {status === "running" && <button className="btn small" onClick={() => act("reboot")}>Reboot</button>}
       {status === "running" && <button className="btn small" onClick={() => act("shutdown")}>Shut down</button>}
@@ -190,7 +159,7 @@ function ResetModal({ range, snap, newer, onClose }: { range: string; snap: Snap
       <>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn danger solid" disabled={confirmName !== range || (newer.length > 0 && !deleteNewer)}
-          onClick={() => runJob(post(`/api/ranges/${range}/snapshots/${snap.name}/rollback`, { confirm: confirmName, delete_newer: deleteNewer }), setErr)}>
+          onClick={() => runJob(post(`/api/ranges/${range}/snapshots/${snap.name}/rollback`, { confirm: confirmName, delete_newer: deleteNewer }), setErr, onClose)}>
           Reset all VMs
         </button>
       </>

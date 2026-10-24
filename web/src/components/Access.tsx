@@ -126,7 +126,7 @@ function PeerModal({ range, peer, onClose }: { range: string; peer: string; onCl
               <div className="row" style={{ marginTop: 8 }}>
                 <button className="btn" onClick={() => setRotating(false)}>Cancel</button>
                 <button className="btn primary"
-                  onClick={() => runJob(post(`/api/ranges/${range}/wireguard/peers/${peer}/rotate`), setErr)}>
+                  onClick={() => runJob(post(`/api/ranges/${range}/wireguard/peers/${peer}/rotate`), setErr, onClose)}>
                   Create new keys
                 </button>
               </div>

@@ -1,40 +1,18 @@
 import { useState } from "react";
 import { ApiError, post } from "../api";
 import { JobSummary } from "../types";
-import { ago, go, useApi, when } from "../hooks";
+import { go, useApi, when } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
+import { TaskTable, jobTarget, jobTitle, who } from "../components/TaskLog";
 
-export const jobTarget = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
-/** Who started a job: web:<user>, assistant:<user>:<chat> (rebuild after an automatic fix), rerun:<origin>. */
-const who = (origin: string): string => origin.startsWith("rerun:") ? `${who(origin.slice(6))}, run again by VALOR`
-  : origin.startsWith("assistant:") ? `the assistant (for ${origin.split(":")[1]})` : origin.replace(/^web:/, "");
-
+/** Datacenter -> Jobs: the last 100 engine jobs. */
 export function Jobs() {
   const { data, error, loading } = useApi<{ jobs: JobSummary[] }>("/api/jobs?limit=100", 5000);
   if (loading && !data) return <Loading />;
   return (
     <Card title="Engine jobs" bodyClass="">
       <ErrorBox error={error} />
-      {data && !data.jobs.length && <div className="empty">No jobs yet.</div>}
-      {data && data.jobs.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Job</th><th>Action</th><th>Range</th><th>State</th><th>Started</th><th>Finished</th></tr></thead>
-            <tbody>
-              {data.jobs.map((j) => (
-                <tr key={j.id} className="clickable" onClick={() => go(`jobs/${j.id}`)}>
-                  <td className="mono">{j.id}</td>
-                  <td>{j.kind}{j.target.verify ? " + verify" : ""}</td>
-                  <td>{jobTarget(j.target)}</td>
-                  <td><StateBadge state={j.state} /></td>
-                  <td className="nowrap">{ago(j.created)}</td>
-                  <td className="nowrap">{j.finished ? when(j.finished) : "–"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {data && <div className="table-wrap"><TaskTable jobs={data.jobs} /></div>}
     </Card>
   );
 }
@@ -75,7 +53,7 @@ export function JobDetail({ id }: { id: string }) {
     <>
       <div className="row">
         <StateBadge state={data.state} />
-        <b>{data.kind}{data.target.verify ? " + verify" : ""} · {name}</b>
+        <b>{jobTitle(data)} · {name}</b>
         <span className="muted">by {who(String(data.origin))} · {when(data.created)}</span>
         <span className="grow" />
         {name && <a className="btn" href={`#/ranges/${name}`}>Open range</a>}

@@ -102,6 +102,32 @@ export interface JobSummary {
   target: Record<string, any>;
   created: string;
   finished?: string;
+  origin?: string;
+  error?: string;
+}
+
+/** A VM of a range as the cluster reports it. */
+export interface Machine {
+  host: string;
+  vmid: number;
+  status: string;
+}
+
+/** One entry of GET /api/ranges: what the resource tree and the overview show. */
+export interface RangeRow {
+  name: string;
+  has_spec: boolean;
+  description?: string;
+  version?: string;
+  deployed_version?: string;
+  segments?: number;
+  hosts?: number;
+  vms: number;
+  running: number;
+  machines?: Machine[];
+  error?: string;
+  last_apply: null | { ok: boolean; started: string; seconds: number; error?: string };
+  last_verify: null | { ok: boolean; finished: string; summary: Record<string, any> };
 }
 
 export interface Check {
