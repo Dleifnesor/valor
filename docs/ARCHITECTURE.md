@@ -97,7 +97,7 @@ Proxmox nodes only.
 | | [`blueprints.py`](../valor/blueprints.py) | Blueprint storage and `plan_copies()`: free VLANs and networks per copy, hosts keep their position, per-student WireGuard peers. |
 | | [`isos.py`](../valor/isos.py) | ISO library: catalog resolution (newest point release, signed checksum lists), downloads and uploads as Proxmox tasks. |
 | | [`journal.py`](../valor/journal.py) | Writes `journals/<range>.md` (Mermaid topology, tables, verification matrix, history). |
-| Plumbing | [`pve.py`](../valor/pve.py) | The Proxmox API client (`proxmoxer`): VMs, clones, tasks, snapshots, the guest agent (`exec`, `ps` for PowerShell, file read/write). The only module that talks to Proxmox. |
+| Plumbing | [`pve.py`](../valor/pve.py) | The Proxmox API client (`proxmoxer`): VMs, clones, tasks, snapshots, the guest agent (`exec`, `ps` for PowerShell, file read/write; text in and out as UTF-8, which Proxmox passes as Latin-1). The only module that talks to Proxmox. |
 | | [`cluster.py`](../valor/cluster.py) | Finds range VMs by pool and tags, parses VALOR's metadata in VM notes, finds templates by tag, `cluster_info()`. |
 | | [`jobs.py`](../valor/jobs.py), [`ops.py`](../valor/ops.py), [`state.py`](../valor/state.py) | Job records and events, the engine lock, running a job (`ops.execute`), per-range results and history. |
 | | [`config.py`](../valor/config.py), [`errors.py`](../valor/errors.py), [`crypto.py`](../valor/crypto.py) | Configuration, structured errors (`ValorError`: code, message, step, host, details, hint, completed steps), AES-256-GCM secrets at rest. |

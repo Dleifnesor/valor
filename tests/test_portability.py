@@ -152,7 +152,8 @@ def test_a_timed_out_script_is_followed_not_started_twice(cfg, monkeypatch):
     w = BusyWindows(cfg, "VM 5024 qga command 'guest-exec' failed - got timeout")
     res = w.ps(5024, "Write-Output 'VALOR-OK'")
     assert res.out == "VALOR-OK" and w.followed == 1868 and len(w.runs) == 1        # never run a second time
-    assert w.script.startswith("Set-Content -LiteralPath 'C:\\Windows\\Temp\\valor-") and "$PID" in w.script.split("\r\n")[0]
+    assert w.script.startswith("\ufeffSet-Content -LiteralPath 'C:\\Windows\\Temp\\valor-") and "$PID" in w.script.split("\r\n")[0]
+    assert "UTF8Encoding" in w.script.split("\r\n")[1]                              # UTF-8 in (BOM) and out
     assert w.deleted[0].endswith(".ps1") and w.deleted[1].endswith(".ps1.pid")       # both files cleaned up
 
     other = BusyWindows(cfg, "VM 5024 is not running")
@@ -165,3 +166,55 @@ def test_a_timed_out_script_is_followed_not_started_twice(cfg, monkeypatch):
     with pytest.raises(ValorError) as e:
         lost.ps(5024, "x")
     assert e.value.code == "agent_exec_lost" and len(lost.runs) == 1
+
+
+class AgentWire:
+    """The guest agent as Proxmox's API presents it: text in and out is one character per byte (Latin-1)."""
+
+    def __init__(self, output: bytes = b""):
+        from types import SimpleNamespace
+        self.output, self.posts, self.files = output, [], {}
+        self.exec = SimpleNamespace(post=self._exec)
+
+    def __call__(self, name):
+        from types import SimpleNamespace
+        return {"exec-status": SimpleNamespace(get=self._status), "file-write": SimpleNamespace(post=self._write),
+                "file-read": SimpleNamespace(get=self._read)}[name]
+
+    @staticmethod
+    def _bytes(text: str) -> bytes:              # what Proxmox base64-encodes for the guest
+        if any(ord(c) > 255 for c in text):
+            from proxmoxer.core import ResourceException
+            raise ResourceException(500, "Internal Server Error", "Wide character in subroutine entry")
+        return text.encode("latin-1")
+
+    def _exec(self, command, **params):
+        self.posts.append((command, self._bytes(params["input-data"]) if "input-data" in params else None))
+        return {"pid": 1}
+
+    def _status(self, pid):
+        return {"exited": 1, "exitcode": 0, "out-data": self.output.decode("latin-1"), "err-data": ""}
+
+    def _write(self, file, content):
+        self.files[file] = self._bytes(content)
+
+    def _read(self, file):
+        return {"content": self.files[file].decode("latin-1")}
+
+
+def test_guest_text_is_utf8_both_ways(cfg):
+    from types import SimpleNamespace
+    from valor.pve import from_agent
+    wire = AgentWire("● nginx.service - café\n".encode())
+    pve = PVE.__new__(PVE)
+    pve.cfg, pve.vm = cfg, lambda vmid: SimpleNamespace(agent=wire)
+    assert pve.exec(5040, ["systemctl", "status", "nginx"]).out == "● nginx.service - café\n"   # not 'â\x97\x8f'
+    pve.script(5040, "echo 'café ●'\n")
+    assert wire.posts[-1] == (["/bin/bash", "-s"], "echo 'café ●'\n".encode())     # the bytes the guest reads
+    pve.write_file(5040, "/etc/motd", "Willkommen ● café\n")
+    assert wire.files["/etc/motd"] == "Willkommen ● café\n".encode()
+    assert pve.file_read(5040, "/etc/motd") == "Willkommen ● café\n"
+    with pytest.raises(ValorError) as e:            # Proxmox would leave the agent stuck: never sent
+        pve.exec(5040, ["bash", "-c", "echo é"])
+    assert e.value.code == "agent_non_ascii" and len(wire.posts) == 2
+    assert from_agent("code page 850: \x82") == "code page 850: \x82"                 # not UTF-8: as it came
