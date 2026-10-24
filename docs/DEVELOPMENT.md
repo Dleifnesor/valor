@@ -127,14 +127,15 @@ See [CONTENT.md](CONTENT.md): [writing a role](CONTENT.md#writing-a-role), [base
 
 ### Change what the AI is told
 
-The chat builder's and range chat's prompts are assembled in `valor/ai.py` (`reference`, `SPEC_RULES`,
-`builder_prompt`, `range_prompt`) and include
-[`spec-reference.md`](../valor/spec-reference.md) verbatim. That file is also the spec format's reference for
-people, so a change there reaches both. Keep it about the spec format and free of anything specific to one cluster (the prompt adds this cluster's facts). After a prompt change, run a few builder requests against a
-real model, including a small local one: what a large model ignores, a small one may follow literally.
+The chat builder's and range chat's prompts are assembled in `valor/ai/prompts.py` (`reference`, `SPEC_RULES`,
+`builder_prompt`, `range_prompt`) and include [`spec-reference.md`](../valor/spec-reference.md) verbatim. That file is
+also the spec format's reference for people, so a change there reaches both. Keep it about the spec format and free of
+anything specific to one cluster (the prompt adds this cluster's facts). After a prompt change, run a few builder
+requests against a real model, including a small local one: what a large model ignores, a small one may follow
+literally.
 
-The range agent's tools and the read-only command allowlist are in `valor/agent.py`. Read-only must stay
-conservative: when in doubt, a command needs approval.
+The range agent's tools are in `valor/agent/tools.py`, the read-only command allowlist in `valor/agent/readonly.py`.
+Read-only must stay conservative: when in doubt, a command needs approval.
 
 ### Change Python dependencies
 

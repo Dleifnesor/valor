@@ -1,7 +1,5 @@
 """Range logins, display, power and snapshots - against a fake Proxmox (no cluster needed)."""
 
-import json
-
 import pytest
 
 from valor import credentials, lifecycle
