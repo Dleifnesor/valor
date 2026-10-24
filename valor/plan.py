@@ -48,9 +48,8 @@ class Desired:
 
 
 def desired_state(cfg, spec: RangeSpec, template_ids: dict[str, int] | None = None) -> list[Desired]:
-    """template_ids: OS name -> template VMID (cluster.template_ids); without it, legacy catalog VMIDs are used."""
-    if template_ids is None:
-        template_ids = {k: int(v["vmid"]) for k, v in load_catalog(cfg).items() if v.get("vmid")}
+    """template_ids: OS name -> template VMID (cluster.template_ids); an OS without one plans template -1."""
+    template_ids = template_ids or {}
 
     def tpl(os_name: str) -> int:
         return template_ids.get(os_name, -1)

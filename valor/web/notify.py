@@ -13,7 +13,6 @@ from email.message import EmailMessage
 from . import db
 from .security import Box
 
-KINDS = ("email", "discord", "slack", "teams")
 SECRET_FIELDS = {"email": ("password",), "discord": ("url",), "slack": ("url",), "teams": ("url",)}
 PROBLEM_LEVELS = ("warning", "error")
 

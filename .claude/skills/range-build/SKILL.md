@@ -15,7 +15,7 @@ go through the MCP tools of the `valor` server. Read `spec-reference.md` (next t
    VLANs already in use, existing ranges, available roles and baselines.
 2. **Design.** Map the description to segments, hosts, services (roles) and policy:
    - One segment per trust zone (e.g. dmz, lan, attacker). Each gets its own unused VLAN in the usable range and a
-     private `/24` that does **not** overlap `reserved_networks` (home LAN / cluster). Convention: VLAN `1N0` ↔
+     private `/24` that does **not** overlap `reserved_networks` (the LAN / cluster). Convention: VLAN `1N0` ↔
      `10.1N0.0.0/24`.
    - `internet: true` only for segments the user wants online (egress to public addresses; private networks stay
      blocked). "Exposed to the internet" in a description means internet-connected (egress) in the MVP.

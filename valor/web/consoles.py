@@ -25,7 +25,6 @@ from .core import ROLES, ApiError, Session, _load, require
 router = APIRouter(tags=["consoles"])
 CONNECT_WITHIN = 60          # seconds between creating a console session and opening its websocket
 MAX_DURATION = 8 * 3600
-KINDS = ("vnc", "serial")
 
 
 @dataclass

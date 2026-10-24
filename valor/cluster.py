@@ -100,7 +100,7 @@ def templates(pve: PVE, catalog: dict) -> dict[str, dict]:
     """Templates by OS, found by tag in the template pool (never by fixed VMID).
 
     A template on the range node wins over one elsewhere (linked clones need the same storage); among equals the
-    newest (highest VMID) wins. A legacy `vmid` in the catalog is used only if no tagged template exists.
+    newest (highest VMID) wins.
     """
     visible = [r for r in pve.resources() if r.get("template") and r.get("type") == "qemu"]
     out = {}
@@ -112,8 +112,6 @@ def templates(pve: PVE, catalog: dict) -> dict[str, dict]:
                  and r.get("pool") in (None, "", pve.cfg.template_pool)]
         found.sort(key=lambda r: (r.get("node") == pve.cfg.node, int(r["vmid"])), reverse=True)
         vmid = int(found[0]["vmid"]) if found else None
-        if vmid is None and entry.get("vmid") and any(int(r["vmid"]) == int(entry["vmid"]) for r in visible):
-            vmid = int(entry["vmid"])
         out[os_name] = {"vmid": vmid, "present": vmid is not None, "family": entry.get("family"),
                         "description": entry.get("description", "")}
     return out

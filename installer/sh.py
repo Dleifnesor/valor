@@ -52,21 +52,3 @@ def pvesh(_method: str, _path: str, _quiet_secret: bool = False, **params):
         return json.loads(text)
     except json.JSONDecodeError:
         return text
-
-
-def exists(path: str) -> bool:
-    return run(["pvesh", "get", path, "--output-format", "json"], check=False).returncode == 0
-
-
-def wait_task(node: str, upid: str, timeout: float = 1800) -> None:
-    import time
-    end = time.time() + timeout
-    while time.time() < end:
-        st = pvesh("get", f"/nodes/{node}/tasks/{upid}/status")
-        if st.get("status") == "stopped":
-            if st.get("exitstatus") != "OK":
-                log = pvesh("get", f"/nodes/{node}/tasks/{upid}/log", limit=50) or []
-                raise RuntimeError(f"task failed: {st.get('exitstatus')}\n" + "\n".join(l.get("t", "") for l in log[-15:]))
-            return
-        time.sleep(2)
-    raise TimeoutError(f"task {upid} did not finish in {timeout:.0f}s")

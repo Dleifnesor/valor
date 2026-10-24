@@ -28,8 +28,11 @@ install it with `./install.sh` on any Proxmox node and work in its web UI (see `
 | `roles/`, `baselines/`, `templates/` | content shipped with VALOR |
 | `ranges/` | example range specs (the development harness reads them here) |
 | `tests/` | `pytest`: engine, web API, installer logic - no cluster needed |
-| `docs/INSTALL.md` | install guide and answers-file reference |
+| `docs/` | install, user, architecture, API, CLI, content and development guides (index: `docs/README.md`) |
 | `tools/lock.py` | regenerates `appliance/requirements.lock` |
+
+`.claude/skills/range-build/spec-reference.md` is also the **product's AI prompt** (the chat builder and range chats
+include it verbatim): keep it about the spec format and free of anything specific to this cluster.
 
 ## Workflow
 
@@ -37,6 +40,9 @@ install it with `./install.sh` on any Proxmox node and work in its web UI (see `
 .venv/bin/python -m pytest              # always before committing
 cd web && npm run build                 # after UI changes; commit dist/ with the source
 ```
+
+When behavior, a setting, a route or a command changes, update the matching page in `docs/` in the same change
+(new API routes: `docs/API.md` and `ACCESS` in `tests/test_security.py`).
 
 Engine changes reach the development harness after an administrator runs `valor-admin deploy`, and an installed
 VALOR VM after `./install.sh --upgrade` (both root).

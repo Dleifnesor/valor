@@ -32,7 +32,6 @@ class Control:
 class Baseline:
     id: str
     title: str
-    claim: str
     families: list[str]
     controls: list[Control]
     digest: str
@@ -61,8 +60,8 @@ def load_baseline(baselines_dir: Path, name: str, _seen: tuple = ()) -> Baseline
         mine = {c.id for c in own}
         own = [c for c in parent.controls if c.id not in mine] + own
         digest_src = parent.digest + text
-    return Baseline(raw["id"], raw["title"], raw.get("claim", "aligned-with"), raw.get("families", ["debian"]),
-                    own, hashlib.sha256(digest_src.encode()).hexdigest()[:16], raw.get("windows", WINDOWS_BASELINE))
+    return Baseline(raw["id"], raw["title"], raw.get("families", ["debian"]), own,
+                    hashlib.sha256(digest_src.encode()).hexdigest()[:16], raw.get("windows", WINDOWS_BASELINE))
 
 
 def available(baselines_dir: Path) -> list[str]:

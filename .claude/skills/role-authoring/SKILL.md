@@ -5,16 +5,18 @@ description: Write or fix a VALOR service role (an idempotent script that instal
 
 # Writing a role
 
-A role is `roles/<name>/role.sh` plus `roles/<name>/role.yaml`. The engine runs `role.sh` as **root** inside the
-guest through the QEMU guest agent (stdin to `bash -s`), during build egress (the segment can reach public
-mirrors). Look at `roles/nginx` and `roles/postgresql` first - copy their structure.
+A role is `roles/<name>/role.yaml` plus `role.sh` (Linux) and/or `role.ps1` (Windows). The engine runs the script
+inside the guest through the QEMU guest agent - `role.sh` as **root** (bash, script on stdin), `role.ps1` as SYSTEM -
+during build egress (the segment can reach public mirrors). Look at `roles/nginx` and `roles/postgresql` first (and
+`roles/ad-member` for Windows) - copy their structure. Full reference with every key and helper:
+`docs/CONTENT.md` (Writing a role).
 
 ## role.yaml
 
 ```yaml
 description: one line
-families: [debian]          # apt-based OSes (Ubuntu, Debian) - the only family in the MVP
-ports: [80]                 # informational: ports the service listens on
+families: [debian, rhel]    # debian (Ubuntu, Debian, Kali) | rhel (Rocky, Alma) | windows
+ports: [80]                 # TCP ports the service listens on (or ports_param: <param> to take them from a param)
 params:                     # every parameter the script reads; unknown params in a spec are rejected
   port:
     default: 80
@@ -28,13 +30,16 @@ params:                     # every parameter the script reads; unknown params i
 ## role.sh contract
 
 - Environment: `VALOR_RANGE`, `VALOR_HOST`, `VALOR_ROLE`, `VALOR_ADDRESS`, `VALOR_SEGMENT`, `VALOR_SEGMENT_CIDR`,
-  `VALOR_GATEWAY`, and `VALOR_PARAM_<NAME>` for each parameter (upper-case).
+  `VALOR_GATEWAY`, `VALOR_RANGE_HOSTS`, `VALOR_NAMESERVERS`, `VALOR_FAMILY` (debian | rhel), and
+  `VALOR_PARAM_<NAME>` for each parameter (upper-case).
 - Already set: `set -euo pipefail`, `DEBIAN_FRONTEND=noninteractive`.
 - Helpers:
-  - `apt_install pkg...` - installs only missing packages, waits for apt locks (first-boot updates hold them),
-    retries 3 times.
-  - `write_file PATH MODE <<EOF ... EOF || true` - writes only when content differs (returns 1 when unchanged, hence
-    `|| true`) and marks the run as changed.
+  - `pkg_install deb-pkg... [-- rhel-pkg...]` - installs only missing packages with apt or dnf, waits for apt locks
+    (first-boot updates hold them), retries 3 times (`apt_install`, `dnf_install` also exist).
+  - `write_file PATH MODE <<EOF ... EOF` - writes only when content differs and marks the run as changed. Feed it a
+    heredoc or `< <(cmd)`, never `cmd | write_file` (a subshell: the change would not count).
+  - `firewall_open PORT`, `selinux_port TYPE PORT`, `wait_port PORT`, `run_container NAME IMAGE [opts]` - see
+    `docs/CONTENT.md`.
   - `changed` - mark that something changed (e.g. after creating a DB user).
   - `$VALOR_CHANGED` - `1` if anything changed in this run; restart/reload services only then.
 - **Idempotent**: running twice must leave the system the same and change nothing the second time. Check before

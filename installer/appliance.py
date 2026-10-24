@@ -87,7 +87,7 @@ def config_toml(a: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: st
                   "guest_user": "valor"},
         "web": {"db": "/var/lib/valor/web.sqlite3", "secret_key_file": "/etc/valor/secret.key",
                 "instance_name": a.instance_name, "tls_cert": "/etc/valor/tls/server.crt",
-                "ca_cert": "/etc/valor/tls/ca.crt", "appliance_vmid": a.vmid_vm, "public_url": url},
+                "appliance_vmid": a.vmid_vm, "public_url": url},
     }
     lines = [f"# VALOR {VERSION} configuration, written by the installer on {facts.node} "
              f"({time.strftime('%Y-%m-%d %H:%M %Z')}).",

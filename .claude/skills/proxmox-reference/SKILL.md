@@ -5,37 +5,42 @@ description: Reference for how VALOR uses Proxmox VE (API, cloud-init, guest age
 
 # Proxmox VE reference for VALOR
 
-Cluster: Proxmox VE 9.x. The engine (user `valor@pve`, token `valor@pve!engine`) talks to the API on the node
-configured in `/etc/valor/config.toml` (you cannot read it - ask the user/admin if a setting matters).
-**Check `known-issues.md` first** - it lists errors already solved and their fixes.
+Proxmox VE 8.2+ or 9.x. The engine talks to the API with one privilege-separated token, on the node configured in
+`/etc/valor/config.toml` (you cannot read it - ask the user/admin if a setting matters; `cluster_info` shows the
+values the engine uses). **Check `known-issues.md` first** - it lists errors already solved and their fixes.
 
 ## What the engine's token may do
 
+The installer (`installer/identity.py`) grants exactly these; `<id>` is the instance id (default `valor`).
+
 | Path | Role | Means |
 |---|---|---|
-| `/pool/valor` | ValorEngine | create/configure/start/stop/delete VMs **in that pool only**; guest agent incl. exec |
-| `/pool/valor-templates` | ValorTemplateUser | clone templates (no changes to them) |
-| `/storage/valor-tank` | ValorStorage | allocate disks on VALOR's ZFS dataset (`tank/valor`, 1 TB quota) |
-| `/sdn/zones/localnetwork/vmbr100`, `.../vmbr0` | PVESDNUser | attach NICs to the segment bridge and the router uplink |
-| `/nodes/<node>` | ValorNodeAudit | read node status (free memory) |
+| `/pool/<id>-ranges` | ValorEngine | create/configure/start/stop/delete VMs **in that pool only**; guest agent incl. exec |
+| `/pool/<id>-templates` | ValorTemplateUser | clone templates (no changes to them) |
+| `/storage/<range storage>` | ValorStorage | allocate range disks |
+| `/sdn/zones/localnetwork/<range bridge>`, `.../<uplink bridge>` | PVESDNUser | attach NICs to the segment bridge and the router uplink |
+| `/nodes/<node>` | ValorNodeAudit, ValorDownload | read node status (free memory); let Proxmox download ISOs |
+| `/storage/<iso storage>` (+ readers) | ValorISO, ValorISOReader | the ISO library |
 
-A **403** means the spec asked for something outside these (another storage, bridge, or a VM outside the pool).
-Fix the spec; never ask for broader rights.
+The VALOR VM sits in `<id>-system`, where the token has no rights. A **403** means the spec asked for something
+outside these (another storage, bridge, or a VM outside the pool). Fix the spec; never ask for broader rights.
 
-Administrator-only (`valor-admin`, run by root, not available to you): build templates
-(`valor-admin template build <os>`), create bridges (`valor-admin bridge create <name>`), deploy the engine.
+Administrator-only (root, not available to you): `./install.sh --template <os>` on an installed VALOR; in the
+development harness `valor-admin template build <os>`, `valor-admin bridge create <name>`, `valor-admin deploy`.
 
 ## Mechanics
 
-- **Templates**: `templates/catalog.yaml` maps `os` -> template VMID (9000 ubuntu-24.04, 9001 ubuntu-26.04,
-  9002 debian-13, 9003 debian-12). Images are signature/checksum verified; qemu-guest-agent is baked in.
-  Range VMs are **linked clones** (instant, ZFS).
-- **Cloud-init** (PVE-generated): user `valor`, SSH key, static IP + gateway per NIC (`ipconfigN`), DNS 1.1.1.1 /
-  9.9.9.9, `ciupgrade 0` (no upgrade at first boot - isolated segments have no internet then).
+- **Templates**: `templates/catalog.toml` lists the OSes. Templates are found by tags (`valor-template`,
+  `os-<name>`) in the template pool, never by a fixed VMID. Images are signature/checksum verified; the QEMU guest
+  agent is baked in. Range VMs are **linked clones** on the range storage (instant on ZFS, LVM-thin, Ceph, qcow2).
+- **Cloud-init** (PVE-generated): user `valor`, SSH key, static IP + gateway per NIC (`ipconfigN`), DNS = the
+  configured nameservers, `ciupgrade 0` (no upgrade at first boot - isolated segments have no internet then).
+  Windows hosts have no cloud-init: VALOR prepares them over the guest agent (`valor/windows.py`).
 - **Guest agent** is the only management channel (no management network). PVE 9 split agent privileges:
   `VM.GuestAgent.Audit`, `.FileRead`, `.FileWrite`, `.FileSystemMgmt`, `.Unrestricted` (exec needs Unrestricted).
-- **Networking**: segment NICs on `vmbr100` (VLAN-aware, **no physical port** - traffic never leaves the node)
-  with `tag=<vlan>`; router uplink on `vmbr0` (home LAN, DHCP). Ranges therefore live on one node.
+- **Networking**: segment NICs on the range bridge (VLAN-aware, **no physical port** - traffic never leaves the
+  node) with `tag=<vlan>`; the router's uplink on the management bridge (the LAN, DHCP). Ranges therefore live on one
+  node.
 
 ## Live documentation
 

@@ -15,7 +15,6 @@ from pathlib import Path
 from .errors import ValorError
 
 FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+=-]{0,200}\.iso$")
-ALGORITHMS = ("md5", "sha1", "sha224", "sha256", "sha384", "sha512")
 HEX_LENGTH = {"md5": 32, "sha1": 40, "sha224": 56, "sha256": 64, "sha384": 96, "sha512": 128}
 
 

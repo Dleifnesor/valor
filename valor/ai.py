@@ -524,10 +524,6 @@ SPEC_RULES = """Rules for specs:
 - If the request is unclear, make a sensible small choice and say what you assumed."""
 
 
-def system_prompt(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
-    return builder_prompt(reference(cfg, catalog, present, roles, facts))
-
-
 QUESTIONS_FORMAT = """To ask the person questions, end your answer with one ```questions block (YAML) and nothing after it.
 VALOR shows each question as a card with clickable options plus a free-text "Other" answer:
 ```questions

@@ -8,7 +8,7 @@ import yaml
 from valor import compliance
 from valor.baseline import baseline_for, load_baseline
 from valor.errors import ValorError
-from valor.spec import canonical, normalize, parse_spec
+from valor.spec import FRAMEWORKS, canonical, normalize, parse_spec
 
 from test_windows import ValidatePVE
 
@@ -82,7 +82,7 @@ def test_mapping_is_consistent_with_the_baselines():
             if fam != "title":
                 assert set(ids) <= set(m["requirements"][fam]), (check, fam)
     for fid, fw in m["frameworks"].items():
-        assert (BASELINES / f"{fw['profile']}.yaml").is_file() and fid in compliance.spec_frameworks()
+        assert (BASELINES / f"{fw['profile']}.yaml").is_file() and fid in FRAMEWORKS
         assert set(fw.get("only") or []) <= set(m["requirements"].get(fw["family"], {})), fid
     assert compliance.required_profile(BASELINES, ["cis-l1"]) == "ubuntu-l1"
     assert compliance.required_profile(BASELINES, ["cis-l1", "hipaa"]) == "linux-moderate"

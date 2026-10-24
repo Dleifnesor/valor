@@ -2,7 +2,7 @@
 
 Turns a description of a test environment into a **segmented, hardened and verified** set of VMs on Proxmox VE,
 and rebuilds that same environment on demand. Champlain College capstone (Dan). Where this is going:
-[ROADMAP.md](ROADMAP.md).
+[ROADMAP.md](ROADMAP.md). Documentation: [docs/](docs/README.md).
 
 **Core principle: the agent plans, the engine executes.** The AI only writes declarative range specs. A
 deterministic Python engine is the only component that calls the Proxmox API, and a person approves every build
@@ -28,19 +28,22 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 |---|---|
 | Dashboard | health checks: Proxmox API, token scope, templates, range network, certificate, disk, OS updates |
 | Ranges | every range with its build and verification status |
-| Range | **topology map** (React Flow): add VMs, services and network segments (presets: DMZ, users, servers, management, attacker lab, isolated), edit traffic rules, resize or remove VMs right on the map - changes collect as a draft shown in the plan colors and are built through Review plan → Approve; a **Chat** panel on the map answers questions (Question), proposes changes as a draft with VALOR's plan (Plan) or edits the YAML with a diff (Code), kept per range; hosts, tests, verification matrix, spec, journal, history |
+| Range | **topology map** (React Flow): add VMs, services and network segments (presets: DMZ, users, servers, management, attacker lab, isolated), edit traffic rules, resize or remove VMs right on the map - changes collect as a draft shown in the plan colors and are built through Review plan → Approve; a **Chat** panel on the map answers questions (Question), proposes changes as a draft with VALOR's plan (Plan) or edits the YAML with a diff (Code), kept per range; hosts, tests, verification matrix (plus a per-requirement report when the spec names compliance frameworks: NIST SP 800-171, NIST SP 800-53, PCI DSS, HIPAA, CIS Level 1), spec, journal, history |
 | Consoles | every VM's screen (noVNC) or serial console (xterm.js) in the browser, through VALOR (operators, audited) |
 | Login | one generated password per range for the VM consoles (Linux `valor`, Windows `Administrator` / `DOMAIN\Administrator`), encrypted at rest, shown to operators, audited, rotatable |
 | Power, snapshots | start / shut down / reboot a range or one VM; snapshots, automatic `valor-clean` after each verified build, reset to a snapshot |
 | Access | WireGuard per range on the range router: peer configs with QR codes, live connection status, new keys per peer |
 | ISO library | download from a verified catalog (signed checksums), by URL, upload from the browser, delete; attach an ISO to a host (`iso:`) or install a Rocky/Alma host from its ISO (`install: iso`) |
 | Blueprints | keep a spec as a blueprint and deploy copies - numbered or one per student - each with its own VLANs, networks and WireGuard peer |
-| Chat builder | describe an environment; an AI model (Anthropic Claude or any OpenAI-compatible endpoint, set up by an admin) writes the spec, VALOR validates it and shows it on the map; building stays plan → approve |
+| Chat builder | describe an environment; an AI model writes the spec, VALOR validates it (and has the model fix what fails) and shows it on the map; building stays plan → approve. Providers (set up by an admin): Anthropic, OpenRouter or any OpenAI-compatible server such as LM Studio |
+| Chats | every saved chat-builder and range conversation; a failed build can be handed to the assistant, which finds and fixes the cause (and, if an admin allows it, rebuilds on its own) |
 | Spec editor | write or paste a range spec, check it against the cluster, see it on the map |
 | Plan → approve | the plan is shown on the map in color (added / changed / rebuilt / removed). Approving runs exactly that plan. |
 | Jobs | builds, verifications and teardowns with their live step log |
 | Users, audit log | roles admin / operator / viewer; every change is audited |
-| Settings | notification channels (email, Discord, Slack, Teams, in-app), LDAP / Active Directory, certificate |
+| Settings | notification channels (email, Discord, Slack, Teams, in-app), LDAP / Active Directory, AI providers and budgets, certificate |
+
+How to use each page: [docs/USER-GUIDE.md](docs/USER-GUIDE.md).
 
 ## How a build works
 
@@ -67,6 +70,8 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 | Content | `roles/`, `baselines/`, `templates/` | idempotent service roles, a hardening baseline, the OS catalog |
 | Range router | per range, automatic | Ubuntu + nftables: segmentation, policy, NAT |
 
+Modules, data flow and files on disk: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Security model
 
 - **Proxmox**: one privilege-separated token. VM rights end at the range pool; it can clone only from the template
@@ -82,8 +87,10 @@ authentication is set up at the first sign-in. Unattended installs, every settin
   "internet" egress never reaches private addresses or the cluster's own networks. WireGuard peers reach only
   the segments listed in `reach` - never the internet or the LAN - and their keys are generated and encrypted by
   VALOR; viewing a peer config or a range login is audited.
-- **AI**: the chat builder's model only writes text. Its spec is validated, and building it still needs a person
-  to plan and approve. The provider key is encrypted, never shown again, and budgets limit tokens per user.
+- **AI**: models only write text and tool calls. Specs are validated, and building them still needs a person to
+  plan and approve. In range chats, commands and files that change something wait for a person's approval unless
+  they allowed all actions for that chat. Provider keys are encrypted and never shown again; budgets limit tokens
+  per user.
 - **Tests**: `tests/test_security.py` checks that every API route has a reviewed access level, that sign-in is
   required everywhere, and that every state change needs the CSRF token, the same origin and a JSON body.
 - **Compliance claims**: results are "aligned with" common CIS Level 1 themes or the selected frameworks' technical
@@ -92,42 +99,41 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 ## Range specs, roles and baselines
 
 A range spec (YAML) lists segments (VLAN + private CIDR, optional internet egress), hosts (OS, size, roles), the
-allowed traffic between segments and optional tests. Examples are in `ranges/`. Roles (`roles/<name>/role.sh` +
-`role.yaml`) are idempotent and parameterized. The baseline `baselines/ubuntu-l1.yaml` has check + fix
-controls. See `.claude/skills/range-build/spec-reference.md` for the full format.
+allowed traffic between segments and optional tests. Examples are in `ranges/`; the full format is in the
+[spec reference](.claude/skills/range-build/spec-reference.md). Roles (`roles/<name>/`) are idempotent,
+parameterized services for Linux and Windows; baselines (`baselines/`) are hardening controls with a check and a
+fix. Catalog and how to write your own: [docs/CONTENT.md](docs/CONTENT.md).
 
-## Engine CLI (CI/CD and break-glass)
+## Command line
 
-Inside the VALOR VM (`valor ...`) or a development install:
+Inside the VALOR VM the engine also runs headless, for CI/CD and break-glass:
 
 ```
 valor validate web2tier.yaml | plan web2tier.yaml [--show-policy] | apply web2tier.yaml --verify
-valor verify web2tier.yaml | destroy web2tier --yes | journal web2tier | job <id>
+valor verify web2tier.yaml | destroy web2tier --yes | journal web2tier.yaml | job status <id>
 ```
 
-Exit codes: 0 ok, 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy, 5 other. `--json` for
-machine output. Example pipelines: `ci/`.
+Exit codes: 0 ok, 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy, 5 other. `valor --json ...`
+for machine output. Every command (installer, engine, web service): [docs/CLI.md](docs/CLI.md).
 
 ## Development
 
 Claude Code in this repository is for developing VALOR (see `CLAUDE.md`).
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r appliance/requirements.lock pytest httpx
-.venv/bin/python -m pytest                 # engine, web API and installer logic; no cluster needed
-cd web && npm ci && npm run build          # web UI (see web/README.md); commit web/dist
-python3 tools/lock.py                      # after changing appliance/requirements.in
-./install.sh --upgrade                     # push the working tree into an installed VALOR VM
+python3 -m venv .venv && .venv/bin/pip install --require-hashes --no-deps -r appliance/requirements.lock
+.venv/bin/pip install pytest httpx && .venv/bin/python -m pytest      # no cluster needed
+cd web && npm ci && npm run build                                     # web UI; commit web/dist
+./install.sh --upgrade                                                # push the working tree into a VALOR VM
 ```
 
-The MVP's Claude Code harness (MCP server, skills, `valor-admin`) still works on the development cluster. It is
-how the engine is exercised during development.
+Tests, CI and how to make common changes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Limitations (today)
 
 - Ranges live on one node; multi-node ranges through Proxmox SDN are milestone 5.
 - Range routers get their uplink address from the LAN's DHCP (NAT through the VALOR VM: issue #15).
-- Guests: Ubuntu 24.04, Debian 13, Kali, Rocky Linux 10, AlmaLinux 10, Windows Server 2022/2025 (Desktop and
-  Core) and Windows 11 Enterprise (evaluation media; bring your own license for longer use). Firewall appliances
+- Guests: Ubuntu 24.04/26.04, Debian 12/13, Kali, Rocky Linux 10, AlmaLinux 10, Windows Server 2022/2025 (Desktop
+  and Core) and Windows 11 Enterprise (evaluation media; bring your own license for longer use). Firewall appliances
   are milestone 4.
 - "Exposed to the internet" means internet egress; inbound port publishing is not implemented.

@@ -103,7 +103,7 @@ One command in a Proxmox node shell gives a hardened VALOR VM with a secure web 
 | [#15](https://github.com/Dleifnesor/valor/issues/15) Range internet uplink without LAN DHCP | NAT transit through the VALOR VM |
 | [#16](https://github.com/Dleifnesor/valor/issues/16) Engine: remove cluster-specific defaults | Everything from the installer-written config |
 | [#17](https://github.com/Dleifnesor/valor/issues/17) Portability test: fresh nested Proxmox VE | Unattended install on a Proxmox VE VALOR has never seen — ✅ passed 4 Oct 2026: fresh nested Proxmox VE 9.2 on an isolated 10.0.0.0/24 test network; install + first range verified (5/5, 3/3, 29/29) |
-| [#18](https://github.com/Dleifnesor/valor/issues/18) Docs: install guide and answers-file reference | Someone new can install it |
+| [#18](https://github.com/Dleifnesor/valor/issues/18) Docs: install guide and answers-file reference | Someone new can install it — ✅ [docs/INSTALL.md](docs/INSTALL.md), plus user, architecture, API, CLI, content and development guides in [docs/](docs/README.md) |
 
 ### M2 · Chat builder and topology map 🚧 (due 18 Dec 2026)
 
@@ -111,7 +111,7 @@ Describe, see, approve, watch, review.
 
 | Issue | Goal |
 |---|---|
-| [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix — ✅ Anthropic + OpenAI-compatible, key encrypted (live test waits for a provider key) |
+| [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix — ✅ Anthropic, OpenRouter and OpenAI-compatible servers (e.g. LM Studio); several providers with a default, keys encrypted; tested live with a local model and OpenRouter |
 | [#20](https://github.com/Dleifnesor/valor/issues/20) Chat environment builder | Conversation -> range spec -> plan, refined iteratively — ✅ validate-and-fix loop, map preview, hand-off to plan → approve |
 | [#21](https://github.com/Dleifnesor/valor/issues/21) Plan approval for every build and destroy | The approved plan hash is the one that runs |
 | [#22](https://github.com/Dleifnesor/valor/issues/22) Topology map (React Flow), view-only | Router, segments, hosts and allowed flows |
@@ -137,7 +137,7 @@ Describe, see, approve, watch, review.
 
 | Issue | Goal |
 |---|---|
-| [#35](https://github.com/Dleifnesor/valor/issues/35) Windows Server and Active Directory | Redundant DCs, DNS, DHCP, member join — 🚧 forest + replica DC (2022/2025 Core), member join, IIS done and verified (8/8, baseline 46/46); a DHCP role is still to do |
+| [#35](https://github.com/Dleifnesor/valor/issues/35) Windows Server and Active Directory | Redundant DCs, DNS, DHCP, member join — 🚧 forest + replica DC (2022/2025 Core), member join, IIS done and verified (8/8, baseline 46/46); DHCP role `windows-dhcp` added in #65 |
 | [#36](https://github.com/Dleifnesor/valor/issues/36) Windows 10/11 clients | UEFI + TPM, domain join — ✅ Windows 11 (current evaluation) template; UEFI + TPM 2.0 |
 | [#37](https://github.com/Dleifnesor/valor/issues/37) Firewall appliances with several NICs | VyOS, pfSense, OPNsense |
 | [#39](https://github.com/Dleifnesor/valor/issues/39) More Linux distributions | Kali, Rocky, Alma, Security Onion — 🚧 Kali, Rocky 10, Alma 10 done (cloud images + Rocky/Alma ISO installs); Security Onion to do |
@@ -155,12 +155,12 @@ Describe, see, approve, watch, review.
 | [#46](https://github.com/Dleifnesor/valor/issues/46) Backup and restore | Survive the loss of the VALOR VM |
 | [#47](https://github.com/Dleifnesor/valor/issues/47) Proxmox API failover | Keep working with a node down |
 
-### M6 · Compliance, evaluation and release ⬜ (due 23 Apr 2027)
+### M6 · Compliance, evaluation and release 🚧 (due 23 Apr 2027)
 
 | Issue | Goal |
 |---|---|
-| [#48](https://github.com/Dleifnesor/valor/issues/48) Compliance framework skills | CIS, NIST 800-171/800-53, DISA STIGs, ISO 27001 |
-| [#49](https://github.com/Dleifnesor/valor/issues/49) Compliance reports | Evidence with "aligned with" wording |
+| [#48](https://github.com/Dleifnesor/valor/issues/48) Compliance framework skills | CIS, NIST 800-171/800-53, DISA STIGs, ISO 27001 — 🚧 NIST SP 800-171, NIST SP 800-53 Low/Moderate, PCI DSS, HIPAA and CIS L1 themes (#66); DISA STIGs and ISO/IEC 27001 to do |
+| [#49](https://github.com/Dleifnesor/valor/issues/49) Compliance reports | Evidence with "aligned with" wording — ✅ per-requirement report on the range's Verification tab (#66) |
 | [#50](https://github.com/Dleifnesor/valor/issues/50) Evaluation runs and capstone write-up | H1-H4 on the finished product |
 | [#51](https://github.com/Dleifnesor/valor/issues/51) Release packaging and license | Signed, checksummed releases |
 | [#52](https://github.com/Dleifnesor/valor/issues/52) Security review | Threat model, audits, ASVS L2 test — 🚧 route-level access, CSRF/origin and header tests; live port/TLS checks |

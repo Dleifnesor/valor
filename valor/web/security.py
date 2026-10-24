@@ -141,7 +141,3 @@ class RateLimiter:
             if len(self._hits) > 10000:      # bound memory under a flood of distinct keys
                 for k in [k for k, q in self._hits.items() if not q][:5000]:
                     self._hits.pop(k, None)
-
-    def reset(self, key: str) -> None:
-        with self._lock:
-            self._hits.pop(key, None)

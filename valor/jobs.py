@@ -14,8 +14,6 @@ from pathlib import Path
 
 from .errors import LockBusy, ValorError
 
-KINDS = ("apply", "verify", "destroy", "power", "snapshot", "rollback", "snapshot_delete", "rotate")
-
 
 def _dir(cfg, job_id: str) -> Path:
     if not all(c.isalnum() or c == "-" for c in job_id):
