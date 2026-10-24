@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { Component, ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 
 export type IconName =
@@ -209,4 +209,28 @@ export function DropButton({ label, icon, items, disabled }: { label: string; ic
       )}
     </div>
   );
+}
+
+/** A page that fails to render shows what went wrong instead of leaving the window blank; the rest of the UI stays. */
+export class PageGuard extends Component<{ children: ReactNode; page?: string }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidUpdate(prev: { page?: string }) {
+    if (this.state.error && prev.page !== this.props.page) this.setState({ error: null });   // another page: try again
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="view-body">
+        <div className="alert error" role="alert">
+          This page failed to show: {this.state.error.message}
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn" onClick={() => window.location.reload()}>Reload</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }

@@ -2,7 +2,7 @@ import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get, post, setCsrf, setUnauthenticatedHandler } from "./api";
 import { Me, RangeRow } from "./types";
 import { go, useApi, useRoute, useStored } from "./hooks";
-import { DropButton, Icon, Loading, Logo, MenuEntry, Modal, View } from "./components/ui";
+import { DropButton, Icon, Loading, Logo, MenuEntry, Modal, PageGuard, View } from "./components/ui";
 import { ResourceTree, Selection } from "./components/Tree";
 import { TaskLog } from "./components/TaskLog";
 import { SignIn } from "./pages/SignIn";
@@ -51,7 +51,7 @@ export default function App() {
       />
     );
   }
-  return <Shell me={me} setMe={setMe} />;
+  return <PageGuard><Shell me={me} setMe={setMe} /></PageGuard>;
 }
 
 const NARROW = "(max-width: 860px)";
@@ -148,10 +148,12 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
       <div className="workspace">
         {treeOpen && <div className="nav-backdrop" onClick={() => setTreeOpen(false)} aria-hidden="true" />}
         <aside id="resource-tree" className={`tree-pane${treeOpen ? " open" : ""}`}>
-          <ResourceTree ranges={ranges.data?.ranges ?? null} instance={me.instance || "VALOR"} selected={selected} />
+          <PageGuard page={route.join("/")}>
+            <ResourceTree ranges={ranges.data?.ranges ?? null} instance={me.instance || "VALOR"} selected={selected} />
+          </PageGuard>
           {ranges.data?.cluster_error && <div className="alert warn small tree-alert">Live VM status unavailable: {ranges.data.cluster_error}</div>}
         </aside>
-        <main className="content">{view}</main>
+        <main className="content"><PageGuard page={route.join("/")}>{view}</PageGuard></main>
       </div>
       <TaskLog open={logOpen} onOpen={setLogOpen} tab={logTab} onTab={setLogTab} />
       {task && <Modal title="Task viewer" wide onClose={() => setTask(null)}><JobDetail id={task} /></Modal>}

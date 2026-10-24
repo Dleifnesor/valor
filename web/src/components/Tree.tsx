@@ -19,7 +19,8 @@ export function ResourceTree({ ranges, instance, selected }: { ranges: RangeRow[
     try { localStorage.setItem("valor-tree-closed", JSON.stringify(next)); } catch { /* not kept */ }
   };
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => ref.current?.querySelector(".tree-row.selected")?.scrollIntoView({ block: "nearest" }), [selected]);
+  // braces: scrollIntoView returns a Promise in newer browsers, and an effect may only return its cleanup function
+  useEffect(() => { ref.current?.querySelector(".tree-row.selected")?.scrollIntoView({ block: "nearest" }); }, [selected]);
   const rootOpen = !closed.includes("root");
 
   return (
