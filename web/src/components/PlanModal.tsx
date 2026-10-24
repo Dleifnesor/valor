@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ApiError, post } from "../api";
 import { Change, Plan, Topology } from "../types";
-import { go } from "../hooks";
+import { openTask } from "../hooks";
 import { ErrorBox, Modal } from "./ui";
 import { CHANGE_LABEL, TopologyMap } from "./Topology";
 
@@ -29,7 +29,8 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
     setErr(null);
     try {
       const r = await post<{ job: string }>(`/api/ranges/${name}/apply`, { plan_hash: res.plan_hash, draft: !!draft });
-      go(`jobs/${r.job}`);
+      onClose();
+      openTask(r.job);
     } catch (e) {
       setErr(e as ApiError);
       setBusy(false);

@@ -21,11 +21,12 @@ fails if `dist/` is out of date.
 
 | Path | What |
 |---|---|
-| `src/App.tsx` | sign-in gate, app shell, hash routing |
+| `src/App.tsx` | sign-in gate, the Proxmox-style shell (header, resource tree, panel, task list), hash routing |
+| `src/components/ui.tsx`, `Tree.tsx`, `TaskLog.tsx` | building blocks (`View` panel with section menu), the resource tree, the task list |
 | `src/api.ts`, `src/hooks.ts` | API client (JSON, CSRF header, 401 handling); `useRoute`, polling `useApi` |
 | `src/components/Topology.tsx` | the map with the plan/draft overlay and the details panel |
 | `src/components/RangeEditing.tsx`, `SegmentEditing.tsx` | editing a range on the map (VMs, services, segments, traffic rules), the draft bar, the range chat |
 | `src/components/ChatFeed.tsx` | chat feed: streamed steps, approval cards, question cards |
-| `src/pages/` | Dashboard, Ranges, RangeDetail, RangeEditor, Builder, Chats, Blueprints, Library, Jobs, Console, Users, Audit, Settings, Account, SignIn |
+| `src/pages/` | Dashboard, RangeDetail, Vm, RangeEditor, Builder, Chats, Blueprints, Library, Jobs, Console, Users, Audit, Settings, Account, SignIn |
 
 More: [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-web-ui-web) and [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md#the-web-ui).

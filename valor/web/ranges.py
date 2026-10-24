@@ -168,7 +168,7 @@ def list_ranges(request: Request, s: Session = Depends(require("viewer"))) -> di
     try:
         for name, r in ranges_overview(PVE(cfg)).items():
             item = out.setdefault(name, {"name": name, "has_spec": False})
-            item.update(vms=r["vms"], running=r["running"], deployed_version=r["spec"])
+            item.update(vms=r["vms"], running=r["running"], deployed_version=r["spec"], machines=r["hosts"])
     except ValorError as e:
         cluster_error = e.message
     for name, item in out.items():

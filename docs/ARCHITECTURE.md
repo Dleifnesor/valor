@@ -247,9 +247,10 @@ React and TypeScript, built with Vite; the map uses React Flow (`@xyflow/react`)
 
 | Path | What |
 |---|---|
-| `src/App.tsx` | Sign-in gate, app shell (menu, theme, notifications) and hash routing (`#/ranges/<name>`, `#/jobs/<id>`...). |
-| `src/api.ts`, `src/hooks.ts` | API client (JSON, the `X-CSRF-Token` header, 401 handling) and hooks (`useRoute`, polling `useApi`). |
-| `src/pages/` | One file per page: Dashboard, Ranges, RangeDetail, RangeEditor, Builder, Chats, Blueprints, Library, Jobs, Console, Users, Audit, Settings, Account, SignIn. |
+| `src/App.tsx` | Sign-in gate, the shell laid out like Proxmox VE (header with search, resource tree, the selected object's panel, task list) and hash routing (`#/ranges/<name>/<section>`, `#/ranges/<name>/vm/<host>`, `#/jobs/<id>`...). |
+| `src/api.ts`, `src/hooks.ts` | API client (JSON, the `X-CSRF-Token` header, 401 handling) and hooks (`useRoute`, polling `useApi`, `openTask` for the task viewer). |
+| `src/components/ui.tsx`, `Tree.tsx`, `TaskLog.tsx` | Building blocks (`View`: title bar, section menu, body), the resource tree, the task list and notifications. |
+| `src/pages/` | Dashboard (Datacenter summary), RangeDetail (a range's sections), Vm (one VM: summary, console), RangeEditor, Builder, Chats, Blueprints, Library, Jobs, Console, Users, Audit, Settings, Account, SignIn. |
 | `src/components/Topology.tsx` | The map: nodes, edges, plan colors, details panel. |
 | `src/components/RangeEditing.tsx`, `SegmentEditing.tsx` | Map editing (VMs, services, segments, traffic rules), the draft bar and the range chat panel. |
 | `src/components/ChatFeed.tsx` | The chat feed: streamed steps, approval cards, question cards. Used by the builder and range chats. |
