@@ -23,7 +23,6 @@ class WebConfig:
     ip_window_minutes: int = 10             # ... per this many minutes
     secure_cookies: bool = True             # False only for local development over plain HTTP
     tls_cert: str = "/etc/valor/tls/server.crt"
-    ca_cert: str = "/etc/valor/tls/ca.crt"
     appliance_vmid: int = 0                 # the VALOR VM itself: the health page checks the token can't touch it
     public_url: str = ""                    # used in notification links
 

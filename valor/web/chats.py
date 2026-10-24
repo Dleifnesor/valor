@@ -349,7 +349,6 @@ def fix_prompt(job: dict, failures: list[str] | None = None) -> str:
 
 
 FIX_ROUNDS = 3                     # automatic fix-and-rebuild rounds for one failed build
-FIX_MODES = ("auto", "fix", "prepare")      # fix and rebuild on its own / fix on its own / prepare, the person approves
 PROVIDER_FAILED = {"ai_context_full", "ai_unreachable", "ai_auth", "ai_credits", "ai_rate_limited", "ai_error",
                    "ai_no_tools", "ai_truncated", "ai_not_configured"}      # another provider may well manage
 RISKY = ("replace", "remove")      # plan actions an automatic rebuild leaves to the person (VMs lost or rebuilt)
