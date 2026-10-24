@@ -35,6 +35,22 @@ AGENT_RETRIES = 3
 PS_START_WAIT = 300                                     # s: for a script whose start request timed out
 
 
+# Proxmox's guest-agent API handles text one character per byte (Latin-1): command output and file contents come
+# back with their UTF-8 bytes as separate characters ('●' arrives as 'â\x97\x8f'), stdin and file contents with a
+# character above U+00FF fail (HTTP 500 "Wide character"), and a non-ASCII command argument reaches the agent as
+# invalid JSON, which leaves it stuck until its parser is reset. So text goes to the agent as its UTF-8 bytes, comes
+# back decoded as UTF-8, and command arguments stay ASCII (anything else goes on stdin or into a file).
+def to_agent(text: str) -> str:
+    return text.encode("utf-8").decode("latin-1")
+
+
+def from_agent(text: str) -> str:
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except UnicodeError:            # not UTF-8 (e.g. a Windows code page): as it came
+        return text
+
+
 def _api_error(e: Exception, what: str) -> ValorError:
     if isinstance(e, ResourceException):
         msg = f"{what}: HTTP {e.status_code} {e.status_message}"
@@ -290,9 +306,12 @@ class PVE:
             self.wait_agent(vmid, 300)
 
     def exec(self, vmid: int, command: list[str], input_data: str | None = None, timeout: int = 900) -> ExecResult:
+        if not all(a.isascii() for a in command):
+            raise ValorError("agent_non_ascii", f"a command for VM {vmid} has non-ASCII arguments",
+                             hint="Proxmox would leave the guest agent stuck: pass such text on stdin or in a file.")
         params: dict = {"command": command}
         if input_data is not None:
-            params["input-data"] = input_data
+            params["input-data"] = to_agent(input_data)
         res = self.agent_call(vmid, f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
         return self.exec_wait(vmid, res["pid"], timeout)
 
@@ -304,7 +323,8 @@ class PVE:
             st = self.agent_call(vmid, f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get,
                                  resend=True, pid=pid)
             if st.get("exited"):
-                return ExecResult(st.get("exitcode"), st.get("out-data", "") or "", st.get("err-data", "") or "")
+                return ExecResult(st.get("exitcode"), from_agent(st.get("out-data", "") or ""),
+                                  from_agent(st.get("err-data", "") or ""))
             time.sleep(delay)
             delay = min(delay * 1.5, 3)
         return ExecResult(None, "", f"timed out after {timeout}s", timed_out=True)
@@ -314,16 +334,17 @@ class PVE:
         return self.exec(vmid, ["/bin/bash", "-s"], input_data=body, timeout=timeout)
 
     def write_file(self, vmid: int, path: str, content: str) -> None:
-        if len(content) > 60_000:
+        data = to_agent(content)
+        if len(data) > 60_000:
             raise ValorError("script_too_large", f"file for VM {vmid} exceeds the guest agent's 60 KiB limit")
         self.agent_call(vmid, f"write file in VM {vmid}", self.vm(vmid).agent("file-write").post, resend=True,
-                        file=path, content=content)             # opened "wb": writing it again is harmless
+                        file=path, content=data)                # opened "wb": writing it again is harmless
 
     def file_read(self, vmid: int, path: str) -> str | None:
         """A small file's content through the agent; None when it cannot be read (e.g. it does not exist yet)."""
         try:
-            return self.agent_call(vmid, f"read file in VM {vmid}", self.vm(vmid).agent("file-read").get, resend=True,
-                                   file=path).get("content", "")
+            return from_agent(self.agent_call(vmid, f"read file in VM {vmid}", self.vm(vmid).agent("file-read").get,
+                                              resend=True, file=path).get("content", ""))
         except ValorError:
             return None
 
@@ -337,7 +358,9 @@ class PVE:
         import secrets as _s
         path = f"C:\\Windows\\Temp\\valor-{_s.token_hex(8)}.ps1"
         pidfile = path + ".pid"
-        self.write_file(vmid, path, f"Set-Content -LiteralPath '{pidfile}' -Value $PID -Encoding ascii\r\n"
+        # the BOM makes Windows PowerShell read the script as UTF-8 (not ANSI); its output is UTF-8 as well
+        self.write_file(vmid, path, f"\ufeffSet-Content -LiteralPath '{pidfile}' -Value $PID -Encoding ascii\r\n"
+                        "try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {}\r\n"
                         "$ErrorActionPreference = 'Stop'\r\n" + body.replace("\r\n", "\n").replace("\n", "\r\n"))
         try:
             try:

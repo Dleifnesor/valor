@@ -35,3 +35,15 @@ Newest at the bottom. Keep entries short.
 - **Cause**: a check used `exit 1`, which inside a shell function ends the whole baseline script.
 - **Fix**: checks and fixes now run in their own subshell (`check_x() ( ... )`), so `exit` only ends that control.
   (2026-10-02, third build of web2tier)
+
+## Non-ASCII text through the guest agent
+- **Symptom**: command output shows `â\x97\x8f` for `●` (`cafÃ©` for `café`); writing a file or sending a script
+  with such a character fails with HTTP 500 "Wide character in subroutine entry"; a command *argument* with one
+  leaves the agent stuck ("got timeout", then "QEMU guest agent is not running").
+- **Cause**: Proxmox's agent API handles text one character per byte (Latin-1) in both directions, and sends a
+  non-ASCII argument to the agent as invalid JSON; the agent's parser then waits until it is reset (a 0xFF byte on
+  the VM's `/var/run/qemu-server/<vmid>.qga` socket, followed by `guest-sync-delimited`, frees it without a reboot).
+- **Fix**: built in (`valor/pve.py`: `to_agent` / `from_agent`): text goes to the agent as its UTF-8 bytes and comes
+  back decoded as UTF-8; `exec` refuses non-ASCII arguments (pass such text on stdin or in a file); PowerShell
+  scripts get a BOM and UTF-8 output. (2026-10-24, found in a range chat's `systemctl status`)
+

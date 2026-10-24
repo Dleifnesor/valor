@@ -136,7 +136,7 @@ def dispatch(cfg, args) -> int:
         vm = next((v for v in range_vms(pve, args.range) if v.host == args.host), None)
         if not vm:
             raise ValorError("vm_unknown", f"no host '{args.host}' in range '{args.range}'")
-        res = pve.exec(vm.vmid, ["/bin/bash", "-c", " ".join(cmd)], timeout=args.timeout)
+        res = pve.script(vm.vmid, " ".join(cmd), timeout=args.timeout)      # on stdin: any text works
         out({"exitcode": res.exitcode, "stdout": res.out[-20000:], "stderr": res.err[-5000:],
              "timed_out": res.timed_out}, True)
         return 0 if res.ok else EXIT["failed"]
