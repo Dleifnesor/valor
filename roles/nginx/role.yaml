@@ -1,4 +1,6 @@
-description: nginx web server with a minimal site naming the host and range
+description: >
+  nginx web server with a minimal site naming the host and range - or, with proxy_to, a reverse proxy that forwards
+  every request to another host (add the policy rule from this host to that host's port)
 families: [debian, rhel]
 ports: [80]
 params:
@@ -6,5 +8,14 @@ params:
     default: 80
     description: TCP port nginx listens on
   server_name:
+    raw: true
     default: "_"
     description: server_name of the site (default catch-all)
+  proxy_to:
+    default: ""
+    description: Host name (or IPv4 address) to reverse-proxy every request to, e.g. app (default - serve the page)
+  proxy_port:
+    raw: true
+    pattern: '^[0-9]{1,5}$'
+    default: 80
+    description: TCP port of the proxied host (plain HTTP)

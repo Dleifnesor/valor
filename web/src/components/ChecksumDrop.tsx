@@ -57,7 +57,7 @@ export function ChecksumDrop({ filename, onChecksum }: {
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.current?.click(); } }}
         onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={drop}>
         Drop a checksum file here (SHA256SUMS, CHECKSUM, <span className="mono">.sha256</span>) or click to choose one
-        <input ref={input} type="file" hidden accept=".sha256,.sha512,.sha1,.md5,.txt,.sum,.sums,text/plain,*"
+        <input name="checksum-file" ref={input} type="file" hidden accept=".sha256,.sha512,.sha1,.md5,.txt,.sum,.sums,text/plain,*"
           onChange={(e) => { void read(e.target.files?.[0]); e.target.value = ""; }} />
       </div>
       {error && <div className="small error-text" style={{ marginTop: 6 }}>{error}</div>}
@@ -73,7 +73,7 @@ export function ChecksumDrop({ filename, onChecksum }: {
       {source && entries.length > 1 && !chosen && (
         <label className="field" style={{ marginTop: 6 }}>
           <span className="small">{filename ? `No entry for ${filename} in ${source}` : `${source} lists ${entries.length} files`}: pick one</span>
-          <select defaultValue="" onChange={(e) => pickByHand(e.target.value)}>
+          <select name="checksum-entry" defaultValue="" onChange={(e) => pickByHand(e.target.value)}>
             <option value="" disabled>Choose the ISO's entry…</option>
             {entries.map((e, i) => <option key={i} value={i}>{e.name ?? "(no name)"} · {e.algorithm}</option>)}
           </select>

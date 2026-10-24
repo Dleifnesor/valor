@@ -5,6 +5,8 @@ families: [windows]
 ports: [445]
 params:
   share:
+    raw: true
+    pattern: '^[A-Za-z0-9_-]{1,32}$'
     default: Share
     description: Share name
   read_only:

@@ -4,6 +4,8 @@ ports: [53, 88, 135, 389, 445, 464, 636, 3268, 3269]
 wait_for: [dc]
 params:
   domain:
+    raw: true
+    pattern: '^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$'
     required: true
     description: DNS name of the existing domain
   dc:

@@ -8,8 +8,12 @@ params:
       Hosts or segments allowed to connect (spec names; hosts become /32, segments their network).
       Remember the router policy must also allow the traffic.
   database:
+    raw: true
+    pattern: '^[a-z_][a-z0-9_]{0,40}$'
     default: app
     description: Database to create (owned by 'user')
   user:
+    raw: true
+    pattern: '^[a-z_][a-z0-9_]{0,40}$'
     default: app
     description: Login role to create; its random password is stored on the host in /root/.valor-postgres-<user>
