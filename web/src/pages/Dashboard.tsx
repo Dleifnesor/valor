@@ -1,16 +1,6 @@
-import { Check, JobSummary } from "../types";
+import { Check, RangeRow } from "../types";
 import { ago, go, useApi } from "../hooks";
-import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
-import { jobTarget } from "./Jobs";
-
-interface RangeRow {
-  name: string;
-  has_spec: boolean;
-  description?: string;
-  vms: number;
-  running: number;
-  last_verify: null | { ok: boolean; finished: string; summary: Record<string, any> };
-}
+import { Card, ErrorBox, Icon, Loading, StateBadge } from "../components/ui";
 
 interface Status {
   version: string;
@@ -35,95 +25,90 @@ interface Status {
 
 const gib = (mib: number) => `${(mib / 1024).toFixed(0)} GiB`;
 
-export function Dashboard() {
+/** Datacenter -> Summary: health, VMs and resources at a glance, then every range. */
+export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; canOperate: boolean }) {
   const { data, error, loading } = useApi<Status>("/api/status", 30000);
-  const list = useApi<{ ranges: RangeRow[] }>("/api/ranges", 30000);
-  const jobs = useApi<{ jobs: JobSummary[] }>("/api/jobs?limit=8", 10000);
   if (loading && !data) return <Loading label="Checking the cluster…" />;
   if (!data) return <ErrorBox error={error} />;
   const c = data.cluster;
   const problems = data.checks.filter((x) => x.status === "problem");
-  const ranges = c ? Object.values(c.ranges) : [];
+  const vms = (ranges ?? []).reduce((a, r) => a + r.vms, 0);
+  const running = (ranges ?? []).reduce((a, r) => a + r.running, 0);
   return (
     <>
-      {problems.length > 0 && (
-        <div className="alert error">
-          {problems.length === 1 ? "One check needs attention" : `${problems.length} checks need attention`}:{" "}
-          {problems.map((p) => p.name).join(", ")}.
-        </div>
-      )}
-      {c && (
-        <div className="card stats">
-          <div className="stat">
-            <div className="label">Range node</div>
-            <div className="value">{c.node}</div>
-            <div className="sub">{c.cpu_threads} CPU threads</div>
-          </div>
-          <div className="stat">
-            <div className="label">Free memory</div>
-            <div className="value">{gib(c.memory_free_mib)}</div>
-            <div className="sub">of {gib(c.memory_total_mib)}</div>
-          </div>
-          <div className="stat">
-            <div className="label">Range storage</div>
-            <div className="value">{c.storage.available_gib.toFixed(0)} GiB</div>
-            <div className="sub">free on {c.storage.id}</div>
-          </div>
-          <div className="stat">
-            <div className="label">Ranges</div>
-            <div className="value">{ranges.length}</div>
-            <div className="sub">
-              {ranges.reduce((a, r) => a + r.running, 0)} of {ranges.reduce((a, r) => a + r.vms, 0)} VMs running ·{" "}
-              {data.jobs.running ? "a job is running" : data.jobs.queued ? `${data.jobs.queued} queued` : "idle"}
+      <div className="summary-row">
+        <Card title="Health">
+          <div className="health">
+            <span className={`health-mark ${problems.length ? "bad" : "ok"}`}><Icon name={problems.length ? "info" : "check"} size={30} /></span>
+            <div>
+              <b>{problems.length ? `${problems.length} of ${data.checks.length} checks need attention` : `All ${data.checks.length} checks pass`}</b>
+              {problems.length > 0 && <div className="error-text small">{problems.map((p) => p.name).join(", ")}</div>}
+              <div className="muted small">
+                Jobs: {data.jobs.running ? `${data.jobs.running} running` : "idle"}{data.jobs.queued ? `, ${data.jobs.queued} queued` : ""}
+              </div>
             </div>
           </div>
-        </div>
-      )}
-      <div className="dash">
-        <Card title="Ranges" bodyClass="" actions={<a className="small" href="#/ranges">All ranges</a>}>
-          {list.data && !list.data.ranges.length && <div className="empty">No ranges yet.</div>}
-          {!!list.data?.ranges.length && (
+        </Card>
+        <Card title="Guests">
+          <dl className="kv">
+            <dt>Ranges</dt><dd>{ranges?.length ?? "–"} ({(ranges ?? []).filter((r) => r.vms).length} built)</dd>
+            <dt>Running VMs</dt><dd><StateBadge state={running ? "ok" : "unknown"} label={String(running)} /></dd>
+            <dt>Stopped VMs</dt><dd><StateBadge state="unknown" label={String(vms - running)} /></dd>
+          </dl>
+        </Card>
+        <Card title="Resources">
+          {c ? (
+            <dl className="kv">
+              <dt>Range node</dt><dd>{c.node} · {c.cpu_threads} CPU threads</dd>
+              <dt>Memory</dt><dd>{gib(c.memory_free_mib)} free of {gib(c.memory_total_mib)}</dd>
+              <dt>Storage</dt><dd>{c.storage.available_gib.toFixed(0)} GiB free on {c.storage.id}</dd>
+            </dl>
+          ) : <div className="muted">The cluster did not answer.</div>}
+        </Card>
+      </div>
+
+      <Card title="Ranges" bodyClass="">
+        {!ranges ? <Loading /> : !ranges.length ? (
+          <div className="empty">No ranges yet.{canOperate && <> <button className="link" onClick={() => go("ranges/new")}>Create range</button> or
+            use the <button className="link" onClick={() => go("builder")}>chat builder</button>.</>}</div>
+        ) : (
+          <div className="table-wrap">
             <table>
+              <thead><tr><th>Name</th><th>Description</th><th>Layout</th><th>VMs</th><th>Last build</th><th>Verification</th></tr></thead>
               <tbody>
-                {list.data.ranges.map((r) => (
-                  <tr key={r.name} className="clickable" onClick={() => r.has_spec && go(`ranges/${r.name}`)}>
-                    <td className="fill"><b>{r.name}</b><div className="muted small clip">{r.description}</div></td>
+                {ranges.map((r) => (
+                  <tr key={r.name} className={r.has_spec ? "clickable" : ""} onClick={() => r.has_spec && go(`ranges/${r.name}`)}>
+                    <td className="nowrap">
+                      <b>{r.name}</b>
+                      {!r.has_spec && <span className="badge warn" style={{ marginLeft: 8 }}>no spec</span>}
+                      {r.version && r.deployed_version && r.version !== r.deployed_version && (
+                        <span className="badge info" style={{ marginLeft: 8 }} title="The spec changed since the last build">changed</span>
+                      )}
+                    </td>
+                    <td className="fill"><span className="clip">{r.error ?? r.description}</span></td>
+                    <td className="nowrap">{r.segments ?? "–"} segments · {r.hosts ?? "–"} hosts</td>
                     <td className="nowrap">{r.vms ? <StateBadge state={r.running === r.vms ? "ok" : r.running ? "warn" : "unknown"}
                       label={`${r.running}/${r.vms} running`} /> : <span className="muted">not built</span>}</td>
+                    <td className="nowrap">{r.last_apply ? <><StateBadge state={r.last_apply.ok ? "ok" : "failed"}
+                      label={r.last_apply.ok ? "succeeded" : "failed"} /> <span className="muted small">· {ago(r.last_apply.started)}</span></> : "–"}</td>
                     <td className="nowrap">{r.last_verify ? <StateBadge state={r.last_verify.ok ? "ok" : "failed"}
-                      label={`${r.last_verify.ok ? "passed" : "failed"} ${r.last_verify.summary?.tests_passed}/${r.last_verify.summary?.tests_total}`} />
-                      : <span className="muted">not verified</span>}</td>
+                      label={`${r.last_verify.ok ? "passed" : "failed"} · ${r.last_verify.summary?.tests_passed}/${r.last_verify.summary?.tests_total} tests`} /> : "–"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
-        </Card>
-        <Card title="Recent jobs" bodyClass="" actions={<a className="small" href="#/jobs">All jobs</a>}>
-          {jobs.data && !jobs.data.jobs.length && <div className="empty">No jobs yet.</div>}
-          {!!jobs.data?.jobs.length && (
-            <table>
-              <tbody>
-                {jobs.data.jobs.map((j) => (
-                  <tr key={j.id} className="clickable" onClick={() => go(`jobs/${j.id}`)}>
-                    <td className="fill"><div className="clip">{j.kind}{j.target.verify ? " + verify" : ""} <span className="muted">· {jobTarget(j.target)}</span></div></td>
-                    <td className="nowrap"><StateBadge state={j.state} /></td>
-                    <td className="nowrap muted right hide-narrow">{ago(j.created)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
-        <Card title="Health checks" bodyClass="" actions={problems.length === 0 &&
-          <StateBadge state="ok" label={`all ${data.checks.length} pass`} />}>
+          </div>
+        )}
+      </Card>
+
+      <div className="dash">
+        <Card title="Health checks" bodyClass="">
           <table>
             <tbody>
               {data.checks.map((x) => (
                 <tr key={x.name}>
-                  <td style={{ width: 24 }}><span className={`dot ${x.status === "ok" ? "ok" : x.status === "problem" ? "bad" : ""}`} /></td>
-                  <td className="nowrap"><b>{x.name}</b></td>
-                  <td>
+                  <td className="nowrap"><StateBadge state={x.status === "ok" ? "ok" : x.status === "problem" ? "failed" : "unknown"} label={x.name} /></td>
+                  <td className="fill">
                     {x.detail}
                     {x.hint && <div className="muted small">{x.hint}</div>}
                   </td>
@@ -133,7 +118,7 @@ export function Dashboard() {
           </table>
         </Card>
         {c && (
-          <Card title="Cluster resources for VALOR">
+          <Card title="What VALOR uses on the cluster">
             <dl className="kv">
               <dt>Segment bridge</dt><dd className="mono">{c.segment_bridge.name} (VLANs {c.segment_bridge.usable_vlans})</dd>
               <dt>Uplink bridge</dt><dd className="mono">{c.uplink_bridge.name}</dd>
@@ -141,7 +126,7 @@ export function Dashboard() {
               <dt>Default OS</dt><dd>{c.default_os}</dd>
               <dt>Templates</dt>
               <dd>
-                <div className="row" style={{ gap: 6 }}>
+                <div className="row" style={{ gap: 4, columnGap: 12 }}>
                   {Object.entries(c.templates).map(([os, t]) => (
                     <StateBadge key={os} state={t.present ? "ok" : "unknown"} label={`${os}${t.present ? "" : " (not built)"}`} />
                   ))}

@@ -6,6 +6,7 @@ the [documentation index](README.md#words-used-in-these-documents).
 
 - [Signing in](#signing-in)
 - [Who can do what](#who-can-do-what)
+- [Finding your way](#finding-your-way)
 - [Building your first range](#building-your-first-range)
 - [Plans and approval](#plans-and-approval)
 - [The range page](#the-range-page)
@@ -35,7 +36,7 @@ trust it once in your OS or browser.
    of an authenticator code, so keep them somewhere safe.
 3. Later sign-ins ask for the password and a current code.
 
-On the **Account** page you change your password and make new recovery codes. After 5 wrong passwords or codes in a
+Under your name (top right) -> **My account** you change your password and make new recovery codes. After 5 wrong passwords or codes in a
 row, an account is locked for 15 minutes (an administrator can unlock it sooner). Sessions end after 30 minutes
 without activity and after 12 hours at most.
 
@@ -46,12 +47,27 @@ your directory groups, and two-factor authentication is still required.
 
 | Role | Can |
 |---|---|
-| **Viewer** | See the dashboard, ranges, maps, verification results, journals, jobs, snapshots, the ISO library, blueprints and their own chats. |
+| **Viewer** | See the summary, ranges, maps, verification results, journals, jobs, snapshots, the ISO library, blueprints and their own chats. |
 | **Operator** | Everything a viewer can, plus: write and save specs, plan and approve builds, verify, destroy, edit ranges on the map, use the chat builder and range chats, open VM consoles, see range logins and WireGuard configs, power and snapshots, add ISOs, manage blueprints. |
 | **Admin** | Everything an operator can, plus: users, the audit log, settings (notifications, LDAP, AI providers), deleting ISOs, and reading every user's chats. |
 
 Viewing a range login or a WireGuard peer config, opening a console and every change are recorded in the audit
 log.
+
+## Finding your way
+
+The web UI is laid out like Proxmox VE's:
+
+| Part | What it holds |
+|---|---|
+| **Header** | **Search** (ranges and VMs by name, VMID or description), **Create range**, **Chat builder**, and your name: **My account**, light / dark theme, sign out. The menu button at the left shows or hides the tree. |
+| **Resource tree** (left) | VALOR itself (**Datacenter**), every range, and each built range's VMs as `VMID (host)`. A green mark means running. Click an entry to open it. |
+| **Panel** (right) | The selected entry: its actions in the title bar (for a range: Start, Shutdown, Login, Verify, Plan, More), its sections on the left, the section on the right. |
+| **Tasks** (bottom) | The latest jobs with their start and end time, range, user and status; click one for the task viewer (its steps, live). **Notifications** next to it holds VALOR's messages. The arrow at the right folds the list away. |
+
+The **Datacenter** sections: **Summary** (health, VMs, resources, every range, health checks), **Chats**,
+**Blueprints**, **ISO library**, **Jobs**, and for administrators **Users**, **Audit log** and the settings
+(**Directory (LDAP)**, **AI providers**, **Notifications**, **Certificate**).
 
 ## Building your first range
 
@@ -60,7 +76,7 @@ that runs only after you approve it.
 
 ### With the chat builder
 
-**Chat builder** (left menu) -> describe the environment in plain words, for example:
+**Chat builder** (top right) -> describe the environment in plain words, for example:
 
 > A DMZ with an nginx web server that can reach the internet, and an isolated LAN with PostgreSQL that only the web
 > server can reach on 5432.
@@ -71,11 +87,11 @@ before you see it. The result is shown as a map with the spec next to it. Keep r
 ("add a Kali attacker host in its own segment that can reach the DMZ"). When it looks right, use **Save as range** or
 **Open in editor**.
 
-The chat builder needs an AI provider. An administrator connects one under **Settings -> AI providers**.
+The chat builder needs an AI provider. An administrator connects one under **Datacenter -> AI providers**.
 
 ### With the spec editor
 
-**Ranges -> New range** opens the editor. Write or paste a spec (format:
+**Create range** (top right) opens the editor. Write or paste a spec (format:
 [spec reference](../valor/spec-reference.md); examples: [`examples/`](../examples/)). The side
 panel lists what this cluster offers: operating systems, roles, baselines, VLANs in use and networks to avoid.
 **Check** validates the spec and shows its map. **Save spec** keeps it.
@@ -86,8 +102,8 @@ See [Blueprints](#blueprints-many-copies-of-one-range).
 
 ### Build it
 
-On the range page, **Plan build** shows the plan on the map and as a list. Read it, then **Approve and build**. The
-build runs as a job: **Jobs** (or the range page) shows its steps live. A typical build:
+Select the range in the tree: **Plan build** shows the plan on the map and as a list. Read it, then **Approve and build**. The
+build runs as a job: the task viewer opens and shows its steps live (it stays in **Tasks** at the bottom). A typical build:
 
 1. creates the router and hosts as linked clones of the OS templates (about a minute each),
 2. opens temporary internet access for package installs,
@@ -97,7 +113,7 @@ build runs as a job: **Jobs** (or the range page) shows its steps live. A typica
    host,
 6. takes a snapshot named `valor-clean` if verification passed.
 
-Results are on the range page's **Verification** tab. When something fails, see
+Results are in the range's **Verification** section. When something fails, see
 [When a build fails](#when-a-build-fails).
 
 ## Plans and approval
@@ -124,21 +140,23 @@ Re-applying an unchanged spec makes no changes.
 
 ## The range page
 
-The header shows the range's description, a line of facts (spec version, VMs running, last build, last
-verification) and its actions: **Plan build** / **Plan changes**, **Verify**, **Login**, power, **Edit spec** and,
-set apart, **Destroy**. The tabs:
+Select a range in the tree. The title bar holds its actions: **Start** and **Shutdown** (shut down, reboot or force
+stop every VM), **Login**, **Verify**, **Plan build** / **Plan changes**, and under **More** **Edit spec** and
+**Destroy**. The sections:
 
-| Tab | What it shows |
+| Section | What it shows |
 |---|---|
+| **Summary** | Status (VMs running, spec version, last build, last verification), the description, and every VM with its VMID, power state, segment, address, OS, size and services, with **Console**, **Start**, **Reboot** and **Shut down**. |
 | **Map** | The topology: router, segments, hosts, allowed traffic and WireGuard access. Click a node for its details. This is also where you edit the range and open the range chat. |
-| **Hosts** | Every VM with its address, OS, size, services, VMID and power state, and its **Console** button. |
-| **Access** | WireGuard peers: status, configs and new keys (when the spec has `access.wireguard`). |
+| **Verification** | The last verification: each test (expected / observed), the baseline control x host matrix and, if the spec names frameworks, the compliance report. Before the first build: the tests it will run (explicit and automatic). |
 | **Snapshots** | The range's snapshots: take, reset to, delete. |
-| **Tests** | The connectivity tests the verification runs (explicit and automatic). |
-| **Verification** | The last verification: each test (expected / observed), the baseline control x host matrix and, if the spec names frameworks, the compliance report. |
-| **Spec** | The YAML the range was built from. |
+| **Access** | WireGuard peers: status, configs and new keys (when the spec has `access.wireguard`). |
+| **Spec** | The YAML the range was built from; **Edit** opens the editor. |
 | **Journal** | A generated Markdown page: topology, hosts, network, policy, verification matrix, history. |
 | **History** | Every build and verification with its result and duration. |
+
+A VM in the tree has two sections: **Summary** (status, VMID, segment, address, OS, size, services) and **Console**,
+with **Start**, **Shutdown** and **Console** in its title bar.
 
 ## Changing a built range
 
@@ -146,7 +164,7 @@ Change a range by editing its spec (**Edit spec**), on the map, or through the r
 into a **draft**: the map shows them in the plan colors (added, changed, rebuilt, removed), and nothing changes on the
 cluster until you build the draft.
 
-On the **Map** tab (operators):
+In the **Map** section (operators):
 
 - **Add a VM**: name, segment, OS, size and services. For new services you choose who may reach them, and VALOR adds
   the matching traffic rules.
@@ -184,14 +202,14 @@ it on; see below.)
 
 The job shows which step failed, on which host, the last lines of output and often a hint. Finished parts are kept:
 fix the cause and apply again, and the build continues where it is needed. If verification fails, the
-**Verification** tab shows which test or control failed.
+**Verification** section shows which test or control failed.
 
 The assistant can fix failed builds:
 
 - **Ask the assistant to fix it** on a failed job opens a range chat in Code mode with the failure as its first
   message. It looks inside the VMs, fixes the cause (in the VMs, in the spec, or both) and tells you whether to
   rebuild.
-- An administrator can make this automatic (**Settings -> AI providers**, *Failed builds go to*):
+- An administrator can make this automatic (**Datacenter -> AI providers**, *Failed builds go to*):
   - **Fix and rebuild on its own**: the assistant fixes and VALOR rebuilds, up to 3 rounds. It never approves a plan
     that would replace or remove a VM; those wait for a person.
   - **Fix on its own; the person rebuilds.**
@@ -201,8 +219,8 @@ The fix chat is listed under **Chats** and linked from the job.
 
 ## Getting into a range
 
-**Consoles.** On the **Hosts** tab, **Console** opens a VM's screen (noVNC) or serial console in the browser. The
-browser only talks to VALOR, never to Proxmox. **Type password** types the range login into the console.
+**Consoles.** Select a VM in the tree -> **Console** (or **Console** next to it on the range's **Summary**): its
+screen (noVNC) or serial console in the browser. The browser only talks to VALOR, never to Proxmox. **Type password** types the range login into the console.
 
 **Range login.** Every range has one generated password (shown with **Login**, operators only):
 
@@ -215,7 +233,7 @@ browser only talks to VALOR, never to Proxmox. **Type password** types the range
 The password is stored encrypted, set inside the VMs over the guest agent, and can be changed with **New password...**
 (VALOR sets the new one on every VM). SSH accepts keys only, so the password is for the consoles.
 
-**WireGuard.** If the spec has `access.wireguard`, the range router runs a WireGuard server. The **Access** tab lists
+**WireGuard.** If the spec has `access.wireguard`, the range router runs a WireGuard server. The **Access** section lists
 the peers with their connection status; **Config...** shows a peer's configuration with a QR code and a download.
 Peers reach only the segments listed in `reach`, never the internet or your LAN through the tunnel. **New keys...**
 replaces one peer's keys. The router listens on its LAN address; set `endpoint` in the spec if peers connect
@@ -223,8 +241,8 @@ through a port forward.
 
 ## Power and snapshots
 
-The power menu starts, shuts down, reboots or force-stops every VM of the range (the router comes up first and goes
-down last). On the **Snapshots** tab you take a snapshot of every VM at once, **Reset to this** (every VM goes back to
+**Start** and **Shutdown** in the range's title bar start, shut down, reboot or force-stop every VM of the range (the
+router comes up first and goes down last); a VM's own title bar does the same for one VM. In **Snapshots** you take a snapshot of every VM at once, **Reset to this** (every VM goes back to
 that snapshot and starts, then VALOR verifies the range again) or delete one. After every verified build VALOR takes
 `valor-clean` itself, so you can always go back to the state that passed verification.
 
@@ -233,11 +251,11 @@ Some storage types (ZFS) only roll back to the newest snapshot; VALOR says so an
 ## Removing a range
 
 **Destroy** shows which VMs will be deleted and asks for confirmation. Only VMs in VALOR's range pool that carry the
-range's tag are removed. The spec stays, so the range can be built again (**Plan build** on the same page).
+range's tag are removed. The spec stays, so the range can be built again (**Plan build** in the same place).
 
 ## ISO library
 
-**ISO library** lists the installer media on the cluster's ISO storage.
+**Datacenter -> ISO library** lists the installer media on the cluster's ISO storage.
 
 - **Download to the cluster** from VALOR's catalog: official media where VALOR checks the publisher's signed
   checksum list before downloading, and Proxmox checks the file's checksum. Point releases are picked up
@@ -255,7 +273,7 @@ Uses: attach an ISO to a host as a CD-ROM (`iso:` in the spec), install Rocky or
 
 A blueprint is a spec kept as a pattern, for example a lab every student gets.
 
-1. **Blueprints -> New blueprint** (paste a spec) or **From a range**.
+1. **Datacenter -> Blueprints -> New blueprint** (paste a spec) or **From a range**.
 2. **Deploy copies...**: choose **Numbered copies** (`lab-1`, `lab-2`, ...) or **One per student** (a name per
    student).
 3. The preview shows every copy with its own name, free VLANs, private networks and WireGuard tunnel network. Hosts
@@ -274,7 +292,7 @@ PCI DSS, HIPAA, CIS Level 1). VALOR then:
 - requires a strong enough baseline (`linux-moderate`, with `windows-moderate` for Windows hosts),
 - checks the design at plan time (segments holding regulated data have no internet, central logging, deny by
   default) and warns about gaps,
-- reports per requirement on the **Verification** tab: which control or test is the evidence, and its result.
+- reports per requirement in the range's **Verification** section: which control or test is the evidence, and its result.
 
 Most requirements of every framework are organizational (policies, training, incident response) and are listed as
 not covered. Results are always described as **aligned with** a framework's technical requirements, never as
@@ -283,29 +301,30 @@ compliant or certified. In the chat builder you can simply ask for a framework (
 
 ## Administration
 
-**Users** (admins): create accounts with a role, change roles, disable, unlock, reset a password (the user must
+Administrators find these in the **Datacenter** sections.
+
+**Users**: create accounts with a role, change roles, disable, unlock, reset a password (the user must
 choose a new one at the next sign-in) or reset MFA (the user sets it up again), delete.
 
-**Audit log** (admins): every sign-in, change, approval, console session and secret view, with who, when, from where
+**Audit log**: every sign-in, change, approval, console session and secret view, with who, when, from where
 and the outcome. Searchable.
 
-**Settings** (admins):
+The settings:
 
 | Section | |
 |---|---|
-| Where VALOR reports builds and problems | Notification channels: email (SMTP), Discord, Slack, Microsoft Teams, and in-app notifications (the bell). Each channel gets problems only or all events; **Test** sends a test message. |
-| Sign in with LDAP or Active Directory | Server, service account, user search, and the groups that map to admin / operator / viewer. **Test** checks a user lookup. |
-| AI providers for the chats | One or more providers: OpenRouter (hosted models, Claude among them) or any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API...). One is the default; a chat can pick another. Per provider: model, base URL, API key (encrypted, never shown again), max tokens per answer, and a silence timeout for slow local models. Also: the daily token budget per user (0 = unlimited) and where failed builds go. |
-| Usage | AI tokens per user and day for the last 30 days. |
-| Web certificate | The certificate the web UI uses and when it expires. |
-| About | Version and instance. |
+| Directory (LDAP) | Sign in with LDAP or Active Directory: server, service account, user search, and the groups that map to admin / operator / viewer. **Test** checks a user lookup. |
+| AI providers | One or more providers for the chats: OpenRouter (hosted models, Claude among them) or any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API...). One is the default; a chat can pick another. Per provider: model, base URL, API key (encrypted, never shown again), max tokens per answer, and a silence timeout for slow local models. Also: the daily token budget per user (0 = unlimited), where failed builds go, and the AI tokens per user and day for the last 30 days. |
+| Notifications | Where VALOR reports builds and problems: email (SMTP), Discord, Slack, Microsoft Teams, and in-app notifications (**Notifications** next to **Tasks**). Each channel gets problems only or all events; **Test** sends a test message. |
+| Certificate | The certificate the web UI uses and when it expires; VALOR's version and instance. |
 
 A local model needs a large context window: load it with at least 32,768 tokens of context (VALOR's prompt alone
 is several thousand). Range chats in Code mode need a model with tool support.
 
-**Dashboard**: your ranges and the recent jobs, health checks (Proxmox API, the token's scope, templates, range
-network, certificate, disk space, OS updates; a red banner when one fails) and the facts VALOR builds with: range
-node, storage, bridges, reserved networks, free memory, templates.
+**Datacenter -> Summary**: health at a glance, running and stopped VMs, free memory and storage, every range with
+its last build and verification, the health checks (Proxmox API, the token's scope, templates, range network,
+certificate, disk space, OS updates) and what VALOR uses on the cluster: bridges, reserved networks, default OS,
+templates.
 
 ## Troubleshooting
 
@@ -314,8 +333,8 @@ node, storage, bridges, reserved networks, free memory, templates.
 | "The plan changed since you reviewed it" | The spec or the cluster changed after you opened the plan. Review the new plan and approve that one. |
 | A build waits for "the worker" | Another job is running; VALOR runs one infrastructure job at a time. It starts when the current one ends. |
 | A host has no internet | Only segments with `internet: true` get internet access after the build. During the build every segment gets temporary access for package installs. |
-| Two hosts cannot talk | Traffic between segments needs a policy rule (from the side that opens the connection). Hosts in the same segment reach each other without one. The Map tab shows the rules. |
+| Two hosts cannot talk | Traffic between segments needs a policy rule (from the side that opens the connection). Hosts in the same segment reach each other without one. The range's Map shows the rules. |
 | An OS is missing from the list | It has no template on this cluster yet. An administrator builds it with `./install.sh --template <os>` ([INSTALL.md](INSTALL.md#more-operating-systems)). |
-| The chat builder says no provider is connected, or the model's context is too small | **Settings -> AI providers**; for a local model, load it with a larger context length. |
+| The chat builder says no provider is connected, or the model's context is too small | **Datacenter -> AI providers**; for a local model, load it with a larger context length. |
 | A console stays black | The VM may still be booting, or it is a Windows VM before setup finished. **Reconnect**, or open the serial console for Linux hosts. |
 | Locked out of the web UI | An admin unlocks the account (**Users**). If no admin can sign in: [break-glass commands](CLI.md#valor-web) on the Proxmox node. |

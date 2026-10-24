@@ -17,6 +17,22 @@ export function go(path: string) {
   window.location.hash = "/" + path.replace(/^\//, "");
 }
 
+// A started job opens in the task viewer over the current page (the shell listens), as Proxmox does with its tasks.
+export function openTask(id: string) {
+  window.dispatchEvent(new CustomEvent("valor-task", { detail: id }));
+}
+
+export function useStored(key: string, initial: boolean): [boolean, (v: boolean) => void] {
+  const [value, setValue] = useState(() => {
+    try { const v = localStorage.getItem(key); return v === null ? initial : v === "1"; } catch { return initial; }
+  });
+  const set = (v: boolean) => {
+    setValue(v);
+    try { localStorage.setItem(key, v ? "1" : "0"); } catch { /* not kept */ }
+  };
+  return [value, set];
+}
+
 export interface Loaded<T> {
   data: T | null;
   error: ApiError | null;

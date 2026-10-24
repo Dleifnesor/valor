@@ -6,7 +6,7 @@ import { TopologyMap } from "../components/Topology";
 import { BuilderInfo, Chat, ChatLog, ProviderPick, useChat } from "../components/ChatFeed";
 
 // Chat builder: describe an environment; the AI asks what it needs to know (clickable question cards), writes the
-// range spec, VALOR validates it and shows it on the map. Conversations are saved (Chats page) and can be continued.
+// range spec, VALOR validates it and shows it on the map. Conversations are saved (Datacenter → Chats) and can be continued.
 // Nothing is built from here: the spec goes to the editor or is saved as a range, then planned and approved.
 
 const EXAMPLES = [
@@ -33,10 +33,10 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
         <h2 style={{ marginTop: 0 }}>The chat builder is off</h2>
         <p className="muted">
           It needs an AI provider (OpenRouter, or an OpenAI-compatible endpoint such as a model server on your
-          network). {isAdmin ? <>Connect one in <button className="link" onClick={() => go("settings")}>Settings → AI providers</button>.</>
-            : "Ask an administrator to connect one in Settings."}
+          network). {isAdmin ? <>Connect one in <button className="link" onClick={() => go("settings/ai")}>Datacenter → AI providers</button>.</>
+            : "Ask an administrator to connect one (Datacenter → AI providers)."}
         </p>
-        <p className="muted">You can always write a spec yourself: <button className="link" onClick={() => go("ranges/new")}>New range</button>.</p>
+        <p className="muted">You can always write a spec yourself: <button className="link" onClick={() => go("ranges/new")}>Create range</button>.</p>
       </div></section>
     );
   }

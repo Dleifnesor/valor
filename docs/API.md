@@ -57,14 +57,14 @@ page follows that table.
 | Method and path | Access | What it does |
 |---|---|---|
 | `GET /api/health` | public | Liveness only: `{"ok": true}`. |
-| `GET /api/status` | viewer | The health checks and cluster facts shown on the dashboard. |
+| `GET /api/status` | viewer | The health checks and cluster facts shown on Datacenter -> Summary. |
 | `GET /api/catalog` | viewer | What specs can use on this cluster: OS templates, roles (with parameters), baselines, VLANs in use, reserved networks. |
 
 ### Ranges, plans and builds
 
 | Method and path | Access | What it does |
 |---|---|---|
-| `GET /api/ranges` | viewer | Every range with its last build and verification. |
+| `GET /api/ranges` | viewer | Every range with its last build and verification, and its VMs (`machines`: host, VMID, status). |
 | `GET /api/ranges/{name}` | viewer | One range: spec (YAML and parsed), version, map, VMs, tests, last verification, history, journal. |
 | `POST /api/specs/check` | operator | Validate a spec that is not saved (schema and cluster) and return its map. |
 | `PUT /api/ranges/{name}/spec` | operator | Save a spec. |
@@ -73,7 +73,7 @@ page follows that table.
 | `POST /api/ranges/{name}/apply` | operator | Build. Send the `plan_hash` you approved; `409 plan_changed` if the plan differs now. With `draft: true` the draft becomes the spec first. |
 | `POST /api/ranges/{name}/verify` | operator | Run the verification again. |
 | `POST /api/ranges/{name}/destroy` | operator | Delete the range's VMs (needs the range name as confirmation). |
-| `GET /api/jobs` | viewer | Recent jobs. |
+| `GET /api/jobs` | viewer | Recent jobs, with who started each (`origin`) and, for a failed one, its `error`. |
 | `GET /api/jobs/{job_id}` | viewer | One job: state, events (`tail` limits them), result. |
 
 ### Drafts (editing a built range)

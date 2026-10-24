@@ -109,7 +109,10 @@ def list_jobs(cfg, limit: int = 20) -> list[dict]:
     for d in sorted(root.iterdir(), reverse=True)[:limit] if root.exists() else []:
         try:
             j = json.loads((d / "job.json").read_text())
-            out.append({k: j.get(k) for k in ("id", "kind", "state", "target", "created", "finished")})
+            item = {k: j.get(k) for k in ("id", "kind", "state", "target", "created", "finished", "origin")}
+            if item["state"] == "failed" and (d / "result.json").exists():
+                item["error"] = json.loads((d / "result.json").read_text()).get("error")
+            out.append(item)
         except Exception:
             continue
     return out

@@ -99,3 +99,16 @@ def test_disk_size_from_config():
     assert A._disk_gib("valor-tank:base-5901-disk-1/vm-5024-disk-1,discard=on,size=64G,ssd=1") == 64   # once crashed
     assert A._disk_gib("local-lvm:vm-1-disk-0,size=10G") == 10 and A._disk_gib("x:vm-1-disk-0,size=1T") == 1024
     assert A._disk_gib("x:vm-1-disk-0,size=512M") == 0.5 and A._disk_gib("x:vm-1-disk-0") == 0 and A._disk_gib("") == 0
+
+
+def test_job_list_names_who_started_it_and_why_it_failed(cfg):
+    """The task log in the web UI shows each job's user and, for a failed one, its error."""
+    from valor import jobs
+    ok = jobs.create(cfg, "verify", {"range": "lab"}, "web:olivia")
+    bad = jobs.create(cfg, "apply", {"spec": "lab.yaml"}, "cli")
+    jobs.update(cfg, ok, state="succeeded")
+    jobs.finish(cfg, bad, {"ok": False, "error": "role_failed", "message": "role 'nginx' failed on web"})
+    jobs.update(cfg, bad, state="failed")
+    rows = {j["id"]: j for j in jobs.list_jobs(cfg)}
+    assert rows[ok]["origin"] == "web:olivia" and "error" not in rows[ok]
+    assert rows[bad]["origin"] == "cli" and rows[bad]["error"] == "role_failed"
