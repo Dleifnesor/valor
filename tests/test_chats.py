@@ -8,10 +8,12 @@ import time
 
 import pytest
 
-from valor import agent, ai, drafts, validate
+from valor import agent, ai, drafts, ops, validate
 from valor.cluster import VMState
+from valor.errors import ValorError
 from valor.pve import ExecResult
 from valor.web import builder, chats, db
+from valor.web.chats import autofix, turn
 
 from test_builder import GOOD, Stream
 from test_editing import SPEC, _app
@@ -75,13 +77,13 @@ def lab(env, tmp_path, monkeypatch):
     pve = FakePVE()
     vms = [VMState(201, "lab-rtr", "running", [], {"host": "rtr"}), VMState(202, "lab-web", "running", [], {"host": "web"}),
            VMState(203, "lab-pc", "stopped", [], {"host": "pc"})]
-    monkeypatch.setattr(chats, "PVE", lambda c: pve)
-    monkeypatch.setattr(chats, "range_vms", lambda p, name, **k: vms)
-    monkeypatch.setattr(chats, "reference_for", lambda c, p: "REFERENCE")
-    monkeypatch.setattr(chats, "load_catalog", lambda c: {})
-    monkeypatch.setattr(chats, "validate_cluster", lambda p, s: {"ok": False, "errors": []})
-    check = chats.spec_check
-    monkeypatch.setattr(chats, "spec_check", lambda c, p, name="": check(c, None, name))
+    for mod in (turn, autofix):
+        monkeypatch.setattr(mod, "PVE", lambda c: pve)
+        monkeypatch.setattr(mod, "validate_cluster", lambda p, s: {"ok": False, "errors": []})
+    monkeypatch.setattr(turn, "range_vms", lambda p, name, **k: vms)
+    monkeypatch.setattr(turn, "reference_for", lambda c, p: "REFERENCE")
+    monkeypatch.setattr(turn, "load_catalog", lambda c: {})
+    monkeypatch.setattr(turn, "spec_check", lambda c, p, name="": builder.spec_check(c, None, name))
     return app, wcfg, cfg, pve
 
 
@@ -409,7 +411,7 @@ def test_tool_calls_on_the_wire(monkeypatch):
             {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "read_file", "arguments": '{"host":'}}]}}]},
             {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": ' "web", "path": "/etc/hosts"}'}}]},
                           "finish_reason": "tool_calls"}]}])
-    monkeypatch.setattr(ai.requests, "post", post)
+    monkeypatch.setattr(ai.providers.requests, "post", post)
     tools = agent.tool_specs("code")
     turn = [{"role": "user", "content": "go"},
             {"role": "assistant", "content": "", "tool_calls": [{"id": "call_0", "name": "run_command",
@@ -485,10 +487,11 @@ def _fake_builds(monkeypatch, cfg, plan_actions=(("web", "converge"),)):
         jid = jobs.create(cfg, kind, target, origin)
         started.append((jid, origin))
         return {"job": jid, "state": "queued"}
-    monkeypatch.setattr(chats.ops, "start", start)
-    monkeypatch.setattr(chats, "validate_cluster", lambda p, s: {"ok": True, "errors": []})
+    monkeypatch.setattr(ops, "start", start)
     actions = [{"host": h, "action": a} for h, a in plan_actions]
-    monkeypatch.setattr(chats, "make_plan", lambda p, s: {"actions": actions, "summary": {a: 1 for _, a in plan_actions}})
+    for mod in (turn, autofix):
+        monkeypatch.setattr(mod, "validate_cluster", lambda p, s: {"ok": True, "errors": []})
+        monkeypatch.setattr(mod, "make_plan", lambda p, s: {"actions": actions, "summary": {a: 1 for _, a in plan_actions}})
     return started
 
 
@@ -509,7 +512,7 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
                    "Fixed for good.", "Changed the OS of web.", "Answered by the second provider."])
     adm, ah, op, h = start(app, monkeypatch, fake)
     started = _fake_builds(monkeypatch, cfg)
-    chats._fix_seen.clear()
+    autofix._fix_seen.clear()
     _failed_build(cfg)
     [cid] = chats.fix_failed_builds(app)
     chat = op.get(f"/api/chats/{cid}").json()
@@ -537,7 +540,6 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     chats.fix_failed_builds(app)
     assert "VALOR rebuilt the range: the build succeeded" in op.get(f"/api/chats/{cid2}").json()["messages"][-1]["content"]
     # a plan that would replace a VM is left to the person
-    n = len(started)
     _fake_builds(monkeypatch, cfg, plan_actions=(("web", "replace"),))
     _failed_build(cfg)
     [cid3] = chats.fix_failed_builds(app)
@@ -550,7 +552,7 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
 
     class Small(ai.Provider):
         def complete(self, *a, **k):
-            raise ai.ValorError("ai_context_full", "the model's context window is too small: 8192 tokens")
+            raise ValorError("ai_context_full", "the model's context window is too small: 8192 tokens")
     monkeypatch.setattr(ai, "provider_from", lambda st, key: Small("q") if st["name"] == "Local" else fake)
     _fake_builds(monkeypatch, cfg)
     _failed_build(cfg)
@@ -573,7 +575,7 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     st = adm.get("/api/settings/ai").json()
     assert st["fix_mode"] == "auto"
     adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_mode": "prepare"}, headers=ah)  # approvals
-    chats._fix_seen.clear()
+    autofix._fix_seen.clear()
     jid = _failed_build(cfg)
     assert chats.fix_failed_builds(app) and chats.fix_failed_builds(app) == []          # once per build
     found = op.get(f"/api/jobs/{jid}/fix").json()["chats"]
@@ -628,7 +630,7 @@ def test_failed_verification_and_small_context_go_to_the_assistant(lab, monkeypa
     app, wcfg, cfg, pve = lab
     fake = Script(["Nothing listens on app1:8080; I added a container there in the spec. Re-apply."])
     adm, ah, op, h = start(app, monkeypatch, fake)
-    chats._fix_seen.clear()
+    autofix._fix_seen.clear()
     jid = jobs.create(cfg, "apply", {"spec": "lab.yaml", "verify": True}, "web:olivia")
     jobs.finish(cfg, jid, {"ok": False, "verify": {"ok": False, "summary": {"tests_passed": 1, "tests_total": 2}}})
     jobs.update(cfg, jid, state="failed", finished=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
@@ -651,11 +653,11 @@ def test_failed_verification_and_small_context_go_to_the_assistant(lab, monkeypa
 def test_a_context_too_small_is_named(monkeypatch):
     """LM Studio reports a prompt larger than the loaded context as an error event (or HTTP 400)."""
     msg = 'request (9655 tokens) exceeds the available context size (8192 tokens), try increasing it'
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([{"error": {"code": 400, "message": msg, "type": "exceed_context_size_error"}}]))
-    with pytest.raises(ai.ValorError) as e:
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream([{"error": {"code": 400, "message": msg, "type": "exceed_context_size_error"}}]))
+    with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://x:1234/v1").complete("S", [])
     assert e.value.code == "ai_context_full" and "Context Length" in e.value.hint and "9655" in e.value.message
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(status=400, error={"message": msg}))
-    with pytest.raises(ai.ValorError) as e:
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(status=400, error={"message": msg}))
+    with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://x:1234/v1").complete("S", [])
     assert e.value.code == "ai_context_full"

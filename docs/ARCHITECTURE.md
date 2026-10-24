@@ -101,7 +101,7 @@ Proxmox nodes only.
 | | [`cluster.py`](../valor/cluster.py) | Finds range VMs by pool and tags, parses VALOR's metadata in VM notes, finds templates by tag, `cluster_info()`. |
 | | [`jobs.py`](../valor/jobs.py), [`ops.py`](../valor/ops.py), [`state.py`](../valor/state.py) | Job records and events, the engine lock, running a job (`ops.execute`), per-range results and history. |
 | | [`config.py`](../valor/config.py), [`errors.py`](../valor/errors.py), [`crypto.py`](../valor/crypto.py) | Configuration, structured errors (`ValorError`: code, message, step, host, details, hint, completed steps), AES-256-GCM secrets at rest. |
-| AI | [`ai.py`](../valor/ai.py), [`agent.py`](../valor/agent.py) | Providers and prompts; the range agent's tools and the read-only command classifier ([below](#ai-chat-builder-and-range-agent)). |
+| AI | [`ai/`](../valor/ai/) ([`providers`](../valor/ai/providers.py), [`prompts`](../valor/ai/prompts.py), [`answers`](../valor/ai/answers.py), [`loop`](../valor/ai/loop.py)), [`agent/`](../valor/agent/) ([`tools`](../valor/agent/tools.py), [`readonly`](../valor/agent/readonly.py)) | Talking to models, what they are told, reading their answers, the validate-and-fix loop; the range agent's tools and the read-only command classifier ([below](#ai-chat-builder-and-range-agent)). |
 | Entry point | [`cli.py`](../valor/cli.py) | `valor` (CLI). See [CLI.md](CLI.md). |
 
 ## How a build works, in code
@@ -166,7 +166,7 @@ Anything that changes the cluster is a job: `apply`, `verify`, `destroy`, `power
 | [`auth.py`](../valor/web/auth.py), [`ldapauth.py`](../valor/web/ldapauth.py), [`users.py`](../valor/web/users.py) | Sign-in (password, then TOTP or enrollment), LDAP/AD with group-to-role mapping, account administration. |
 | [`ranges.py`](../valor/web/ranges.py) | Ranges, specs, plans, approved builds, verify, destroy, logins, power, snapshots, jobs. |
 | [`editing.py`](../valor/web/editing.py), [`topology.py`](../valor/web/topology.py) | Drafts and map edits; the map's nodes and edges with the plan overlay. |
-| [`chats.py`](../valor/web/chats.py), [`builder.py`](../valor/web/builder.py) | Saved chats and their background turns; AI provider settings, usage and budgets. |
+| [`chats/`](../valor/web/chats/) ([`routes`](../valor/web/chats/routes.py), [`turn`](../valor/web/chats/turn.py), [`autofix`](../valor/web/chats/autofix.py)), [`builder.py`](../valor/web/builder.py) | Saved chats, their background turns and the fixing of failed builds; AI provider settings, usage, budgets, the prompt's cluster reference and the spec check. |
 | [`consoles.py`](../valor/web/consoles.py), [`access.py`](../valor/web/access.py) | Console relay (VNC and serial websockets via one-time tickets); WireGuard peers. |
 | [`isos.py`](../valor/web/isos.py), [`blueprints.py`](../valor/web/blueprints.py) | ISO library and blueprints. |
 | [`settings.py`](../valor/web/settings.py), [`notify.py`](../valor/web/notify.py), [`status.py`](../valor/web/status.py) | Notification channels, LDAP settings, audit log, in-app notifications; sending (SMTP and webhooks); the health page. |
@@ -184,42 +184,45 @@ The routes, their access levels and the request conventions are listed in [API.m
 
 ## AI: chat builder and range agent
 
-**Providers** ([`ai.py`](../valor/ai.py)): `OpenAICompatible` (any `/v1` server, such as LM Studio or vLLM) and
-`OpenRouter` (hosted models, Claude among them). Answers are streamed; the timeout is how long a model may stay silent. Reasoning
-that a model writes inline (`<think>`) or as separate events is shown as "thinking". Tool calls that a local model
-writes into its text (`<tool_call>` tags) are recovered. Provider settings and encrypted keys live in the settings
-table; `builder.resolve` picks a chat's provider (or the default, then the others as a fallback for failed-build
-fixes).
+**Providers** ([`ai/providers.py`](../valor/ai/providers.py)): `OpenAICompatible` (any `/v1` server, such as LM Studio
+or vLLM) and `OpenRouter` (hosted models, Claude among them). Answers are streamed; the timeout is how long a model
+may stay silent. Reasoning that a model writes inline (`<think>`) or as separate events is shown as "thinking". Tool
+calls that a local model writes into its text (`<tool_call>` tags) are recovered. Provider settings and encrypted keys
+live in the settings table; `builder.resolve` picks a chat's provider (or the default, then the others as a fallback
+for failed-build fixes).
 
-**The prompt** (`ai.reference`) is assembled per request from:
+**The prompt** (`ai.reference`, [`ai/prompts.py`](../valor/ai/prompts.py)) is assembled per request from:
 
-- [`spec-reference.md`](../valor/spec-reference.md) (next to the code that parses specs): **editing this file
-  changes what the AI is told**;
-- the compliance frameworks, the OS templates present on this cluster, every role with its parameters, and the
-  cluster facts (VLANs in use, reserved networks...);
-- `SPEC_RULES` and the mode's instructions in `ai.py`.
+- [`spec-reference.md`](../valor/spec-reference.md) (next to the code that parses specs): **editing this file changes
+  what the AI is told**;
+- the compliance frameworks, the OS templates present on this cluster, every role with its parameters, and the cluster
+  facts (VLANs in use, reserved networks...);
+- `SPEC_RULES` and the mode's instructions in `ai/prompts.py`.
 
-**Chat builder** (mode `build`): `ai.build` asks the model, extracts the last YAML block, repairs common YAML slips,
-validates it (`builder.spec_check`: schema, unique name, cluster) and asks the model to fix the problems, up to
-`FIX_ROUNDS` times. Questions come back as a ` ```questions ` block and are shown as cards.
+**Chat builder** (mode `build`): `ai.build` ([`ai/loop.py`](../valor/ai/loop.py)) asks the model, extracts the last
+YAML block, repairs common YAML slips, validates it (`builder.spec_check`: schema, unique name, cluster) and asks the
+model to fix the problems, up to `FIX_ROUNDS` times. Questions come back as a ` ```questions ` block and are shown as
+cards.
 
-**Range chats** ([`chats.py`](../valor/web/chats.py) `Turn`): a turn runs in a background thread; the browser polls
-the assistant message, whose `meta.steps` is a live feed (reasoning, text, tool calls with output, VALOR's checks).
+**Range chats** ([`chats/turn.py`](../valor/web/chats/turn.py) `Turn`): a turn runs in a background thread; the
+browser polls the assistant message, whose `meta.steps` is a live feed (reasoning, text, tool calls with output,
+VALOR's checks).
 
-- *Question* mode gets the read tools; *Code* mode gets all of [`agent.TOOLS`](../valor/agent.py): `run_command`,
-  `read_file`, `write_file`, `power`, `snapshot`, `range_status`, `update_spec`. *Plan* mode has no tools: the
-  model's spec becomes the draft.
-- `agent.validate` checks every call; `agent.is_readonly` decides whether a command only reads: every part of the
-  command line must be on an allowlist of reporting commands (with argument checks such as `sed -n` without `-i`).
-  Redirections into files, command substitution and anything it cannot parse need approval.
+- *Question* mode gets the read tools; *Code* mode gets all of [`agent.TOOLS`](../valor/agent/tools.py):
+  `run_command`, `read_file`, `write_file`, `power`, `snapshot`, `range_status`, `update_spec`. *Plan* mode has no
+  tools: the model's spec becomes the draft.
+- `agent.validate` checks every call; `agent.is_readonly` ([`agent/readonly.py`](../valor/agent/readonly.py)) decides
+  whether a command only reads: every part of the command line must be on an allowlist of reporting commands (with
+  argument checks such as `sed -n` without `-i`). Redirections into files, command substitution and anything it cannot
+  parse need approval.
 - A call that needs approval stops the loop; `POST .../decide` records the person's decision and the turn continues
   (`run_pending`). `allow_all` on a chat skips approvals.
 - `update_spec` validates the spec and saves it as the range's draft.
 
-**Failed builds** (`chats.watch_failed_builds`, a thread in the web service): builds that failed in the last 30
-minutes start a Code-mode chat (`start_fix`) with `fix_prompt(job)`. In mode `auto` VALOR rebuilds when the assistant
-is done (`continue_fix`), up to 3 rounds, stops if a rebuild fails the same way again, and never runs a plan that
-replaces or removes a VM.
+**Failed builds** ([`chats/autofix.py`](../valor/web/chats/autofix.py) `watch_failed_builds`, a thread in the web
+service): builds that failed in the last 30 minutes start a Code-mode chat (`start_fix`) with `fix_prompt(job)`. In
+mode `auto` VALOR rebuilds when the assistant is done (`continue_fix`), up to 3 rounds, stops if a rebuild fails the
+same way again, and never runs a plan that replaces or removes a VM.
 
 ## The installer (`installer/`)
 

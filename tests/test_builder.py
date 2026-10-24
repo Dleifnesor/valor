@@ -5,6 +5,7 @@ import json
 import pytest
 
 from valor import ai
+from valor.errors import ValorError
 from valor.spec import parse_spec
 from valor.web import builder, db
 
@@ -128,7 +129,7 @@ def test_wire_formats(monkeypatch):
         sent.update(url=url, headers=headers, body=json, timeout=timeout, stream=stream)
         return Stream([{"choices": [{"delta": {"content": "O"}}]}, {"choices": [{"delta": {"content": "K"}, "finish_reason": "stop"}]},
                        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2}}])
-    monkeypatch.setattr(ai.requests, "post", post)
+    monkeypatch.setattr(ai.providers.requests, "post", post)
     r = ai.OpenAICompatible("llama", api_key="t", base_url="http://10.0.0.5:8000/v1/").complete("SYS", [{"role": "user", "content": "hi"}])
     assert sent["url"] == "http://10.0.0.5:8000/v1/chat/completions" and sent["headers"]["authorization"] == "Bearer t"
     assert sent["body"]["messages"][0] == {"role": "system", "content": "SYS"} and sent["body"]["stream_options"]
@@ -144,10 +145,10 @@ def test_streaming_edge_cases(monkeypatch):
         if "stream_options" in json:          # an older server
             return Stream(status=400, error="unknown field stream_options")
         return Stream([{"choices": [{"delta": {"content": "fine"}, "finish_reason": "stop"}]}])
-    monkeypatch.setattr(ai.requests, "post", post)
+    monkeypatch.setattr(ai.providers.requests, "post", post)
     r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
     assert r.text == "fine" and len(calls) == 2 and "stream_options" not in calls[1]
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(
         [{"choices": [{"delta": {"reasoning_content": "web → db — ok"}}]},
          {"choices": [{"delta": {"content": "It isn’t café"}, "finish_reason": "stop"}]}]))
     r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
@@ -161,22 +162,22 @@ def test_openrouter_on_the_wire(monkeypatch):
         sent.update(url=url, headers=headers, body=json)
         return Stream([{"choices": [{"delta": {"reasoning": "think"}}]}, {"choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}]},
                        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2}}])
-    monkeypatch.setattr(ai.requests, "post", post)
+    monkeypatch.setattr(ai.providers.requests, "post", post)
     p = ai.provider_from({"provider": "openrouter", "model": "qwen/qwen3.8-27b", "base_url": "http://ignored/v1"}, "sk-or-1")
     r = p.complete("S", [{"role": "user", "content": "hi"}])
     assert sent["url"] == "https://openrouter.ai/api/v1/chat/completions" and sent["headers"]["authorization"] == "Bearer sk-or-1"
     assert sent["headers"]["X-Title"] == "VALOR" and sent["body"]["model"] == "qwen/qwen3.8-27b"
     assert (r.text, r.reasoning, r.input_tokens) == ("OK", "think", 9)
     # an error after the stream started is an error, not an empty answer
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream([
         {"choices": [{"delta": {"content": "half"}}]},
         {"error": {"code": "server_error", "message": "Provider disconnected unexpectedly"},
          "choices": [{"delta": {"content": ""}, "finish_reason": "error"}]}]))
-    with pytest.raises(ai.ValorError) as e:
+    with pytest.raises(ValorError) as e:
         p.complete("S", [])
     assert e.value.code == "ai_error" and "Provider disconnected" in e.value.message
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(status=402, error={"message": "can only afford 9000"}))
-    with pytest.raises(ai.ValorError) as e:
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(status=402, error={"message": "can only afford 9000"}))
+    with pytest.raises(ValorError) as e:
         p.complete("S", [])
     assert e.value.code == "ai_credits" and "Max tokens" in e.value.hint and "9000" in e.value.message
 
@@ -185,7 +186,7 @@ def test_openrouter_on_the_wire(monkeypatch):
 
         def json(self):
             return {"data": [{"id": "other", "context_length": 8192}, {"id": "qwen/qwen3.8-27b", "context_length": 1000000}]}
-    monkeypatch.setattr(ai.requests, "get", lambda url, timeout: Models() if url == "https://openrouter.ai/api/v1/models" else None)
+    monkeypatch.setattr(ai.providers.requests, "get", lambda url, timeout: Models() if url == "https://openrouter.ai/api/v1/models" else None)
     assert p.context_length() == 1000000
     full = ai.cut_off(p, ai.Reply("", 30000, 2, truncated=True))
     assert full.code == "ai_context_full" and "OpenRouter" in full.hint and "LM Studio" not in full.hint
@@ -218,13 +219,13 @@ def test_context_length_is_the_loaded_one(monkeypatch):
         def json(self):
             return self.d
     p = ai.OpenAICompatible("m", base_url="http://x:1234/v1")
-    monkeypatch.setattr(ai.requests, "get", lambda *a, **k: Info({"state": "not-loaded", "max_context_length": 262144}))
+    monkeypatch.setattr(ai.providers.requests, "get", lambda *a, **k: Info({"state": "not-loaded", "max_context_length": 262144}))
     assert p.context_length() is None                  # unloaded: the model's maximum says nothing about the load
-    monkeypatch.setattr(ai.requests, "get", lambda *a, **k: Info({"loaded_context_length": 35328, "max_context_length": 262144}))
+    monkeypatch.setattr(ai.providers.requests, "get", lambda *a, **k: Info({"loaded_context_length": 35328, "max_context_length": 262144}))
     assert p.context_length() == 35328
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([{"choices": [{"delta": {"content": "half"}}]}],
-                                                                     stall=ai.requests.ConnectionError("Read timed out.")))
-    with pytest.raises(ai.ValorError) as e:
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream([{"choices": [{"delta": {"content": "half"}}]}],
+                                                                     stall=ai.providers.requests.ConnectionError("Read timed out.")))
+    with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="https://x.example/v1", timeout=60).complete("S", [])
     assert "sent nothing for 60 s" in e.value.message and "raise the timeout" in e.value.hint
 
@@ -275,7 +276,7 @@ def test_cut_off_answers_and_defaults(env):
             self.calls.append(1)
             return ai.Reply("```yaml\nname: half", 900, self.max_tokens, truncated=True)
     cut = Cut([])
-    with pytest.raises(ai.ValorError) as e:
+    with pytest.raises(ValorError) as e:
         ai.build(cut, "S", [{"role": "user", "content": "x"}], lambda t: [])
     assert e.value.code == "ai_truncated" and len(cut.calls) == 1 and "Max tokens" in e.value.hint   # no retries
     app, wcfg = env
@@ -299,10 +300,10 @@ def test_a_full_context_window_is_not_blamed_on_max_tokens():
 
 
 def test_cut_off_detected_on_the_wire(monkeypatch):
-    monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout, stream: Stream(
+    monkeypatch.setattr(ai.providers.requests, "post", lambda url, headers, json, timeout, stream: Stream(
         [{"choices": [{"delta": {"content": "x"}, "finish_reason": "length"}]}]))
     assert ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", []).truncated
-    monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout, stream: Stream(
+    monkeypatch.setattr(ai.providers.requests, "post", lambda url, headers, json, timeout, stream: Stream(
         [{"choices": [{"delta": {"reasoning_content": "hmm "}}]}, {"choices": [{"delta": {"content": "ok"}}]},
          {"choices": [{"delta": {}, "finish_reason": "stop"}]}]))
     r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
@@ -315,15 +316,15 @@ def test_connection_errors_say_what_to_check(monkeypatch):
             raise exc
         return post
     p = ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234/v1")
-    for exc, words in ((ai.requests.ConnectTimeout(), "Serve on Local Network"),
-                       (ai.requests.ConnectionError(), "listens on the network"),
-                       (ai.requests.ReadTimeout(), "raise the timeout")):
-        monkeypatch.setattr(ai.requests, "post", boom(exc))
-        with pytest.raises(ai.ValorError) as e:
+    for exc, words in ((ai.providers.requests.ConnectTimeout(), "Serve on Local Network"),
+                       (ai.providers.requests.ConnectionError(), "listens on the network"),
+                       (ai.providers.requests.ReadTimeout(), "raise the timeout")):
+        monkeypatch.setattr(ai.providers.requests, "post", boom(exc))
+        with pytest.raises(ValorError) as e:
             p.complete("S", [])
         assert "192.168.1.67:1234" in e.value.message and words in e.value.hint
 
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream(status=404))
-    with pytest.raises(ai.ValorError) as e:
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(status=404))
+    with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234").complete("S", [])
     assert "/v1" in e.value.hint

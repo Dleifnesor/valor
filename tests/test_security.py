@@ -1,17 +1,23 @@
+# *puts on a tiny security guard cap* OwO tests/test_security.py: the SECURITY tests (summary in the docstring)! ^w^
 """Security tests: who may call every API route, CSRF/cross-origin protection on every state change, sign-in
 required everywhere, response headers, cookie flags, and hostile names. Adding a route fails ACCESS below until
 someone decides (and reviews) who may call it."""
 
+# re, pytest, the app's router list and security headers UwU
 import re
 
 import pytest
-from fastapi.routing import APIRoute
 
 from valor.web.app import API_ROUTERS, SECURITY_HEADERS
 
+# The web app fixture and helpers from test_web.py >w<
 from test_web import PASSWORD, client, enroll, env  # noqa: F401  (the web app fixture and helpers)
 
+# ACCESS: the REVIEWED access level of every route. If someone adds a route, the first test fails until they add it
+# here on purpose. PUBLIC = no sign-in; stage:x = halfway through sign-in; session = any signed-in session; role:x =
+# at least that role OwO
 ACCESS = {
+    # Sign-in steps ^w^
     "POST /api/auth/login": "PUBLIC",
     "POST /api/auth/mfa": "stage:mfa",
     "POST /api/auth/enroll/start": "stage:enroll",
@@ -20,6 +26,7 @@ ACCESS = {
     "POST /api/auth/logout": "session",
     "POST /api/auth/password": "role:viewer",
     "POST /api/auth/recovery-codes": "role:viewer",
+    # Account administration and settings: admins only UwU
     "GET /api/users": "role:admin",
     "POST /api/users": "role:admin",
     "PATCH /api/users/{uid}": "role:admin",
@@ -36,6 +43,7 @@ ACCESS = {
     "GET /api/audit": "role:admin",
     "GET /api/notifications": "role:viewer",
     "POST /api/notifications/read": "role:viewer",
+    # Health, status, catalog and ranges >w<
     "GET /api/health": "PUBLIC",
     "GET /api/status": "role:viewer",
     "GET /api/catalog": "role:viewer",
@@ -57,6 +65,7 @@ ACCESS = {
     "DELETE /api/ranges/{name}/snapshots/{snap}": "role:operator",
     "GET /api/jobs": "role:viewer",
     "GET /api/jobs/{job_id}": "role:viewer",
+    # Consoles (the websocket checks its one-time ticket itself), ISOs, WireGuard, blueprints OwO
     "POST /api/ranges/{name}/vms/{host}/console": "role:operator",
     "WS /api/console/{sid}": "PUBLIC",            # one-time ticket + session cookie, checked in the handler
     "GET /api/isos": "role:viewer",
@@ -75,6 +84,7 @@ ACCESS = {
     "DELETE /api/blueprints/{bp_id}": "role:operator",
     "POST /api/blueprints/{bp_id}/preview": "role:operator",
     "POST /api/blueprints/{bp_id}/deploy": "role:operator",
+    # AI settings, the builder, failed-build fixes, drafts and chats ^w^
     "GET /api/settings/ai": "role:admin",
     "PUT /api/settings/ai": "role:admin",
     "POST /api/settings/ai/test": "role:admin",
@@ -97,6 +107,8 @@ ACCESS = {
     "POST /api/chats/{chat_id}/messages/{msg_id}/decide": "role:operator",
     "POST /api/chats/{chat_id}/messages/{msg_id}/stop": "role:operator",
 }
+# UNSAFE methods; SELF_SERVICE = state changes any signed-in person may make for themselves; SECRETS = routes that
+# reveal secrets UwU
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 SELF_SERVICE = {"POST /api/auth/login", "POST /api/auth/mfa", "POST /api/auth/enroll/start",
                 "POST /api/auth/enroll/confirm", "POST /api/auth/logout", "POST /api/auth/password",
@@ -104,6 +116,8 @@ SELF_SERVICE = {"POST /api/auth/login", "POST /api/auth/mfa", "POST /api/auth/en
 SECRETS = {"GET /api/ranges/{name}/credentials", "GET /api/ranges/{name}/wireguard/peers/{peer}"}
 
 
+# _access(): read a route's access level from the markers our dependencies carry (valor_role / valor_stage /
+# any_session), looking into nested dependencies >w<
 def _access(dependant) -> str | None:
     for dep in dependant.dependencies:
         c = dep.call
@@ -119,6 +133,7 @@ def _access(dependant) -> str | None:
     return None
 
 
+# _routes(): every route of every router, as "METHOD path" -> access level OwO
 def _routes() -> dict[str, str]:
     out = {}
     for router in API_ROUTERS:
@@ -128,10 +143,13 @@ def _routes() -> dict[str, str]:
     return out
 
 
+# Every route's actual access level must equal the reviewed one ^w^
 def test_every_route_has_a_reviewed_access_level():
     assert _routes() == ACCESS
 
 
+# Rules: settings/users/audit are admin-only; state changes need operator (except self-service); secrets need operator;
+# and ONLY sign-in, health and the console websocket are public UwU
 def test_access_rules():
     for key, level in ACCESS.items():
         method, path = key.split(" ", 1)
@@ -145,10 +163,12 @@ def test_access_rules():
     assert public == {"POST /api/auth/login", "GET /api/health", "WS /api/console/{sid}"}
 
 
+# _url(): a real-looking URL for a route path (placeholders filled in) >w<
 def _url(path: str) -> str:
     return re.sub(r"\{[^}]+\}", "x1", path).replace("{volid:path}", "iso-store:iso/x.iso")
 
 
+# Without signing in, every non-public route answers 401 OwO
 def test_sign_in_required_everywhere(env):
     app, _ = env
     with client(app) as anon:
@@ -160,6 +180,7 @@ def test_sign_in_required_everywhere(env):
             assert r.status_code == 401, (key, r.status_code, r.text[:200])
 
 
+# Every state change needs the CSRF token, refuses other origins, and refuses form posts (415) ^w^
 def test_csrf_and_origin_on_every_state_change(env):
     app, _ = env
     with client(app) as adm:
@@ -179,6 +200,8 @@ def test_csrf_and_origin_on_every_state_change(env):
                 assert r.status_code == 415, key                     # no HTML form posts
 
 
+# Every response carries the security headers and no-store; the session cookie is HttpOnly, SameSite=Strict, host-only,
+# and Secure when configured UwU
 def test_headers_and_cookie(env):
     app, wcfg = env
     with client(app) as c:
@@ -195,6 +218,7 @@ def test_headers_and_cookie(env):
         assert ("secure" in cookie) == wcfg.secure_cookies
 
 
+# Hostile names (path traversal, uppercase, too short, NUL bytes) are refused and never leak files >w<
 @pytest.mark.parametrize("path", [
     "/api/ranges/..%2F..%2Fetc%2Fpasswd", "/api/ranges/UPPER", "/api/ranges/a", "/api/blueprints/..%2Fx",
     "/api/ranges/web2tier/wireguard/peers/..%2F..", "/api/jobs/..%2F..%2Fetc", "/api/ranges/x%00y",

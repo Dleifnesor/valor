@@ -4,12 +4,11 @@ import dataclasses
 
 import pytest
 
-from valor import ai, drafts
+from valor import drafts
 from valor.errors import ValorError
 from valor.spec import normalize, parse_spec
 from valor.web import builder, db
 
-from test_builder import Fake
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
 
 SPEC = """apiVersion: valor/v1
