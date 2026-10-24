@@ -1,19 +1,29 @@
+# *hands over a blank notebook* OwO roles/custom-script/role.yaml: metadata for custom-script, YOUR own script for
+# anything no other role covers (bash on Linux, PowerShell on Windows) ^w^
 description: >
   Your own install/configuration script for anything no other role covers - bash on Linux (as root), PowerShell on
   Windows (as SYSTEM). The plan shows it in full before anything runs. Write it idempotent: it runs again whenever the
   host converges.
+# category: generic marks it as a do-anything role (listed apart from the specific ones) UwU
 category: generic
+# It runs on every family: Debian, RHEL and Windows >w<
 families: [debian, rhel, windows]
+# ports_param: the ports it serves come from the `ports` param OwO
 ports_param: ports
+# params: the settings a spec can give this role ^w^
 params:
+  # script (required): the script itself, used as written, at most 20000 characters *nuzzles*
   script:
     required: true
     raw: true
     max_length: 20000
     description: >
-      The script. Bash runs with set -euo pipefail and VALOR's helpers (pkg_install, write_file PATH MODE <<EOF,
-      firewall_open PORT [udp], wait_port PORT, run_container NAME IMAGE [options], changed); PowerShell runs with
+      The script. Bash runs with set -euo pipefail and VALOR's helpers (pkg_install, write_file PATH MODE <<EOF -
+      writes only when the content differs and then sets VALOR_CHANGED=1, so restart a service when
+      [ "$VALOR_CHANGED" = 1 ] -, firewall_open PORT [udp], wait_port PORT, run_container NAME IMAGE [options],
+      changed); PowerShell runs with
       $ErrorActionPreference = 'Stop' and Changed, Open-TcpPort, Wait-Port, Wait-Until, Write-RebootRequired
+  # ports: the TCP ports the script's services listen on; VALOR opens them in the firewall and waits for them UwU
   ports:
     raw: true
     pattern: '^[0-9]{1,5}$'

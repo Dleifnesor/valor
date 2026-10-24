@@ -1,18 +1,29 @@
+# *hands out addresses like treats* OwO roles/dhcp-server/role.yaml: metadata for dhcp-server, a dnsmasq DHCP
+# server for its own segment (for extra clients; range hosts keep their fixed addresses) ^w^
 description: >
   DHCP server (dnsmasq) for its own segment - for extra clients such as ISO-installed or attacker VMs (range hosts keep
   their fixed addresses). Hands out the segment gateway as router.
+# Linux only UwU
 families: [debian, rhel]
+# ports: [] because it serves no TCP port (DHCP is UDP 67; the script opens it in firewalld where that runs) >w<
 ports: []
+# params: all optional OwO
 params:
+  # range_start: the first address to lease (default .100 of the network) ^w^
   range_start:
     default: ""
     description: First address to lease (default the network's .100)
+  # range_end: the last address to lease (default .199) UwU
   range_end:
     default: ""
     description: Last address to lease (default the network's .199)
+  # lease: how long a lease lasts, in dnsmasq's format (a number plus s/m/h/d/w) *nuzzles*
   lease:
+    raw: true
+    pattern: '^[0-9]+[smhdw]?$'
     default: 12h
     description: Lease time (dnsmasq format, e.g. 1h, 12h, 7d)
+  # dns: DNS servers to hand out; host names are turned into their addresses >w<
   dns:
     default: ""
     description: DNS servers to hand out, addresses or host names (default VALOR's nameservers)

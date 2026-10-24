@@ -18,6 +18,7 @@ import time
 from . import state
 from .crypto import Box
 from .errors import ValorError
+from .roles import APT_SETTLE
 from .spec import RangeSpec
 
 IFACE = "wg0"
@@ -170,7 +171,7 @@ if ip link show {IFACE} >/dev/null 2>&1; then echo "wg0 is still present" >&2; e
 echo VALOR-WG-REMOVED
 """
     return f"""set -euo pipefail
-command -v wg >/dev/null || {{ export DEBIAN_FRONTEND=noninteractive; apt-get -o DPkg::Lock::Timeout=600 -qq update >/dev/null; apt-get -o DPkg::Lock::Timeout=600 -qq -y install wireguard-tools >/dev/null; }}
+{APT_SETTLE}command -v wg >/dev/null || {{ export DEBIAN_FRONTEND=noninteractive; apt_settle; apt-get -o DPkg::Lock::Timeout=600 -qq update >/dev/null; apt-get -o DPkg::Lock::Timeout=600 -qq -y install wireguard-tools >/dev/null; }}
 umask 077
 mkdir -p /etc/wireguard
 cat > /etc/wireguard/{IFACE}.conf.valor-new <<'VALOR_WG_EOF'

@@ -3,7 +3,7 @@ import { ApiError } from "../api";
 
 type IconName =
   | "dashboard" | "ranges" | "jobs" | "users" | "audit" | "settings" | "bell" | "logout" | "menu" | "plus"
-  | "refresh" | "shield" | "account" | "theme" | "disc" | "copy" | "chat";
+  | "refresh" | "shield" | "account" | "theme" | "disc" | "copy" | "chat" | "chats";
 
 const PATHS: Record<IconName, string> = {
   dashboard: "M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z",
@@ -23,6 +23,7 @@ const PATHS: Record<IconName, string> = {
   disc: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   copy: "M8 8h12v12H8zM4 16V4h12",
   chat: "M4 5h16v11H9l-5 4z",
+  chats: "M3 4h13v9H7l-4 3zm6 12h8l4 3V9h-2",
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
@@ -36,9 +37,10 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 
 export function Logo({ size = 30 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="14" fill="#1e2a4a" />
-      <path d="M14 16h9l9 24 9-24h9L37 50h-10z" fill="#5eead4" />
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" fill="currentColor">
+      {/* two stacked chevrons; the colour comes from the surrounding text colour */}
+      <path d="M6 8h13l13 15 13-15h13L32 37z" />
+      <path d="M6 28h13l13 15 13-15h13L32 57z" opacity="0.55" />
     </svg>
   );
 }
@@ -95,13 +97,14 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
 
 const STATE_CLASS: Record<string, string> = {
   succeeded: "ok", ok: "ok", pass: "ok", running: "info", queued: "", failed: "bad", fail: "bad", problem: "bad",
-  stopped: "", unknown: "",
+  stopped: "", unknown: "", warn: "warn",
 };
 
+/** A state as a coloured mark and words: "● succeeded", spinner while running. */
 export function StateBadge({ state, label }: { state: string; label?: string }) {
   return (
-    <span className={`badge ${STATE_CLASS[state] ?? ""}`}>
-      {state === "running" && <span className="spinner" style={{ width: 10, height: 10 }} />}
+    <span className={`status ${STATE_CLASS[state] ?? ""}`}>
+      {state === "running" ? <span className="spinner" /> : <i aria-hidden="true" />}
       {label ?? state}
     </span>
   );

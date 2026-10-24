@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import secrets
 import threading
 import time
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
@@ -33,14 +35,28 @@ class _In(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class AiSettingsIn(_In):
-    provider: str = Field(pattern="^(none|anthropic|openai)$")
+class ProviderIn(_In):
+    id: str | None = Field(default=None, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    provider: Literal["anthropic", "openai", "openrouter"]
     model: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9._:/-]*$")
     base_url: str = Field(default="", max_length=512)
     api_key: str | None = Field(default=None, max_length=512)
     max_tokens: int = Field(default=ai.DEFAULTS["max_tokens"], ge=1024, le=128000)
-    daily_tokens_per_user: int = Field(default=400_000, ge=0, le=100_000_000)
     timeout: int = Field(default=ai.DEFAULTS["timeout"], ge=30, le=900)
+    default: bool = False
+
+
+class AiSettingsIn(_In):
+    providers: list[ProviderIn] = Field(max_length=20)
+    daily_tokens_per_user: int = Field(default=ai.DEFAULTS["daily_tokens_per_user"], ge=0, le=100_000_000)
+    fix_failed_builds: bool = True              # a failed build starts the assistant on it (Code mode)
+    fix_provider: str = Field(default="", max_length=32)    # with this provider ("" = the default one)
+    fix_mode: Literal["auto", "fix", "prepare"] = "auto"    # fix and rebuild / fix / prepare, the person approves
+
+
+class TestIn(_In):
+    id: str = Field(max_length=32)
 
 
 class Message(_In):
@@ -54,12 +70,56 @@ class ChatIn(_In):
     range: str = Field(default="", max_length=15)       # editing this existing range (its name is allowed)
 
 
-def _settings(conn) -> dict:
-    return {**ai.DEFAULTS, **db.get_setting(conn, "ai", {})}
+def _key_context(pid: str) -> str:
+    return f"ai:{pid}:api_key"
 
 
-def _masked(st: dict) -> dict:
-    return {**st, "api_key": MASK if st.get("api_key") else ""}
+def ai_settings(conn, box) -> dict:
+    """{providers: [{id, name, provider, model, base_url, api_key (encrypted), max_tokens, timeout}], default (an id),
+    daily_tokens_per_user}. The single provider of earlier versions becomes the first named one (its key re-sealed)."""
+    st = db.get_setting(conn, "ai", {}) or {}
+    if "providers" in st:
+        return {"providers": st["providers"], "default": st.get("default", ""),
+                "daily_tokens_per_user": st.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"]),
+                "fix_failed_builds": st.get("fix_failed_builds", True), "fix_provider": st.get("fix_provider", ""),
+                "fix_mode": st.get("fix_mode", "auto")}
+    new = {"providers": [], "default": "", "fix_failed_builds": True, "fix_provider": "", "fix_mode": "auto",
+           "daily_tokens_per_user": st.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"])}
+    if st.get("provider", "none") != "none":
+        pid = secrets.token_hex(6)
+        key = ""
+        if st.get("api_key") and box is not None:
+            key = box.seal_text(box.open_text(st["api_key"], "ai:api_key"), _key_context(pid))
+        new["providers"].append({"id": pid, "name": {"anthropic": "Anthropic", "openai": "Local model server"}.get(
+            st["provider"], st["provider"]), "provider": st["provider"], "model": st.get("model", ""),
+            "base_url": st.get("base_url", ""), "api_key": key,
+            "max_tokens": st.get("max_tokens", ai.DEFAULTS["max_tokens"]), "timeout": st.get("timeout", ai.DEFAULTS["timeout"])})
+        new["default"] = pid
+    if st:
+        db.put_setting(conn, "ai", new, by="migration")
+    return new
+
+
+def resolve(conn, box, pid: str | None = None) -> tuple[ai.Provider, dict]:
+    """The provider to use (a chat's choice, else the default; a deleted choice falls back to the default) and its
+    settings with the daily budget."""
+    store = ai_settings(conn, box)
+    by_id = {p["id"]: p for p in store["providers"]}
+    p = by_id.get(pid or "") or by_id.get(store["default"])
+    if p is None:
+        raise ValorError("ai_not_configured", "No AI provider is connected.",
+                         hint="An administrator can connect one in Settings -> AI providers.")
+    key = box.open_text(p["api_key"], _key_context(p["id"])) if p.get("api_key") and box is not None else ""
+    st = {**ai.DEFAULTS, **{k: v for k, v in p.items() if k != "api_key"},
+          "daily_tokens_per_user": store["daily_tokens_per_user"]}
+    return ai.provider_from(st, key), st
+
+
+def _masked(store: dict) -> dict:
+    return {"providers": [{**p, "api_key": MASK if p.get("api_key") else "", "default": p["id"] == store["default"]}
+                          for p in store["providers"]],
+            "daily_tokens_per_user": store["daily_tokens_per_user"], "fix_failed_builds": store["fix_failed_builds"],
+            "fix_provider": store["fix_provider"], "fix_mode": store["fix_mode"]}
 
 
 def _check_url(url: str) -> None:
@@ -78,54 +138,87 @@ def _check_url(url: str) -> None:
                                               "model server); use https:// otherwise.")
 
 
-def _provider(request: Request, conn) -> tuple[ai.Provider, dict]:
-    st = _settings(conn)
-    key = request.app.state.box.open_text(st["api_key"], "ai:api_key") if st.get("api_key") else ""
-    return ai.provider_from(st, key), st
+def _provider(request: Request, conn, pid: str | None = None) -> tuple[ai.Provider, dict]:
+    return resolve(conn, request.app.state.box, pid)
 
 
 @router.get("/settings/ai")
-def get_ai(s: Session = Depends(require("admin"))) -> dict:
-    return {**_masked(_settings(s.conn)), "providers": list(ai.PROVIDERS), "anthropic_models": list(ai.ANTHROPIC_MODELS)}
+def get_ai(request: Request, s: Session = Depends(require("admin"))) -> dict:
+    return {**_masked(ai_settings(s.conn, request.app.state.box)), "kinds": list(ai.PROVIDERS),
+            "anthropic_models": list(ai.ANTHROPIC_MODELS)}
+
+
+def _validate_provider(d: dict) -> None:
+    name = d["name"]
+    if d["provider"] == "openai":
+        _check_url(d["base_url"])
+        if not d["base_url"]:
+            raise ApiError(400, "invalid_ai", f"{name}: an OpenAI-compatible provider needs its base URL (ending in /v1).")
+    else:
+        d["base_url"] = ""                                  # Anthropic and OpenRouter have fixed addresses
+    if not d["model"]:
+        if d["provider"] != "anthropic":
+            raise ApiError(400, "invalid_ai", f"{name}: name the model to use.")
+        d["model"] = ai.ANTHROPIC_MODELS[0]
+    if d["provider"] in ("anthropic", "openrouter") and not d["api_key"]:
+        raise ApiError(400, "invalid_ai", f"{name}: {ai.KIND_NAMES[d['provider']]} needs an API key.")
 
 
 @router.put("/settings/ai")
 def put_ai(body: AiSettingsIn, request: Request, s: Session = Depends(require("admin"))) -> dict:
-    old = _settings(s.conn)
-    d = body.model_dump()
-    _check_url(d["base_url"])
-    if d["provider"] == "openai" and not d["base_url"]:
-        raise ApiError(400, "invalid_ai", "An OpenAI-compatible provider needs its base URL (ending in /v1).")
-    if d["provider"] != "none" and not d["model"]:
-        d["model"] = ai.ANTHROPIC_MODELS[0] if d["provider"] == "anthropic" else ""
-        if not d["model"]:
-            raise ApiError(400, "invalid_ai", "Name the model to use.")
-    key = d.pop("api_key")
-    if key and key != MASK:
-        d["api_key"] = request.app.state.box.seal_text(key, "ai:api_key")
-    elif key == "" and old.get("api_key"):
-        d["api_key"] = ""                                   # cleared on purpose
-    else:
-        d["api_key"] = old.get("api_key", "")
-    if d["provider"] == "anthropic" and not d["api_key"]:
-        raise ApiError(400, "invalid_ai", "Anthropic needs an API key.")
-    db.put_setting(s.conn, "ai", d, by=s.username)
-    s.audit("settings.ai", detail={"provider": d["provider"], "model": d["model"], "base_url": d["base_url"],
-                                   "key_changed": bool(key and key != MASK)})
-    return _masked(d)
+    box = request.app.state.box
+    old_store = ai_settings(s.conn, box)
+    old = {p["id"]: p for p in old_store["providers"]}
+    names = [p.name.strip().lower() for p in body.providers]
+    if len(set(names)) != len(names):
+        raise ApiError(400, "invalid_ai", "Give every provider its own name.")
+    new, default, changed = [], "", []
+    for p in body.providers:
+        d = p.model_dump()
+        d["name"] = d["name"].strip()
+        d["id"] = d["id"] if d["id"] in old else secrets.token_hex(6)
+        key, is_default = d.pop("api_key"), d.pop("default")
+        prev = old.get(d["id"], {})
+        if key and key != MASK:
+            d["api_key"] = box.seal_text(key, _key_context(d["id"]))
+            changed.append(d["name"])
+        elif key == MASK and prev.get("provider") == d["provider"]:
+            d["api_key"] = prev.get("api_key", "")          # kept (encrypted)
+        else:
+            d["api_key"] = ""                               # cleared, or a new kind of provider without one
+        _validate_provider(d)
+        if is_default and not default:
+            default = d["id"]
+        new.append(d)
+    store = {"providers": new, "default": default or (new[0]["id"] if new else ""),
+             "daily_tokens_per_user": body.daily_tokens_per_user, "fix_failed_builds": body.fix_failed_builds,
+             # a removed provider: failed builds go to the default one again
+             "fix_provider": body.fix_provider if body.fix_provider in {p["id"] for p in new} else "",
+             "fix_mode": body.fix_mode}
+    db.put_setting(s.conn, "ai", store, by=s.username)
+    s.audit("settings.ai", detail={"providers": [f"{p['provider']}:{p['name']}:{p['model']}" for p in new],
+                                   "default": next((p["name"] for p in new if p["id"] == store["default"]), ""),
+                                   "keys_changed": changed, "daily_tokens_per_user": body.daily_tokens_per_user,
+                                   "fix_failed_builds": body.fix_failed_builds, "fix_provider": store["fix_provider"],
+                                   "fix_mode": body.fix_mode})
+    return _masked(store)
 
 
 @router.post("/settings/ai/test")
-def test_ai(request: Request, s: Session = Depends(require("admin"))) -> dict:
+def test_ai(body: TestIn, request: Request, s: Session = Depends(require("admin"))) -> dict:
+    store = ai_settings(s.conn, request.app.state.box)
+    if body.id not in {p["id"] for p in store["providers"]}:
+        raise ApiError(404, "not_found", "No such provider (save the settings first).")
     try:
-        prov, st = _provider(request, s.conn)
+        prov, st = _provider(request, s.conn, body.id)
         t0 = time.time()
         r = prov.complete("You are a connectivity check.", [{"role": "user", "content": "Reply with the word OK."}])
     except ValorError as e:
-        s.audit("settings.ai.test", "fail", detail={"error": e.code})
+        s.audit("settings.ai.test", "fail", target=next(p["name"] for p in store["providers"] if p["id"] == body.id),
+                detail={"error": e.code})
         raise ApiError(409 if e.code == "ai_not_configured" else 502, e.code, e.message, hint=e.hint)
     _record(s, st, r.input_tokens, r.output_tokens, True)
-    s.audit("settings.ai.test", detail={"model": st["model"]})
+    s.audit("settings.ai.test", target=st["name"], detail={"model": st["model"]})
     cfg = _cfg(request)
     try:
         pve = PVE(cfg)
@@ -153,15 +246,21 @@ def usage(s: Session = Depends(require("admin"))) -> dict:
 
 
 def _record(s: Session, st: dict, tin: int, tout: int, ok: bool) -> None:
-    s.conn.execute("INSERT INTO ai_usage(ts, username, provider, model, input_tokens, output_tokens, ok) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (time.time(), s.username, st["provider"], st.get("model", ""),
-                                                    tin, tout, int(ok)))
+    record_usage(s.conn, s.username, st, tin, tout, ok)
+
+
+def record_usage(conn, username: str, st: dict, tin: int, tout: int, ok: bool) -> None:
+    conn.execute("INSERT INTO ai_usage(ts, username, provider, model, input_tokens, output_tokens, ok) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?)", (time.time(), username, st["provider"], st.get("model", ""),
+                                                  tin, tout, int(ok)))
 
 
 @router.get("/builder")
-def builder_info(s: Session = Depends(require("operator"))) -> dict:
-    st = _settings(s.conn)
-    return {"configured": st["provider"] != "none", "provider": st["provider"], "model": st["model"]}
+def builder_info(request: Request, s: Session = Depends(require("operator"))) -> dict:
+    """What the chats may use (no secrets): every provider and the default."""
+    store = ai_settings(s.conn, request.app.state.box)
+    providers = [{k: p[k] for k in ("id", "name", "provider", "model")} for p in store["providers"]]
+    return {"configured": bool(providers), "default": store["default"], "providers": providers}
 
 
 def _facts(cfg, pve: PVE | None) -> dict:
@@ -184,8 +283,9 @@ def _facts(cfg, pve: PVE | None) -> dict:
             "networks_in_use": nets, "reserved_networks": list(cfg.reserved_networks), "existing_ranges": names}
 
 
-def start_ai(request: Request, s: Session):
-    """Rate limit, provider and the user's daily budget, shared by every chat. Returns (provider, settings, pve)."""
+def start_ai(request: Request, s: Session, pid: str | None = None):
+    """Rate limit, provider (pid: the chat's choice) and the user's daily budget, shared by every chat.
+    Returns (provider, settings, pve)."""
     now = time.time()
     with _rate_lock:
         recent = [t for t in _rate.get(s.username, []) if now - t < RATE[1]]
@@ -193,7 +293,7 @@ def start_ai(request: Request, s: Session):
             raise ApiError(429, "rate_limited", "Too many AI requests; wait a minute.")
         _rate[s.username] = recent + [now]
     try:
-        prov, st = _provider(request, s.conn)
+        prov, st = _provider(request, s.conn, pid)
     except ValorError as e:
         raise ApiError(409, e.code, e.message, hint=e.hint)
     limit = int(st.get("daily_tokens_per_user") or 0)

@@ -30,7 +30,7 @@ export function Audit() {
 
   return (
     <Card title="Audit log" bodyClass="" actions={
-      <input placeholder="Search action, user, target…" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 280 }} aria-label="Search" />
+      <input name="search" placeholder="Search action, user, target…" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 280 }} aria-label="Search" />
     }>
       <div style={{ padding: err ? "12px 18px 0" : 0 }}><ErrorBox error={err} /></div>
       <div className="table-wrap">

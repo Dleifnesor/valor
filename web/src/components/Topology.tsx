@@ -1,6 +1,7 @@
 import { ReactNode, useMemo, useState } from "react";
 import {
-  Background, Controls, Edge, Handle, MarkerType, Node, NodeProps, Position, ReactFlow,
+  Background, BaseEdge, Controls, Edge, EdgeLabelRenderer, EdgeProps, Handle, MarkerType, Node, NodeProps, Position, ReactFlow,
+  getBezierPath, getSmoothStepPath,
 } from "@xyflow/react";
 import { Change, TopoEdge, TopoNode, Topology as Topo } from "../types";
 
@@ -9,7 +10,9 @@ import { Change, TopoEdge, TopoNode, Topology as Topo } from "../types";
 // With a plan, every VM gets a color for what the plan will do to it.
 
 const SEG_W = 250;
-const SEG_GAP = 64;
+const SEG_GAP = 64;                       // narrowest gap between segments; widened to fit the traffic rule labels
+const MAX_GAP = 230;
+const LABEL_H = 20;
 const HEAD_H = 62;
 const HOST_BASE = 60;                     // title + OS line
 const CHIP_ROW = 20;                      // one row of role chips
@@ -110,6 +113,57 @@ function SegmentNode({ data }: NodeProps<Node<Data>>) {
 }
 
 const nodeTypes = { host: HostNode, router: RouterNode, internet: InternetNode, segment: SegmentNode, vpn: VpnNode };
+
+// Edge labels are HTML above the nodes, so a segment box or another line never covers them.
+type LabelData = { lx?: number; ly?: number; onSelect?: () => void };
+
+function EdgeLabel({ x, y, text, className, onSelect }: { x: number; y: number; text: ReactNode; className: string; onSelect?: () => void }) {
+  return (
+    <EdgeLabelRenderer>
+      <div className={`edge-label ${className}${onSelect ? " clickable" : ""}`} onClick={onSelect}
+        style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }}>{text}</div>
+    </EdgeLabelRenderer>
+  );
+}
+
+function RuleEdge(p: EdgeProps<Edge<LabelData>>) {
+  const [path, mx, my] = getBezierPath(p);
+  return (
+    <>
+      <BaseEdge id={p.id} path={path} style={p.style} markerEnd={p.markerEnd} markerStart={p.markerStart} interactionWidth={14} />
+      {p.label && <EdgeLabel x={p.data?.lx ?? mx} y={p.data?.ly ?? my} text={p.label} className="rule" onSelect={p.data?.onSelect} />}
+    </>
+  );
+}
+
+function GatewayEdge(p: EdgeProps<Edge<LabelData>>) {
+  const [path, mx, my] = getSmoothStepPath(p);
+  return (
+    <>
+      <BaseEdge id={p.id} path={path} style={p.style} />
+      {p.label && <EdgeLabel x={mx} y={my} text={p.label} className="gateway" />}
+    </>
+  );
+}
+
+const edgeTypes = { rule: RuleEdge, gateway: GatewayEdge };
+
+// Where the label of a rule between two columns goes: in a gap between segments, never over a segment box. The
+// curve is React Flow's bezier from side handle to side handle (both control points at the middle x), so the label
+// sits on the line at the gap's centre.
+function bezierYAt(sx: number, sy: number, tx: number, ty: number, x: number): number {
+  const mx = (sx + tx) / 2;
+  const at = (a: number, b: number, c: number, d: number, t: number) =>
+    a * (1 - t) ** 3 + 3 * b * (1 - t) ** 2 * t + 3 * c * (1 - t) * t ** 2 + d * t ** 3;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    if ((at(sx, mx, mx, tx, mid) - x) * (tx - sx) < 0) lo = mid; else hi = mid;
+  }
+  return at(sy, sy, ty, ty, (lo + hi) / 2);
+}
+
+const labelWidth = (text: string) => text.length * 7 + 14;      // 11px monospace plus the label's padding
 const VPN_W = 190;
 
 // Height of a host card: its role chips wrap, so count the rows they need at the card's width.
@@ -134,65 +188,101 @@ function shortLabel(label?: string): string | undefined {
   return list.length > 2 ? `${proto} ${list.slice(0, 2).join(",")},+${list.length - 2}` : `${label.slice(0, 18)}…`;
 }
 
-function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
+function layout(topo: Topo, onRules: (group: TopoEdge[]) => void): { nodes: Node<Data>[]; edges: Edge[] } {
   const segs = topo.nodes.filter((n) => n.kind === "segment");
   const hosts = topo.nodes.filter((n) => n.kind === "host");
-  const total = segs.length * SEG_W + Math.max(0, segs.length - 1) * SEG_GAP;
   const nodes: Node<Data>[] = [];
-  const abs: Record<string, { x: number; y: number; w: number }> = {};
+  const abs: Record<string, { x: number; y: number; w: number; h: number }> = {};
+
+  // rules between the same two endpoints (either direction) share one curve: draw them as one arrow
+  const groups = new Map<string, TopoEdge[]>();
+  for (const e of topo.edges) {
+    if (e.kind !== "policy") continue;
+    const k = [e.source, e.target].sort().join("|");
+    groups.set(k, [...(groups.get(k) ?? []), e]);
+  }
+  const ruleLabel = (group: TopoEdge[]) => (group.length > 1 ? `${group.length} rules` : shortLabel(group[0].label) ?? "");
+  // the gaps between segments are wide enough for the longest label plus an arrow on each side
+  const widest = Math.max(0, ...[...groups.values()].map((g) => labelWidth(ruleLabel(g))));
+  const gap = Math.min(MAX_GAP, Math.max(SEG_GAP, widest + 44));
+  const total = segs.length * SEG_W + Math.max(0, segs.length - 1) * gap;
+  const colX = (i: number) => -total / 2 + i * (SEG_W + gap);
 
   const inet = topo.nodes.find((n) => n.kind === "internet");
   if (inet) {
     nodes.push({ id: inet.id, type: "internet", position: { x: -INET_W / 2, y: 0 }, data: { raw: inet },
       style: { width: INET_W, height: 44 } });
-    abs[inet.id] = { x: -INET_W / 2, y: 0, w: INET_W };
+    abs[inet.id] = { x: -INET_W / 2, y: 0, w: INET_W, h: 44 };
   }
   const rtr = topo.nodes.find((n) => n.kind === "router");
   if (rtr) {
     nodes.push({ id: rtr.id, type: "router", position: { x: -ROUTER_W / 2, y: 110 }, data: { raw: rtr },
       style: { width: ROUTER_W, height: 74 } });
-    abs[rtr.id] = { x: -ROUTER_W / 2, y: 110, w: ROUTER_W };
+    abs[rtr.id] = { x: -ROUTER_W / 2, y: 110, w: ROUTER_W, h: 74 };
   }
   const vpn = topo.nodes.find((n) => n.kind === "vpn");
   if (vpn) {
     const pos = { x: ROUTER_W / 2 + 90, y: 110 };
     nodes.push({ id: vpn.id, type: "vpn", position: pos, data: { raw: vpn }, style: { width: VPN_W, height: 74 } });
-    abs[vpn.id] = { ...pos, w: VPN_W };
+    abs[vpn.id] = { ...pos, w: VPN_W, h: 74 };
   }
   segs.forEach((s, i) => {
     const members = hosts.filter((h) => h.parent === s.id);
     const heights = members.map(hostHeight);
     const height = HEAD_H + (heights.length ? heights.reduce((a, b) => a + b + HOST_GAP, 0) : HOST_BASE + HOST_GAP)
       + PAD - HOST_GAP + 6;
-    const x = -total / 2 + i * (SEG_W + SEG_GAP);
+    const x = colX(i);
     nodes.push({ id: s.id, type: "segment", position: { x, y: SEG_Y }, data: { raw: s },
       style: { width: SEG_W, height }, selectable: true });
-    abs[s.id] = { x, y: SEG_Y, w: SEG_W };
+    abs[s.id] = { x, y: SEG_Y, w: SEG_W, h: height };
     let y = HEAD_H;
     members.forEach((h, j) => {
       const rel = { x: PAD, y };
       nodes.push({ id: h.id, type: "host", parentId: s.id, extent: "parent", position: rel, data: { raw: h },
         style: { width: SEG_W - 2 * PAD, height: heights[j] } });
-      abs[h.id] = { x: x + rel.x, y: SEG_Y + rel.y, w: SEG_W - 2 * PAD };
+      abs[h.id] = { x: x + rel.x, y: SEG_Y + rel.y, w: SEG_W - 2 * PAD, h: heights[j] };
       y += heights[j] + HOST_GAP;
     });
   });
   let ry = SEG_Y;
   hosts.filter((h) => !h.parent).forEach((h) => {             // VMs a plan removes
-    const pos = { x: total / 2 + SEG_GAP, y: ry };
+    const pos = { x: colX(segs.length) + PAD, y: ry };
     nodes.push({ id: h.id, type: "host", position: pos, data: { raw: h }, style: { width: SEG_W - 2 * PAD, height: hostHeight(h) } });
-    abs[h.id] = { ...pos, w: SEG_W - 2 * PAD };
+    abs[h.id] = { ...pos, w: SEG_W - 2 * PAD, h: hostHeight(h) };
     ry += hostHeight(h) + HOST_GAP;
   });
 
+  // a rule's label goes into one of the gaps its curve crosses: the most central one that is still free
+  const column = (id: string) => {
+    const n = topo.nodes.find((x) => x.id === id);
+    const seg = n?.kind === "segment" ? n.id : n?.parent;
+    const i = segs.findIndex((x) => x.id === seg);
+    return i < 0 ? segs.length : i;
+  };
+  const placed: { x: number; y: number; w: number }[] = [];
+  const free = (x: number, y: number, w: number) =>
+    placed.every((o) => Math.abs(o.x - x) * 2 >= o.w + w || Math.abs(o.y - y) >= LABEL_H + 4);
+  const labelAt = (e: TopoEdge, text: string): { lx?: number; ly?: number } => {
+    const s = abs[e.source], t = abs[e.target];
+    const a = column(e.source), b = column(e.target);
+    if (a === b) return {};                                          // same column: React Flow's own midpoint
+    const right = a < b;
+    const sx = right ? s.x + s.w : s.x, tx = right ? t.x : t.x + t.w;
+    const sy = s.y + s.h / 2, ty = t.y + t.h / 2;
+    const lo = Math.min(a, b), hi = Math.max(a, b), mid = (lo + hi - 1) / 2;
+    const gaps = Array.from({ length: hi - lo }, (_, k) => lo + k).sort((p, q) => Math.abs(p - mid) - Math.abs(q - mid));
+    const w = labelWidth(text);
+    const spots = gaps.map((g) => { const x = colX(g) + SEG_W + gap / 2; return { x, y: bezierYAt(sx, sy, tx, ty, x) }; });
+    let spot = spots.find((p) => free(p.x, p.y, w));
+    if (!spot) {                                                     // every gap is taken here: step below the others
+      spot = { ...spots[0] };
+      while (!free(spot.x, spot.y, w)) spot.y += LABEL_H + 4;
+    }
+    placed.push({ ...spot, w });
+    return { lx: spot.x, ly: spot.y };
+  };
+
   const edges: Edge[] = [];
-  // rules between the same two endpoints (either direction) share one curve: draw them as one arrow
-  const groups = new Map<string, TopoEdge[]>();
-  for (const e of topo.edges) {
-    if (e.kind !== "policy" || !abs[e.source] || !abs[e.target]) continue;
-    const k = [e.source, e.target].sort().join("|");
-    groups.set(k, [...(groups.get(k) ?? []), e]);
-  }
   for (const e of topo.edges) {
     if (e.kind === "egress" || !abs[e.source] || !abs[e.target]) continue;   // internet access is a badge on the segment
     if (e.kind === "vpn") {
@@ -204,10 +294,8 @@ function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
     }
     if (e.kind === "uplink" || e.kind === "gateway") {
       edges.push({ id: e.id, source: e.source, target: e.target, sourceHandle: "b", targetHandle: "t",
-        type: e.kind === "gateway" ? "smoothstep" : "straight", label: e.kind === "gateway" ? e.label : undefined,
-        style: { strokeWidth: 2, stroke: "var(--border-strong)" }, labelBgPadding: [4, 2], labelBgBorderRadius: 4,
-        labelStyle: { fontFamily: "var(--mono)", fontSize: 11, fill: "var(--muted)" },
-        labelBgStyle: { fill: "var(--surface)" } });
+        type: e.kind === "gateway" ? "gateway" : "straight", label: e.kind === "gateway" ? e.label : undefined,
+        style: { strokeWidth: 2, stroke: "var(--border-strong)" } });
       continue;
     }
     const group = groups.get([e.source, e.target].sort().join("|")) ?? [e];
@@ -215,15 +303,14 @@ function layout(topo: Topo): { nodes: Node<Data>[]; edges: Edge[] } {
     const s = abs[e.source], t = abs[e.target];
     const leftToRight = s.x < t.x;
     const both = group.some((g) => g.source !== e.source);
+    const text = ruleLabel(group);
     edges.push({
-      id: e.id, source: e.source, target: e.target, type: "default", animated: true,
+      id: e.id, source: e.source, target: e.target, type: "rule", animated: true,
       sourceHandle: leftToRight ? "rs" : "ls", targetHandle: leftToRight ? "lt" : "rt",
-      label: group.length > 1 ? `${group.length} rules` : shortLabel(e.label), data: { description: e.description, group },
+      label: text, data: { description: e.description, group, ...labelAt(e, text), onSelect: () => onRules(group) },
       ...(both ? { markerStart: { type: MarkerType.ArrowClosed, color: "var(--accent)", width: 16, height: 16 } } : {}),
       style: { stroke: "var(--accent)", strokeWidth: 1.8, strokeDasharray: "6 4" },
       markerEnd: { type: MarkerType.ArrowClosed, color: "var(--accent)", width: 16, height: 16 },
-      labelStyle: { fontFamily: "var(--mono)", fontSize: 11, fill: "var(--accent-strong)", fontWeight: 600 },
-      labelBgStyle: { fill: "var(--surface)" }, labelBgPadding: [4, 2], labelBgBorderRadius: 4,
     });
   }
   return { nodes, edges };
@@ -241,9 +328,9 @@ export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, e
   nodeActions?: (node: TopoNode, close: () => void) => ReactNode;   // buttons in the selected node's panel
   edgeActions?: (edge: TopoEdge, close: () => void) => ReactNode;   // buttons for a selected traffic rule
 }) {
-  const { nodes, edges } = useMemo(() => layout(topology), [topology]);
   const [selected, setSelected] = useState<TopoNode | null>(null);
   const [rules, setRules] = useState<TopoEdge[] | null>(null);
+  const { nodes, edges } = useMemo(() => layout(topology, (group) => { setRules(group); setSelected(null); }), [topology]);
   const label = (id: string) => topology.nodes.find((n) => n.id === id)?.label ?? id.replace(/^(host|seg):/, "");
   const key = useMemo(() => topology.nodes.map((n) => n.id + (n.change ?? "")).join("|"), [topology]);
   const changes = topology.changes;
@@ -263,6 +350,7 @@ export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, e
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         colorMode={colorMode()}
         fitView
         fitViewOptions={{ padding: 0.12 }}

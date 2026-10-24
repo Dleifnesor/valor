@@ -48,9 +48,9 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (m: Me) => void 
         {u.source === "local" && (
           <Card title="Change password">
             <form className="stack" onSubmit={change}>
-              <label className="field">Current password<input type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} required /></label>
+              <label className="field">Current password<input name="current-password" type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} required /></label>
               <label className="field">New password <span className="hint">12 characters or more</span>
-                <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={12} />
+                <input name="new-password" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={12} />
               </label>
               <div className="row end"><button className="btn primary" disabled={!cur || next.length < 12}>Change password</button></div>
             </form>
@@ -65,7 +65,7 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (m: Me) => void 
           ) : (
             <form className="stack" onSubmit={regen}>
               <div className="muted small">Lost your codes or used most of them? Make new ones (confirm with your password).</div>
-              <label className="field">Password<input type="password" autoComplete="current-password" value={pw2} onChange={(e) => setPw2(e.target.value)} required /></label>
+              <label className="field">Password<input name="password" type="password" autoComplete="current-password" value={pw2} onChange={(e) => setPw2(e.target.value)} required /></label>
               <div className="row end"><button className="btn" disabled={!pw2}>Make new codes</button></div>
             </form>
           )}

@@ -117,7 +117,7 @@ export function RangeEditor({ name, canEdit }: { name?: string; canEdit: boolean
             blocked. Saving does not build anything - you review and approve a plan first. In milestone 2 the chat
             builder writes this for you.
           </div>
-          <textarea className="code" spellCheck={false} value={text} onChange={(e) => setText(e.target.value)}
+          <textarea name="spec" className="code" spellCheck={false} value={text} onChange={(e) => setText(e.target.value)}
             aria-label="Range spec (YAML)" />
           <ErrorBox error={err} />
         </div>

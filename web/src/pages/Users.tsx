@@ -39,7 +39,7 @@ export function Users({ me }: { me: Me }) {
                     <div className="muted small">{u.display_name}{u.email ? ` · ${u.email}` : ""}</div>
                   </td>
                   <td>
-                    <select value={u.role} disabled={u.source === "ldap"} style={{ width: 120 }}
+                    <select name="role" value={u.role} disabled={u.source === "ldap"} style={{ width: 120 }}
                       onChange={(e) => act(() => patch(`/api/users/${u.id}`, { role: e.target.value as Role }))}
                       aria-label={`Role of ${u.username}`}>
                       <option value="viewer">viewer</option>
@@ -103,11 +103,11 @@ function AddUser({ onClose, onCreated }: { onClose: () => void; onCreated: (u: U
   return (
     <Modal title="Add user" onClose={onClose}>
       <form className="stack" onSubmit={submit}>
-        <label className="field">Username<input value={form.username} onChange={set("username")} required autoFocus /></label>
-        <label className="field">Display name<input value={form.display_name} onChange={set("display_name")} /></label>
-        <label className="field">Email<input type="email" value={form.email} onChange={set("email")} /></label>
+        <label className="field">Username<input name="new-username" value={form.username} onChange={set("username")} required autoFocus /></label>
+        <label className="field">Display name<input name="display-name" value={form.display_name} onChange={set("display_name")} /></label>
+        <label className="field">Email<input name="email" type="email" value={form.email} onChange={set("email")} /></label>
         <label className="field">Role
-          <select value={form.role} onChange={set("role")}>
+          <select name="role" value={form.role} onChange={set("role")}>
             <option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option>
           </select>
         </label>

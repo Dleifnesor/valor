@@ -99,7 +99,7 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
               <pre className="script">{s.script}</pre>
             </div>
           ))}
-          <label className="row small"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+          <label className="row small"><input name="acknowledge" type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
             I have read the custom scripts and want to run them</label>
         </div>
       )}

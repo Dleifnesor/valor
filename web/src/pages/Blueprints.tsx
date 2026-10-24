@@ -134,18 +134,18 @@ function CreateModal({ onClose }: { onClose: () => void }) {
       </div>
       <div className="stack" style={{ marginTop: 12 }}>
         <label>Blueprint id
-          <input value={id} onChange={(e) => setId(e.target.value.toLowerCase())} placeholder="web-lab" autoFocus />
+          <input name="blueprint-id" value={id} onChange={(e) => setId(e.target.value.toLowerCase())} placeholder="web-lab" autoFocus />
         </label>
         {mode === "range" ? (
           <label>Range
-            <select value={range} onChange={(e) => setRange(e.target.value)}>
+            <select name="range" value={range} onChange={(e) => setRange(e.target.value)}>
               <option value="">Choose a range…</option>
               {ranges.data?.ranges.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
             </select>
           </label>
         ) : (
           <label>Range spec (YAML)
-            <textarea className="mono" rows={16} value={yaml} onChange={(e) => setYaml(e.target.value)} spellCheck={false} />
+            <textarea name="yaml" className="mono" rows={16} value={yaml} onChange={(e) => setYaml(e.target.value)} spellCheck={false} />
           </label>
         )}
         <ErrorBox error={err} />
@@ -267,19 +267,19 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
       </div>
       <div className="row" style={{ gap: 12, marginTop: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
         <label>Name prefix
-          <input value={prefix} onChange={(e) => { setPrefix(e.target.value.toLowerCase()); setPreview(null); }} style={{ width: 140 }} />
+          <input name="prefix" value={prefix} onChange={(e) => { setPrefix(e.target.value.toLowerCase()); setPreview(null); }} style={{ width: 140 }} />
         </label>
         {mode === "numbered" ? (
           <label>Copies
-            <input type="number" min={1} max={50} value={count} onChange={(e) => { setCount(Number(e.target.value)); setPreview(null); }} style={{ width: 90 }} />
+            <input name="count" type="number" min={1} max={50} value={count} onChange={(e) => { setCount(Number(e.target.value)); setPreview(null); }} style={{ width: 90 }} />
           </label>
         ) : (
           <label className="grow">Students (one per line or comma separated; lowercase)
-            <textarea rows={3} value={students} onChange={(e) => { setStudents(e.target.value); setPreview(null); }} placeholder={"alice\nbob"} />
+            <textarea name="students" rows={3} value={students} onChange={(e) => { setStudents(e.target.value); setPreview(null); }} placeholder={"alice\nbob"} />
           </label>
         )}
         <label className="row" style={{ gap: 6 }}>
-          <input type="checkbox" checked={build} onChange={(e) => setBuild(e.target.checked)} /> Build now
+          <input name="build" type="checkbox" checked={build} onChange={(e) => setBuild(e.target.checked)} /> Build now
         </label>
       </div>
       <div className="small muted" style={{ marginTop: 6 }}>

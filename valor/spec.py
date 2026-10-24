@@ -346,6 +346,8 @@ def parse_spec(text: str) -> RangeSpec:
         for err in e.errors(include_url=False, include_input=False):
             loc = ".".join(str(x) for x in err["loc"]) or "(spec)"
             msg = err["msg"].removeprefix("Value error, ")
+            if err["type"] in ("ip_v4_network", "ip_v4_address", "ip_v4_interface"):
+                msg += " (each of the four numbers is 0-255: for VLAN 340 e.g. 10.34.0.0/24, not 10.340.0.0/24)"
             errors.append({"location": loc, "message": msg})
         raise SpecError(f"spec has {len(errors)} problem(s)", errors)
 

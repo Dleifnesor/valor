@@ -1,12 +1,21 @@
+# *shares a folder* OwO roles/windows-file-share/role.yaml: metadata for windows-file-share, an SMB share on
+# Windows ^w^
 description: >
   SMB file share on Windows (C:\Shares\<share>): full control for Administrators, change (or read) access for
   authenticated users - domain users on domain members
+# Windows only UwU
 families: [windows]
+# Serves SMB on port 445 >w<
 ports: [445]
+# params: all optional OwO
 params:
+  # share: the share's name ^w^
   share:
+    raw: true
+    pattern: '^[A-Za-z0-9_-]{1,32}$'
     default: Share
     description: Share name
+  # read_only: authenticated users may only read *wags tail*
   read_only:
     default: false
     description: Authenticated users may only read

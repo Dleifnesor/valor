@@ -84,10 +84,10 @@ function PasswordStep({ busy, run, next }: { busy: boolean; run: Run; next: (s: 
     <form className="stack" onSubmit={submit}>
       <h2 style={{ margin: 0 }}>Sign in</h2>
       <label className="field">Username
-        <input autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+        <input name="username" autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
       </label>
       <label className="field">Password
-        <input type="password" autoComplete="current-password" value={password}
+        <input name="password" type="password" autoComplete="current-password" value={password}
           onChange={(e) => setPassword(e.target.value)} required />
       </label>
       <button className="btn primary" disabled={busy || !username || !password}>Continue</button>
@@ -109,7 +109,7 @@ function CodeStep({ busy, run, done, back }: { busy: boolean; run: Run; done: (m
         {recovery ? "Enter one of your recovery codes (each works once)."
           : "Enter the 6-digit code from your authenticator app."}
       </div>
-      <input autoFocus value={code} onChange={(e) => setCode(e.target.value)}
+      <input name="code" autoFocus value={code} onChange={(e) => setCode(e.target.value)}
         inputMode={recovery ? "text" : "numeric"} autoComplete="one-time-code"
         placeholder={recovery ? "abcde-12345" : "123 456"} className="mono" maxLength={recovery ? 16 : 7} />
       <button className="btn primary" disabled={busy || code.replace(/\s/g, "").length < 6}>Verify</button>
@@ -155,7 +155,7 @@ function EnrollStep({ busy, run, done }: { busy: boolean; run: Run; done: (m: Me
             <div className="mono" style={{ wordBreak: "break-all", marginTop: 6 }}>{data.secret.replace(/(.{4})/g, "$1 ")}</div>
             <div className="muted small">Account: {data.issuer} · time-based · 6 digits · 30 seconds</div>
           </details>
-          <input autoFocus value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric"
+          <input name="code" autoFocus value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric"
             autoComplete="one-time-code" placeholder="123 456" className="mono" maxLength={7} />
           <button className="btn primary" disabled={busy || code.replace(/\s/g, "").length !== 6}>Turn on</button>
         </>
@@ -185,7 +185,7 @@ function CodesStep({ codes, done }: { codes: string[]; done: () => void }) {
         <button type="button" className="btn" onClick={download}>Download</button>
         <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(codes.join("\n"))}>Copy</button>
       </div>
-      <label className="checkbox"><input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
+      <label className="checkbox"><input name="saved" type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
         I saved them somewhere safe</label>
       <button className="btn primary" disabled={!saved} onClick={done}>Continue</button>
     </div>
@@ -205,13 +205,13 @@ function ChangeStep({ busy, run, done }: { busy: boolean; run: Run; done: (m: Me
       <h2 style={{ margin: 0 }}>Choose a new password</h2>
       <div className="muted">Your administrator gave you a temporary password. Pick your own (12+ characters).</div>
       <label className="field">Temporary password
-        <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+        <input name="current-password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
       </label>
       <label className="field">New password
-        <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={12} />
+        <input name="new-password" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={12} />
       </label>
       <label className="field">New password again
-        <input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} required />
+        <input name="confirm-password" type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} required />
       </label>
       {again && next !== again && <div className="alert warn">The passwords don't match.</div>}
       <button className="btn primary" disabled={busy || next.length < 12 || next !== again}>Save and continue</button>

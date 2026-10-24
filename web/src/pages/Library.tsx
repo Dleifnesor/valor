@@ -126,17 +126,17 @@ function UrlDownload({ onDone, onError }: { onDone: () => void; onError: (e: Api
   return (
     <Card title="Download from a URL">
       <form className="stack" onSubmit={submit}>
-        <label className="field">URL (https)<input value={url} onChange={(e) => {
+        <label className="field">URL (https)<input name="url" value={url} onChange={(e) => {
           setUrl(e.target.value);
           if (!filename) setFilename((e.target.value.split("?")[0].split("/").pop() || "").replace(/[^A-Za-z0-9._+=-]/g, ""));
         }} placeholder="https://…/installer.iso" required /></label>
-        <label className="field">File name<input value={filename} onChange={(e) => setFilename(e.target.value)} placeholder="name.iso" required /></label>
+        <label className="field">File name<input name="filename" value={filename} onChange={(e) => setFilename(e.target.value)} placeholder="name.iso" required /></label>
         <div className="row">
           <label className="field grow">Checksum <span className="hint">optional, strongly recommended</span>
-            <input value={checksum} onChange={(e) => setChecksum(e.target.value.trim())} className="mono" />
+            <input name="checksum" value={checksum} onChange={(e) => setChecksum(e.target.value.trim())} className="mono" />
           </label>
           <label className="field" style={{ width: 120 }}>Algorithm
-            <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
+            <select name="algorithm" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
               {ALGORITHMS.map((a) => <option key={a}>{a}</option>)}
             </select>
           </label>
@@ -179,9 +179,9 @@ function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError
   return (
     <Card title="Upload an ISO">
       <form className="stack" onSubmit={submit}>
-        <input type="file" accept=".iso" ref={file} required onChange={(e) => setName(safeName(e.target.files?.[0]?.name ?? ""))} />
+        <input name="iso-file" type="file" accept=".iso" ref={file} required onChange={(e) => setName(safeName(e.target.files?.[0]?.name ?? ""))} />
         <label className="field">Checksum <span className="hint">optional; VALOR refuses the file if it does not match (algorithm from its length)</span>
-          <input value={checksum} onChange={(e) => { setChecksum(e.target.value.trim()); setAlgorithm(""); }} className="mono" />
+          <input name="checksum" value={checksum} onChange={(e) => { setChecksum(e.target.value.trim()); setAlgorithm(""); }} className="mono" />
         </label>
         <ChecksumDrop filename={name} onChecksum={(h, a) => { setChecksum(h); setAlgorithm(a); }} />
         {pct !== null && <><div className="progress"><div style={{ width: `${pct}%` }} /></div><div className="small muted">{phase} {pct < 100 ? `${pct.toFixed(0)}%` : ""}</div></>}

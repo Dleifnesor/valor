@@ -1,8 +1,13 @@
+import { useState } from "react";
+import { ApiError, post } from "../api";
 import { JobSummary } from "../types";
 import { ago, go, useApi, when } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
 
-const target = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
+export const jobTarget = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
+/** Who started a job: web:<user>, assistant:<user>:<chat> (rebuild after an automatic fix), rerun:<origin>. */
+const who = (origin: string): string => origin.startsWith("rerun:") ? `${who(origin.slice(6))}, run again by VALOR`
+  : origin.startsWith("assistant:") ? `the assistant (for ${origin.split(":")[1]})` : origin.replace(/^web:/, "");
 
 export function Jobs() {
   const { data, error, loading } = useApi<{ jobs: JobSummary[] }>("/api/jobs?limit=100", 5000);
@@ -20,7 +25,7 @@ export function Jobs() {
                 <tr key={j.id} className="clickable" onClick={() => go(`jobs/${j.id}`)}>
                   <td className="mono">{j.id}</td>
                   <td>{j.kind}{j.target.verify ? " + verify" : ""}</td>
-                  <td>{target(j.target)}</td>
+                  <td>{jobTarget(j.target)}</td>
                   <td><StateBadge state={j.state} /></td>
                   <td className="nowrap">{ago(j.created)}</td>
                   <td className="nowrap">{j.finished ? when(j.finished) : "–"}</td>
@@ -65,13 +70,13 @@ export function JobDetail({ id }: { id: string }) {
   const { data, error } = useApi<JobDetailData>(`/api/jobs/${id}?tail=400`, 2500);
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />;
   const r = data.result;
-  const name = target(data.target);
+  const name = jobTarget(data.target);
   return (
     <>
       <div className="row">
         <StateBadge state={data.state} />
         <b>{data.kind}{data.target.verify ? " + verify" : ""} · {name}</b>
-        <span className="muted">by {String(data.origin).replace(/^web:/, "")} · {when(data.created)}</span>
+        <span className="muted">by {who(String(data.origin))} · {when(data.created)}</span>
         <span className="grow" />
         {name && <a className="btn" href={`#/ranges/${name}`}>Open range</a>}
       </div>
@@ -79,9 +84,11 @@ export function JobDetail({ id }: { id: string }) {
         <div className="alert error">
           <b>{r.error}</b>: {r.message}
           {r.step && <div className="small">Step: {r.step}{r.host ? ` on ${r.host}` : ""}</div>}
+          {r.details && <pre className="mono small job-details">{String(r.details).slice(-2000)}</pre>}
           {r.hint && <div className="small">Hint: {r.hint}</div>}
         </div>
       )}
+      {data.kind === "apply" && data.state === "failed" && name && <FixWithAssistant id={id} range={name} />}
       {r && r.ok && (
         <div className="alert ok">
           Finished{r.seconds ? ` in ${r.seconds} s` : ""}.
@@ -108,5 +115,34 @@ export function JobDetail({ id }: { id: string }) {
         )}
       </Card>
     </>
+  );
+}
+
+/** A failed build goes to the assistant (VALOR starts it by itself when the setting is on): open its chat or ask. */
+function FixWithAssistant({ id, range }: { id: string; range: string }) {
+  const { data } = useApi<{ chats: { id: number; owner: string; title: string }[] }>(`/api/jobs/${id}/fix`, 10000);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const open = (chat: number) => go(`ranges/${range}/chat/${chat}`);
+  const ask = async () => {
+    setBusy(true); setErr(null);
+    try { open((await post<{ chat: number }>(`/api/jobs/${id}/fix`)).chat); }
+    catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
+  };
+  const chats = data?.chats ?? [];
+  return (
+    <div className="alert info row" style={{ gap: 10, flexWrap: "wrap" }}>
+      <span className="grow">
+        {chats.length ? "The assistant is working on this failure in the range's chat - it looks inside the VMs, "
+          + "fixes the cause and (if set so) rebuilds the range." : "The assistant can find the cause and fix it."}
+      </span>
+      {chats.map((c) => (
+        <button key={c.id} className="btn small primary" onClick={() => open(c.id)}>
+          Open the chat{chats.length > 1 ? ` (${c.owner})` : ""}
+        </button>
+      ))}
+      {!chats.length && <button className="btn small primary" disabled={busy} onClick={ask}>Ask the assistant to fix it</button>}
+      <ErrorBox error={err} />
+    </div>
   );
 }

@@ -1,11 +1,25 @@
+# *perks ears* OwO roles/ad-dc-replica/role.yaml: the METADATA for the ad-dc-replica role. VALOR reads this file
+# (as parsed YAML) to learn what the role does, which operating systems it runs on, which ports it serves and
+# which settings ("params") a spec may give it ^w^
+# This role adds a SECOND domain controller to a domain that another host already created (redundancy!)
 description: Additional domain controller (redundancy) for an existing domain, with DNS
+# families: which OS families the role supports; this one only runs on Windows UwU
 families: [windows]
+# ports: the TCP ports it serves (adding it in the range editor with allow_from creates policy rules for exactly
+# these): DNS 53, Kerberos 88/464, RPC 135, LDAP 389, SMB 445, LDAPS 636 and the global catalog 3268/3269 *wags tail*
 ports: [53, 88, 135, 389, 445, 464, 636, 3268, 3269]
+# wait_for: build this host only AFTER the host named in the `dc` param, because the domain must exist first >w<
 wait_for: [dc]
+# params: the settings a spec can pass. Each one may have required/default, a description, and for `raw: true`
+# values a regex `pattern` it must match (raw values are used as written, not turned into addresses) OwO
 params:
+  # domain: the existing domain to join as a controller (a dotted DNS name) ^w^
   domain:
+    raw: true
+    pattern: '^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$'
     required: true
     description: DNS name of the existing domain
+  # dc: the range host that is already a domain controller of that domain *nuzzles*
   dc:
     required: true
     description: Host name of a domain controller of that domain (in this range)
