@@ -14,11 +14,6 @@ Newest at the bottom. Keep entries short.
 - **Cause**: Proxmox expects the key list URL-encoded *inside* the form value.
 - **Fix**: built in (`pve.update_config` encodes it). Keep in mind for any new code that sets `sshkeys`.
 
-## MCP SDK 2.x API
-- **Symptom**: `No module named 'mcp.server.fastmcp'`.
-- **Cause**: mcp >= 2 renamed FastMCP to `MCPServer` (`from mcp.server.mcpserver import MCPServer`).
-- **Fix**: the VALOR server uses `MCPServer`. (2026-10-02)
-
 ## `Missing privilege separation directory: /run/sshd` (baseline SSH controls fail)
 - **Symptom**: `baseline_failed` on ssh-root-login / ssh-password-auth / ssh-max-auth-tries; details show
   `Missing privilege separation directory: /run/sshd`.

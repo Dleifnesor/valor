@@ -76,7 +76,7 @@ The chat builder needs an AI provider. An administrator connects one under **Set
 ### With the spec editor
 
 **Ranges -> New range** opens the editor. Write or paste a spec (format:
-[spec reference](../.claude/skills/range-build/spec-reference.md); examples: [`ranges/`](../ranges/)). The side
+[spec reference](../valor/spec-reference.md); examples: [`examples/`](../examples/)). The side
 panel lists what this cluster offers: operating systems, roles, baselines, VLANs in use and networks to avoid.
 **Check** validates the spec and shows its map. **Save spec** keeps it.
 

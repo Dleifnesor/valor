@@ -53,5 +53,5 @@ params:                     # every parameter the script reads; unknown params i
 
 ## Testing a new role
 
-Add it to a host in a spec, `range_validate`, `range_plan`, apply after approval. A role change makes the plan show
+Add it to a host in a spec on a test range in the VALOR web UI, plan, and build after approval. A role change makes the plan show
 `converge` for the hosts using it (no reboot). Remember the router policy must allow the traffic the service needs.

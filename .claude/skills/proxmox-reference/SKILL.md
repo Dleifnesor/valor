@@ -6,8 +6,8 @@ description: Reference for how VALOR uses Proxmox VE (API, cloud-init, guest age
 # Proxmox VE reference for VALOR
 
 Proxmox VE 8.2+ or 9.x. The engine talks to the API with one privilege-separated token, on the node configured in
-`/etc/valor/config.toml` (you cannot read it - ask the user/admin if a setting matters; `cluster_info` shows the
-values the engine uses). **Check `known-issues.md` first** - it lists errors already solved and their fixes.
+`/etc/valor/config.toml` (you cannot read it - ask the user/admin if a setting matters; the web UI's dashboard
+and `valor info` in the VALOR VM show the values the engine uses). **Check `known-issues.md` first** - it lists errors already solved and their fixes.
 
 ## What the engine's token may do
 
@@ -25,8 +25,8 @@ The installer (`installer/identity.py`) grants exactly these; `<id>` is the inst
 The VALOR VM sits in `<id>-system`, where the token has no rights. A **403** means the spec asked for something
 outside these (another storage, bridge, or a VM outside the pool). Fix the spec; never ask for broader rights.
 
-Administrator-only (root, not available to you): `./install.sh --template <os>` on an installed VALOR; in the
-development harness `valor-admin template build <os>`, `valor-admin bridge create <name>`, `valor-admin deploy`.
+Administrator-only (root, not available to you): `./install.sh --template <os>` builds or replaces a template,
+`./install.sh --upgrade` deploys a new VALOR version.
 
 ## Mechanics
 

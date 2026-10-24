@@ -39,13 +39,12 @@ class Config:
     iso_storage: str = ""                       # ISO library: downloads and uploads go here
     iso_storages: tuple[str, ...] = ()          # ISO storages VALOR may list (includes iso_storage)
     # Paths
-    project_dir: str = "/srv/valor"
+    project_dir: str = str(Path(__file__).resolve().parent.parent)     # the checkout (development and tests)
     content_dir: str = ""                       # roles/, baselines/, templates/ (default: project_dir)
     data_dir: str = ""                          # ranges/, journals/ (default: project_dir)
     state_dir: str = "/var/lib/valor"
     ssh_public_key: str = "/etc/valor/ssh/id_ed25519.pub"
     secret_key_file: str = "/etc/valor/secret.key"   # encrypts range login passwords at rest
-    job_runner: str = "spawn"                   # "spawn": detached process; "worker": the valor-worker service
     # Guest defaults
     default_os: str = "ubuntu-24.04"
     nameservers: tuple[str, ...] = ("1.1.1.1", "9.9.9.9")

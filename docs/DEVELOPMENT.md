@@ -9,7 +9,7 @@ How to set up, test and change VALOR. Read [ARCHITECTURE.md](ARCHITECTURE.md) fi
 - [Trying a change on a cluster](#trying-a-change-on-a-cluster)
 - [Common changes](#common-changes)
 - [Continuous integration](#continuous-integration)
-- [The Claude Code harness](#the-claude-code-harness)
+- [Claude Code](#claude-code)
 - [Evaluation](#evaluation)
 
 ## Rules
@@ -54,8 +54,8 @@ only. CI checks that it imports nothing else.
 | `test_builder.py`, `test_chats.py` | AI provider settings, the validate-and-fix loop, budgets; saved chats, the range agent, approvals, read-only commands. |
 | `test_installer.py`, `test_portability.py` | Installer parsing, defaults and validation; engine behavior that must not depend on any one cluster. |
 
-Run them before every commit. Live checks against a real cluster (build a range, verify it, destroy it) are done by
-hand or with the [harness](#the-claude-code-harness); describe what you ran in the pull request.
+Run them before every commit. Live checks against a real cluster (build a range, verify it, destroy it) are done
+in an installed VALOR (see [below](#trying-a-change-on-a-cluster)); describe what you ran in the pull request.
 
 ## The web UI
 
@@ -110,7 +110,7 @@ the database's `PRAGMA user_version`, at every start of the web service and the 
 ### Change the engine
 
 - New spec fields go into `valor/spec.py` (strict models: unknown keys are errors), the
-  [spec reference](../.claude/skills/range-build/spec-reference.md) and, when the cluster must be checked,
+  [spec reference](../valor/spec-reference.md) and, when the cluster must be checked,
   `valor/validate.py`.
 - Anything that changes a VM must show up in the plan: add it to `hw` (needs a reboot or rebuild) or to `conv_hash`
   (converges in place) in `valor/plan.py`. Otherwise an unchanged-spec apply cannot notice it, or notices it
@@ -129,9 +129,8 @@ See [CONTENT.md](CONTENT.md): [writing a role](CONTENT.md#writing-a-role), [base
 
 The chat builder's and range chat's prompts are assembled in `valor/ai.py` (`reference`, `SPEC_RULES`,
 `builder_prompt`, `range_prompt`) and include
-[`spec-reference.md`](../.claude/skills/range-build/spec-reference.md) verbatim. That file is also the Claude Code
-harness's spec reference, so a change there reaches both. Keep it about the spec format and free of anything specific
-to one cluster (the prompt adds this cluster's facts). After a prompt change, run a few builder requests against a
+[`spec-reference.md`](../valor/spec-reference.md) verbatim. That file is also the spec format's reference for
+people, so a change there reaches both. Keep it about the spec format and free of anything specific to one cluster (the prompt adds this cluster's facts). After a prompt change, run a few builder requests against a
 real model, including a small local one: what a large model ignores, a small one may follow literally.
 
 The range agent's tools and the read-only command allowlist are in `valor/agent.py`. Read-only must stay
@@ -160,22 +159,16 @@ upgrade and uninstall know about it. Network changes need the backup and rollbac
 
 Changes go through pull requests and are squash-merged.
 
-## The Claude Code harness
+## Claude Code
 
-The repository carries the MVP's Claude Code harness, still used to exercise the engine on the development cluster:
-
-- [`.mcp.json`](../.mcp.json) starts `valor-mcp` (as the `valor` user) with the engine's tools; building, destroying
-  and running commands in guests ask for approval ([`.claude/settings.json`](../.claude/settings.json)).
-- Skills in `.claude/skills/`: `range-build` (with the spec reference), `range-destroy`, `role-authoring`,
-  `compliance`, `proxmox-reference` (with `known-issues.md`, a log of solved build errors).
-- `valor-admin` ([CLI.md](CLI.md#valor-admin-and-valor-mcp-development-cluster)) copies the checkout's engine into the
-  harness (`valor-admin deploy`, as root).
-
-[`CLAUDE.md`](../CLAUDE.md) holds the rules for Claude Code sessions in this repository.
+[`CLAUDE.md`](../CLAUDE.md) holds the rules for Claude Code sessions in this repository, and
+[`.claude/settings.json`](../.claude/settings.json) what they may do without asking (never touch the cluster
+directly). Skills in `.claude/skills/` carry engine knowledge: `role-authoring`, `compliance` and
+`proxmox-reference` (with `known-issues.md`, a log of solved build errors).
 
 ## Evaluation
 
 [`eval/run_metrics.py`](../eval/run_metrics.py) measures the MVP's success metrics for one or more specs: for each
 cycle it destroys, plans, applies with verification (timed), applies again (must change nothing) and plans again
-(must be all `keep`), then compares the plans of all cycles. Results go to `eval/results/` (not committed). It uses
-the harness's engine (`sudo -u valor /opt/valor/bin/valor`).
+(must be all `keep`), then compares the plans of all cycles. Run it as root inside the VALOR VM (it calls
+`/opt/valor/bin/valor`); results go to `results/` next to the script (not committed).

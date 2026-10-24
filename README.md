@@ -99,8 +99,8 @@ Modules, data flow and files on disk: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 ## Range specs, roles and baselines
 
 A range spec (YAML) lists segments (VLAN + private CIDR, optional internet egress), hosts (OS, size, roles), the
-allowed traffic between segments and optional tests. Examples are in `ranges/`; the full format is in the
-[spec reference](.claude/skills/range-build/spec-reference.md). Roles (`roles/<name>/`) are idempotent,
+allowed traffic between segments and optional tests. Examples are in `examples/`; the full format is in the
+[spec reference](valor/spec-reference.md). Roles (`roles/<name>/`) are idempotent,
 parameterized services for Linux and Windows; baselines (`baselines/`) are hardening controls with a check and a
 fix. Catalog and how to write your own: [docs/CONTENT.md](docs/CONTENT.md).
 

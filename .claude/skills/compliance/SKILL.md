@@ -47,6 +47,6 @@ Always report results as "aligned with", never "compliant with" or "certified".
 
 ## Fixing a failing control
 
-Read the error details, inspect with `guest_run` if needed (approval required), then correct `check` and/or `fix`
+Read the error details, inspect the host from a range chat in Question mode if needed, then correct `check` and/or `fix`
 in the YAML and re-apply - a baseline change makes every host `converge` (no reboot). Note that isolated segments
 lose internet access after the build, so automatic updates there only work while build egress is open.

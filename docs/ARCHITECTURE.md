@@ -62,17 +62,17 @@ Proxmox nodes only.
 |---|---|
 | [`install.sh`](../install.sh), [`installer/`](../installer/) | The installer. Runs as root on a Proxmox node; Python standard library only. |
 | [`appliance/`](../appliance/) | Everything installed inside the VALOR VM: `setup.sh`, nginx, nftables, systemd units, `requirements.lock`. |
-| [`valor/`](../valor/) | The engine: spec, validate, plan, apply, verify, destroy, lifecycle, journal; the AI client and the range agent's tools; the `valor`, `valor-admin` and `valor-mcp` entry points. |
+| [`valor/`](../valor/) | The engine: spec, validate, plan, apply, verify, destroy, lifecycle, journal; the AI client and the range agent's tools; the `valor` CLI; the spec reference. |
 | [`valor/web/`](../valor/web/) | The web API (FastAPI), its database and the job worker. |
 | [`web/`](../web/) | The web UI (React, TypeScript, Vite, React Flow). `web/dist` is built and committed. |
 | [`roles/`](../roles/) | Services: `role.sh` (Linux) and/or `role.ps1` (Windows) plus `role.yaml`. See [CONTENT.md](CONTENT.md). |
 | [`baselines/`](../baselines/) | Hardening profiles and the compliance framework mapping. |
 | [`templates/`](../templates/) | OS catalog (`catalog.toml`), ISO catalog (`isos.toml`), publisher signing keys, cloud-init vendor data. |
-| [`ranges/`](../ranges/), [`journals/`](../journals/) | Example specs, and the journals from the MVP's reference builds. |
+| [`examples/`](../examples/) | Example specs (shipped with VALOR, used by the tests). |
 | [`tests/`](../tests/) | `pytest`, no cluster needed. |
 | [`ci/`](../ci/) | Example CI pipelines that use the `valor` CLI. |
 | [`eval/`](../eval/) | The MVP metrics script (rebuild fidelity, idempotence, timing). |
-| [`.claude/`](../.claude/), [`.mcp.json`](../.mcp.json) | The Claude Code development harness: skills and the MCP server config. `spec-reference.md` in it is also the product's AI prompt (see [AI](#ai-chat-builder-and-range-agent)). |
+| [`.claude/`](../.claude/) | Claude Code settings and engine-knowledge skills for developing VALOR. |
 | [`tools/lock.py`](../tools/lock.py) | Regenerates `appliance/requirements.lock`. |
 
 ## The engine (`valor/`)
@@ -102,7 +102,7 @@ Proxmox nodes only.
 | | [`jobs.py`](../valor/jobs.py), [`ops.py`](../valor/ops.py), [`state.py`](../valor/state.py) | Job records and events, the engine lock, running a job (`ops.execute`), per-range results and history. |
 | | [`config.py`](../valor/config.py), [`errors.py`](../valor/errors.py), [`crypto.py`](../valor/crypto.py) | Configuration, structured errors (`ValorError`: code, message, step, host, details, hint, completed steps), AES-256-GCM secrets at rest. |
 | AI | [`ai.py`](../valor/ai.py), [`agent.py`](../valor/agent.py) | Providers and prompts; the range agent's tools and the read-only command classifier ([below](#ai-chat-builder-and-range-agent)). |
-| Entry points | [`cli.py`](../valor/cli.py), [`admin.py`](../valor/admin.py), [`mcp_server.py`](../valor/mcp_server.py) | `valor` (CLI), `valor-admin` (root tasks on the development cluster), `valor-mcp` (MCP server for the Claude Code harness). See [CLI.md](CLI.md). |
+| Entry point | [`cli.py`](../valor/cli.py) | `valor` (CLI). See [CLI.md](CLI.md). |
 
 ## How a build works, in code
 
@@ -139,8 +139,7 @@ flowchart LR
    journal; after a verified build `ops` takes the `valor-clean` snapshot (its failure never fails the build).
 
 Every failure is a `ValorError` with the failed step, the host, the last lines of output, a hint and the completed
-steps. That structure is what the job log, the CLI's `--json`, the MCP tools and the fix-a-failed-build assistant
-work from.
+steps. That structure is what the job log, the CLI's `--json` and the fix-a-failed-build assistant work from.
 
 ## Jobs and the worker
 
@@ -148,12 +147,11 @@ Anything that changes the cluster is a job: `apply`, `verify`, `destroy`, `power
 `snapshot_delete`, `rotate` (range login) and `wg_rotate` (WireGuard keys).
 
 - `jobs.create` writes `jobs/<id>/job.json` (state `queued`); the id is `YYYYMMDD-HHMMSS-<6 hex>`.
-- In the VALOR VM (`job_runner = "worker"`) the worker service picks the oldest queued job; on a development install
-  (`"spawn"`) a detached process runs it.
+- The worker service (`valor-web worker`) picks the oldest queued job.
 - `ops.execute` takes the **engine lock** (`engine.lock`, `flock`): one infrastructure job at a time. Progress events
   go to `jobs/<id>/events.jsonl`, the result to `job.json`.
-- On start the worker marks jobs left `running` by a previous worker as failed (`interrupted`); a spawned job
-  process that dies ends as `runner_died`. When a job ends the worker writes an audit entry and sends notifications.
+- On start the worker marks jobs left `running` by a previous worker as failed (`interrupted`); a job whose
+  process died ends as `runner_died`. When a job ends the worker writes an audit entry and sends notifications.
 
 `./install.sh --upgrade` waits for running and queued jobs before it restarts the services.
 
@@ -195,8 +193,8 @@ fixes).
 
 **The prompt** (`ai.reference`) is assembled per request from:
 
-- [`spec-reference.md`](../.claude/skills/range-build/spec-reference.md) (copied into the VALOR VM as
-  `/opt/valor/share/spec-reference.md`): **editing this file changes what the AI is told**;
+- [`spec-reference.md`](../valor/spec-reference.md) (next to the code that parses specs): **editing this file
+  changes what the AI is told**;
 - the compliance frameworks, the OS templates present on this cluster, every role with its parameters, and the
   cluster facts (VLANs in use, reserved networks...);
 - `SPEC_RULES` and the mode's instructions in `ai.py`.
@@ -266,7 +264,7 @@ React and TypeScript, built with Vite; the map uses React Flow (`@xyflow/react`)
 | `/etc/valor/ssh/` | valor | The engine's SSH key, put into range VMs for break-glass access. |
 | `/etc/valor/tls/` | root | Web certificate and VALOR's CA. |
 | `/opt/valor/lib`, `/opt/valor/venv` | root | The `valor` package and its hash-pinned dependencies. |
-| `/opt/valor/share/` | root | Roles, baselines, templates, `spec-reference.md`, example specs. |
+| `/opt/valor/share/` | root | Roles, baselines, templates, example specs. |
 | `/opt/valor/web/` | root | The built web UI (served by nginx). |
 | `/var/lib/valor/web.sqlite3` | valor | Accounts, sessions, audit log, settings, chats. |
 | `/var/lib/valor/data/` | valor | `ranges/*.yaml` (specs), `journals/*.md`, `blueprints/`. |

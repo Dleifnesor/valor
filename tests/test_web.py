@@ -1,4 +1,5 @@
 import base64
+import shutil
 import time
 from pathlib import Path
 
@@ -28,9 +29,11 @@ def env(tmp_path):
     key = tmp_path / "secret.key"
     Box.create_key_file(key)
     wcfg = WebConfig(db=str(tmp_path / "web.sqlite3"), secret_key_file=str(key), tls_cert=str(tmp_path / "none.crt"))
-    cfg = Config(project_dir=str(ROOT), state_dir=str(tmp_path / "state"), token_file=str(tmp_path / "no-token.json"),
+    shutil.copytree(ROOT / "examples", tmp_path / "examples" / "ranges")
+    cfg = Config(project_dir=str(ROOT), data_dir=str(tmp_path / "examples"), state_dir=str(tmp_path / "state"),
+                 token_file=str(tmp_path / "no-token.json"),
                  node="pve1", pool="valor-ranges", template_pool="valor-templates", storage="local-lvm",
-                 segment_bridge="vmbr100", uplink_bridge="vmbr0", job_runner="worker", secret_key_file=str(key))
+                 segment_bridge="vmbr100", uplink_bridge="vmbr0", secret_key_file=str(key))
     db.migrate(wcfg.db)
     conn = db.connect(wcfg.db)
     now = time.time()
@@ -226,7 +229,7 @@ def test_ranges_without_cluster(env):
         body = r.json()
         assert {"web2tier", "pentest", "devenv"} <= {x["name"] for x in body["ranges"]}
         assert body["cluster_error"]                       # no token in the test: reported, not fatal
-        spec = (ROOT / "ranges" / "web2tier.yaml").read_text()
+        spec = (ROOT / "examples" / "web2tier.yaml").read_text()
         r = c.post("/api/specs/check", json={"yaml": spec}, headers={"X-CSRF-Token": me["csrf"]})
         assert r.status_code == 200 and r.json()["topology"]["nodes"][0]["id"] == "internet"
         r = c.post("/api/specs/check", json={"yaml": "name: [oops"}, headers={"X-CSRF-Token": me["csrf"]})
@@ -240,7 +243,7 @@ def test_viewer_cannot_change_ranges(env):
     app, _ = env
     with client(app) as c:
         me, _ = enroll(c, "vic")
-        spec = (ROOT / "ranges" / "web2tier.yaml").read_text()
+        spec = (ROOT / "examples" / "web2tier.yaml").read_text()
         r = c.post("/api/specs/check", json={"yaml": spec}, headers={"X-CSRF-Token": me["csrf"]})
         assert r.status_code == 403
         r = c.post("/api/ranges/web2tier/destroy", json={"confirm": "web2tier"}, headers={"X-CSRF-Token": me["csrf"]})

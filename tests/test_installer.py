@@ -1,5 +1,8 @@
+# *tests the installer without a cluster* OwO tests/test_installer.py: tests for INSTALLER logic (summary in the
+# docstring)! ^w^
 """Installer logic that must work on any cluster: parsing, defaults, validation (no Proxmox needed)."""
 
+# tomllib, pytest, and the installer modules under test UwU
 import tomllib
 
 import pytest
@@ -9,6 +12,7 @@ from installer import discover as D
 from installer.appliance import config_toml, appliance_env
 from installer.network import _new_lines
 
+# Captured `ip -j` output for a node whose default route goes through a VLAN interface (vmbr0.20) >w<
 ROUTES = [{"dst": "default", "gateway": "10.0.20.1", "dev": "vmbr0.20"}]
 LINKS = [{"ifname": "vmbr0.20", "link": "vmbr0", "linkinfo": {"info_kind": "vlan", "info_data": {"id": 20}}},
          {"ifname": "vmbr0"}]
@@ -17,6 +21,8 @@ ADDRS = [{"ifname": "lo", "addr_info": [{"family": "inet", "local": "127.0.0.1",
          {"ifname": "vmbr9", "addr_info": [{"family": "inet", "local": "172.30.0.11", "prefixlen": 24}]}]
 
 
+# facts(): a made-up node (storages of every kind, bridges, the management network, used VM ids...), with any field
+# overridable OwO
 def facts(**over) -> D.Facts:
     st = D.parse_storages(
         [{"storage": "local", "type": "dir", "content": "iso,vztmpl,backup", "avail": 50 * 2**30, "total": 90 * 2**30, "active": 1},
@@ -42,9 +48,11 @@ def facts(**over) -> D.Facts:
     return D.Facts(**base)
 
 
+# CAT: a tiny OS catalog ^w^
 CAT = {"ubuntu-24.04": {}, "debian-13": {}}
 
 
+# The management network is found through the VLAN interface; reserved networks include routes, not loopback UwU
 def test_mgmt_on_vlan_interface():
     f = facts()
     assert (f.mgmt_bridge, f.mgmt_vlan, f.node_ip, f.mgmt_network, f.mgmt_gateway) == \
@@ -52,11 +60,14 @@ def test_mgmt_on_vlan_interface():
     assert f.networks == ["10.0.20.0/24", "172.30.0.0/24", "192.168.77.0/24"]     # routes too, no loopback
 
 
+# resolv.conf (skipping the local 127.x resolver) and CPU flags >w<
 def test_resolv_and_cpu_flags():
     assert D.parse_resolv("search a.b c\nnameserver 127.0.0.53\nnameserver 9.9.9.9\n") == (["9.9.9.9"], "a.b")
     assert "aes" in D.parse_cpu_flags("processor: 0\nflags\t\t: fpu sse aes avx\n")
 
 
+# Defaults are DETECTED, not hard-coded: a linked-clone storage (never plain LVM), the management bridge and VLAN, the
+# next free id block, networks, DNS, snippets, the name, and the next free bridge name OwO
 def test_defaults_are_detected_not_hardcoded():
     f = facts()
     a = A.defaults(f)
@@ -73,6 +84,7 @@ def test_defaults_are_detected_not_hardcoded():
     assert (name, create) == ("vmbr101", True)                           # vmbr100 exists
 
 
+# Validation catches every bad choice at once; good settings have no problems ^w^
 def test_validation_catches_bad_choices():
     f = facts()
     a = A.defaults(f, {"range_storage": "thick", "vm_ip": "10.0.20.50/24", "vm_gateway": "10.9.9.9",
@@ -84,6 +96,7 @@ def test_validation_catches_bad_choices():
     assert A.problems(good, f, CAT) == []
 
 
+# An answers file round-trips exactly; unknown settings are refused UwU
 def test_answers_file_roundtrip(tmp_path):
     f = facts()
     a = A.defaults(f, {"vm_ip": "10.0.20.50/24", "vm_gateway": "10.0.20.1", "allowed_networks": ["10.0.20.0/24", "10.8.0.0/16"]})
@@ -96,6 +109,7 @@ def test_answers_file_roundtrip(tmp_path):
         A.load_file(p)
 
 
+# The generated config.toml is valid TOML with every required setting, and the appliance settings are right >w<
 def test_generated_config_is_valid_and_complete():
     f = facts()
     a = A.defaults(f)
@@ -104,11 +118,12 @@ def test_generated_config_is_valid_and_complete():
     flat = {k: v for section in cfg.values() for k, v in section.items()}
     assert all(flat.get(k) for k in REQUIRED)
     assert flat["uplink_vlan"] == 20 and flat["vmid_min"] == 5000 and flat["vmid_max"] == 5899
-    assert cfg["web"]["appliance_vmid"] == 5999 and flat["job_runner"] == "worker"
+    assert cfg["web"]["appliance_vmid"] == 5999
     env = appliance_env(a, f, "install", "10.0.20.11")
     assert 'ALLOWED_NETWORKS="10.0.20.0/24"' in env and 'SSH_FROM="10.0.20.11"' in env
 
 
+# The network change check: adding a bridge removes nothing; changing an existing line is caught OwO
 def test_bridge_change_check():
     before = "auto lo\niface lo inet loopback\n\nauto vmbr0\niface vmbr0 inet static\n"
     after = before + "\nauto vmbr101\niface vmbr101 inet manual\n\tbridge-ports none\n"
@@ -118,12 +133,14 @@ def test_bridge_change_check():
     assert removed == ["iface vmbr0 inet static"]
 
 
+# Proxmox 8 gets VM.Monitor instead of the newer guest-agent privileges ^w^
 def test_pve8_privileges():
     from installer.identity import roles
     r = roles(facts())
     assert "VM.Monitor" in r["ValorEngine"] and not any("GuestAgent" in p for p in r["ValorEngine"])
 
 
+# Two installer runs writing the record at once don't lose each other's changes UwU
 def test_record_merges_concurrent_runs(tmp_path, monkeypatch):
     """Two installer runs (e.g. template builds in two shells) must not overwrite each other's record entries."""
     import json
@@ -145,6 +162,7 @@ def test_record_merges_concurrent_runs(tmp_path, monkeypatch):
     assert disk["steps"] == {"templates": "done"}
 
 
+# A retired template stays removed even when another run still remembers it >w<
 def test_record_retired_template_stays_removed(tmp_path, monkeypatch):
     import json
     from installer import record as R
@@ -160,6 +178,7 @@ def test_record_retired_template_stays_removed(tmp_path, monkeypatch):
     assert [t["vmid"] for t in disk["objects"]["templates"]] == [5908] and disk["objects"]["vm"] == {"vmid": 5999}
 
 
+# Formatting differences (spaces vs tabs, comments, letter case) don't count as network changes OwO
 def test_bridge_check_ignores_formatting():
     """A hand-edited interfaces file (spaces, comments) rewritten by Proxmox (tabs) is not a change."""
     before = ("# my notes\nauto lo\niface lo inet loopback\n\niface eth0 inet manual\n\nauto vmbr0\n"

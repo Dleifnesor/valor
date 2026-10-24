@@ -1,5 +1,7 @@
+# *photocopies a lab for every student* OwO tests/test_blueprints.py: tests for BLUEPRINTS (summary in the docstring)! ^w^
 """Range blueprints: copies get free VLANs and networks, keep host positions, student peers; deploy = preview."""
 
+# dataclasses (a changed config), ipaddress, shutil, pytest, the blueprints module, ValorError, parse_spec UwU
 import dataclasses
 import ipaddress
 import shutil
@@ -10,9 +12,12 @@ from valor import blueprints as bp
 from valor.errors import ValorError
 from valor.spec import parse_spec
 
+# The repo root, and the web app fixture/helpers from test_web.py (the noqa says the "unused" import is on purpose:
+# pytest needs the fixtures in scope) >w<
 from conftest import ROOT
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
 
+# BLUEPRINT: a two-segment web lab with a test aimed at an IP address and one VPN peer (a YAML string) OwO
 BLUEPRINT = """
 apiVersion: valor/v1
 name: weblab
@@ -39,14 +44,18 @@ access:
 """
 
 
+# dcfg: a config whose data folder already holds the example ranges (their VLANs/networks must be avoided) ^w^
 @pytest.fixture
 def dcfg(cfg, tmp_path):
     """A data dir with the repository's example ranges already 'deployed'."""
     data = tmp_path / "data"
-    shutil.copytree(ROOT / "ranges", data / "ranges")
+    shutil.copytree(ROOT / "examples", data / "ranges")
     return dataclasses.replace(cfg, data_dir=str(data))
 
 
+# Two student copies: four unique VLANs (avoiding existing and live ones), no overlapping networks (nor the reserved
+# one), hosts keep their position (.10, .20), IP-based tests follow, each student is a VPN peer, the marker line and
+# description are set, role params stay as written, and the YAML reads hand-written UwU
 def test_copies_get_their_own_vlans_networks_and_peers(dcfg):
     spec = bp.save(dcfg, "weblab", BLUEPRINT)
     existing_vlans = {s.vlan for p in dcfg.ranges_dir.glob("*.yaml") for s in parse_spec(p.read_text()).segments}
@@ -68,6 +77,8 @@ def test_copies_get_their_own_vlans_networks_and_peers(dcfg):
     assert "internet: false" not in out[0]["yaml"] and "cores: 1" not in out[0]["yaml"]      # reads hand-written
 
 
+# Bad copies fail with the right codes: an existing range's name, a bad name, duplicates, no copies; and bad
+# blueprint ids or invalid specs are refused >w<
 def test_names_are_checked(dcfg):
     spec = bp.save(dcfg, "weblab", BLUEPRINT)
     for copies, code in (([{"name": "web2tier"}], "range_exists"), ([{"name": "Bad Name"}], "invalid_name"),
@@ -81,6 +92,9 @@ def test_names_are_checked(dcfg):
         bp.save(dcfg, "broken", BLUEPRINT.replace("vlan: 120", "vlan: 110"))                # invalid spec
 
 
+# The web API end to end: save (operators only), list, view, preview (no cluster in tests, so not buildable),
+# deploy with a WRONG hash (409), deploy+build without a cluster (409), deploy without building (writes exactly the
+# previewed YAML), copies listed, a second preview refused, from-range drops the marker, delete OwO
 def test_web_preview_and_deploy(env, tmp_path):
     app, wcfg = env
     cfg = dataclasses.replace(app.state.cfg, data_dir=str(tmp_path / "data"))

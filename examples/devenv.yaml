@@ -1,13 +1,19 @@
+# OwO *unpacks a cozy dev lab* examples/devenv.yaml: an example RANGE SPEC! ^w^
+# One segment with internet, a Debian developer workstation and an Ubuntu PostgreSQL server for it. Every range spec
+# looks like this: apiVersion + name, then segments, hosts, policy and tests *wags tail*
 apiVersion: valor/v1
 name: devenv
 description: >
   Reference range 3: single-segment development environment with internet access - a Debian 13 developer
   workstation and an Ubuntu PostgreSQL server for it.
+# The hardening profile every Linux host gets UwU
 baseline: ubuntu-l1
 
+# One network: VLAN 310, 10.31.0.0/24, allowed onto the internet (public addresses only) >w<
 segments:
   - {name: dev, vlan: 310, cidr: 10.31.0.0/24, internet: true}
 
+# The workstation: Debian 13, a bit bigger than the default, with developer tools OwO
 hosts:
   - name: devbox
     segment: dev
@@ -18,6 +24,7 @@ hosts:
     disk: 20
     roles:
       - name: dev-tools
+  # The database: Ubuntu (the default OS), PostgreSQL that accepts connections from the workstation ^w^
   - name: devdb
     segment: dev
     address: 10.31.0.20
@@ -26,6 +33,7 @@ hosts:
         params:
           allow_from: [devbox]
 
+# Extra tests VALOR runs after building (on top of the automatic ones) UwU
 tests:
   - {name: workstation reaches the database, from: devbox, to: devdb, port: 5432, expect: open}
   - {name: workstation has internet, from: devbox, to: internet, expect: open}

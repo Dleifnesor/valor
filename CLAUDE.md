@@ -12,9 +12,9 @@ install it with `./install.sh` on any Proxmox node and work in its web UI (see `
   The installer discovers them; tests use synthetic facts (`tests/test_installer.py`, `tests/test_portability.py`).
 - **Secure by default.** Least privilege for the API token, approvals for every build/destroy, no secrets in logs,
   specs or chat. Never read `/etc/valor` (credentials).
-- Don't touch the cluster directly (`sudo`, `qm`, `pvesh`, `ssh` are denied here). Exercise the engine through the
-  `valor` MCP tools (`range_apply`, `range_destroy` and `guest_run` need the user's approval), and leave
-  installer runs to an administrator (root).
+- Don't touch the cluster directly (`sudo`, `qm`, `pvesh`, `ssh` are denied here). Try changes in an installed
+  VALOR (its web UI or the `valor` CLI inside the VALOR VM), and leave installer runs (`./install.sh --upgrade`)
+  to an administrator (root).
 
 ## Layout
 
@@ -22,17 +22,18 @@ install it with `./install.sh` on any Proxmox node and work in its web UI (see `
 |---|---|
 | `installer/`, `install.sh` | the installer (Python standard library only; runs on Proxmox nodes) |
 | `appliance/` | files used inside the VALOR VM: `setup.sh`, nginx, nftables, systemd units, `requirements.lock` |
-| `valor/` | engine (validate, plan, apply, verify, destroy, journal) and CLI |
+| `valor/` | engine (validate, plan, apply, verify, destroy, journal), the AI client and the `valor` CLI |
 | `valor/web/` | web API (FastAPI): auth + MFA + LDAP, sessions, CSRF, audit, settings, ranges, jobs, worker |
 | `web/` | web UI (React + Vite + React Flow); `web/dist` is built and committed |
 | `roles/`, `baselines/`, `templates/` | content shipped with VALOR |
-| `ranges/` | example range specs (the development harness reads them here) |
+| `examples/` | example range specs (shipped with VALOR; the tests use them too) |
 | `tests/` | `pytest`: engine, web API, installer logic - no cluster needed |
+| `ci/`, `eval/` | example CI pipelines and the success-metrics script (both run inside the VALOR VM) |
 | `docs/` | install, user, architecture, API, CLI, content and development guides (index: `docs/README.md`) |
 | `tools/lock.py` | regenerates `appliance/requirements.lock` |
 
-`.claude/skills/range-build/spec-reference.md` is also the **product's AI prompt** (the chat builder and range chats
-include it verbatim): keep it about the spec format and free of anything specific to this cluster.
+`valor/spec-reference.md` is the spec format for people **and the product's AI prompt** (the chat builder and range
+chats include it verbatim): keep it about the spec format and free of anything specific to this cluster.
 
 ## Workflow
 
@@ -44,12 +45,10 @@ cd web && npm run build                 # after UI changes; commit dist/ with th
 When behavior, a setting, a route or a command changes, update the matching page in `docs/` in the same change
 (new API routes: `docs/API.md` and `ACCESS` in `tests/test_security.py`).
 
-Engine changes reach the development harness after an administrator runs `valor-admin deploy`, and an installed
-VALOR VM after `./install.sh --upgrade` (both root).
+Changes reach an installed VALOR VM after an administrator runs `./install.sh --upgrade` (root).
 
-## Skills (engine knowledge; packaged for the in-product agent in milestone 2)
+## Skills (engine knowledge; to ship with the in-product agent, ROADMAP #28)
 
-- `/range-build`, `/range-destroy <name>` - build or tear down a range through the MCP tools.
 - `role-authoring`, `compliance`, `proxmox-reference` (with `known-issues.md`).
 
 Compliance results are always described as **aligned with** a framework's themes - never compliant or certified.
