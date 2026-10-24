@@ -421,7 +421,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
         <button className="btn ghost small" onClick={onClose} aria-label="Close chat">✕</button>
       </div>
       {info.data && !info.data.configured ? (
-        <div className="card-body muted">The chat needs an AI provider: an administrator can connect one in Settings → AI providers.</div>
+        <div className="card-body muted">The chat needs an AI provider: an administrator can connect one in Datacenter → AI providers.</div>
       ) : (
         <>
           <div className="seg-control" role="tablist">
@@ -446,8 +446,8 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
           )}
           <div className="chat-log range">
             {chat ? <ChatLog chat={chat} ctl={ctl} onReview={onReview} onAnswer={(a) => send(a, lastMode)}
-              empty={<div className="muted small">Ask about this range or describe a change. Conversations are saved (Chats page).</div>} />
-              : <div className="muted small">Ask about this range or describe a change. Conversations are saved (Chats page).</div>}
+              empty={<div className="muted small">Ask about this range or describe a change. Conversations are saved (Datacenter → Chats).</div>} />
+              : <div className="muted small">Ask about this range or describe a change. Conversations are saved (Datacenter → Chats).</div>}
           </div>
           <ErrorBox error={err ?? ctl.error} />
           {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (

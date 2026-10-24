@@ -117,16 +117,16 @@ export function ConsolePage({ range, host, kind }: { range: string; host: string
   const fullscreen = () => screen.current?.requestFullscreen?.();
 
   return (
-    <div className="stack" style={{ height: "calc(100vh - 140px)" }}>
+    <div className="console-page">
       <div className="row">
-        <button className="btn ghost" onClick={() => go(`ranges/${range}`)}>← {range}</button>
-        <b>{host}</b>
+        <div className="seg-control compact" role="tablist">
+          <button role="tab" aria-selected={kind === "vnc"} className={kind === "vnc" ? "active" : ""}
+            onClick={() => go(`ranges/${range}/vm/${host}/console`)}>Screen</button>
+          <button role="tab" aria-selected={kind === "serial"} className={kind === "serial" ? "active" : ""}
+            onClick={() => go(`ranges/${range}/vm/${host}/console/serial`)}>Serial</button>
+        </div>
         <span className={`badge ${state === "connected" ? "ok" : state === "error" ? "bad" : ""}`}>{state}</span>
         <span className="grow" />
-        <div className="tabs" style={{ border: 0 }}>
-          <button className={kind === "vnc" ? "active" : ""} onClick={() => go(`ranges/${range}/console/${host}/vnc`)}>Screen</button>
-          <button className={kind === "serial" ? "active" : ""} onClick={() => go(`ranges/${range}/console/${host}/serial`)}>Serial</button>
-        </div>
         {login && <button className="btn" onClick={typePassword} disabled={state !== "connected"} title="Types the range password (audited)">Type password</button>}
         {kind === "vnc" && <button className="btn" onClick={() => rfb.current?.sendCtrlAltDel()} disabled={state !== "connected"}>Ctrl+Alt+Del</button>}
         <button className="btn" onClick={fullscreen}>Full screen</button>
@@ -135,7 +135,7 @@ export function ConsolePage({ range, host, kind }: { range: string; host: string
       <ErrorBox error={err} />
       <div className="console-screen" ref={screen} />
       <div className="muted small">
-        Sign in as <span className="mono">valor</span> with the range password ("Login" on the range page, or Type password).
+        Sign in as <span className="mono">valor</span> with the range password (Login on the range, or Type password).
         Each console session is recorded in the audit log.
       </div>
     </div>
