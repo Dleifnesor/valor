@@ -90,7 +90,6 @@ class Facts:
     pending_network_changes: bool
     internet: tuple[bool, str] = (False, "not checked")
     record: dict | None = None
-    notes: list[str] = field(default_factory=list)
     interfaces: set[str] = field(default_factory=set)      # every network interface name on the node
 
     @property

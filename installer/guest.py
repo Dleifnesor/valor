@@ -99,7 +99,3 @@ def ipv4(node: str, vmid: int) -> str | None:
             if a.get("ip-address-type") == "ipv4" and not a["ip-address"].startswith("127."):
                 return a["ip-address"]
     return None
-
-
-def sha256_of(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()

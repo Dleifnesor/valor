@@ -175,9 +175,6 @@ class Role:
     def families(self) -> list[str]:
         return self.meta.get("families") or (["debian"] if self.script else ["windows"])
 
-    def script_for(self, family: str) -> str:
-        return self.ps_script if family == "windows" else self.script
-
 
 def load_role(roles_dir: Path, name: str) -> Role:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", name):
