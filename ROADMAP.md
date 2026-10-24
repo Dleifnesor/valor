@@ -112,12 +112,12 @@ Describe, see, approve, watch, review.
 | Issue | Goal |
 |---|---|
 | [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix — ✅ OpenRouter and OpenAI-compatible servers (e.g. LM Studio; the direct Anthropic provider was dropped, Claude is reached through OpenRouter); several providers with a default, keys encrypted; tested live with a local model and OpenRouter |
-| [#20](https://github.com/Dleifnesor/valor/issues/20) Chat environment builder | Conversation -> range spec -> plan, refined iteratively — ✅ validate-and-fix loop, map preview, hand-off to plan → approve |
-| [#21](https://github.com/Dleifnesor/valor/issues/21) Plan approval for every build and destroy | The approved plan hash is the one that runs |
-| [#22](https://github.com/Dleifnesor/valor/issues/22) Topology map (React Flow), view-only | Router, segments, hosts and allowed flows |
-| [#23](https://github.com/Dleifnesor/valor/issues/23) Change overlay on the topology map | Create / update / replace / remove in color |
-| [#24](https://github.com/Dleifnesor/valor/issues/24) Live build progress | Streamed job events |
-| [#25](https://github.com/Dleifnesor/valor/issues/25) Results and journal views | Verification matrix, baseline, history |
+| [#20](https://github.com/Dleifnesor/valor/issues/20) Chat environment builder | Conversation -> range spec -> plan, refined iteratively — 🚧 validate-and-fix loop, map preview, hand-off to plan → approve, follow-ups edit the spec, chats saved per user and range (#56, #61, #67); earlier spec versions are kept only as hashes in the build history: to do |
+| [#21](https://github.com/Dleifnesor/valor/issues/21) Plan approval for every build and destroy | The approved plan hash is the one that runs — ✅ the server recomputes the plan and compares hashes, destroy needs the range name typed, both audited (#54); by design the root CLI and an admin's "auto" fix mode build without a person approving (the fix mode never replaces or removes a VM) |
+| [#22](https://github.com/Dleifnesor/valor/issues/22) Topology map (React Flow), view-only | Router, segments, hosts and allowed flows — 🚧 router, segments, hosts, uplink and flows, automatic layout, zoom/pan, details on click (#54); the map is also where ranges are edited now, into a draft that still needs plan approval (#61, #62); export as PNG/SVG to do |
+| [#23](https://github.com/Dleifnesor/valor/issues/23) Change overlay on the topology map | Create / update / replace / remove in color — 🚧 colors from the engine's plan with a legend, in the plan dialog and for drafts (#54, #61); a toggle between current and proposed state to do |
+| [#24](https://github.com/Dleifnesor/valor/issues/24) Live build progress | Streamed job events — 🚧 job event timeline refreshed every 2.5 s, VM states on the map (#54); streaming (SSE) and map updates during a build to do |
+| [#25](https://github.com/Dleifnesor/valor/issues/25) Results and journal views | Verification matrix, baseline, history — 🚧 verification matrix, baseline per host, build history (#54); the journal is shown as plain Markdown: rendering (with Mermaid) and download to do |
 | [#26](https://github.com/Dleifnesor/valor/issues/26) AI usage dashboard | Tokens and cost per user, model, range — 🚧 tokens per user and day, daily budgets; cost per model/range to do |
 | [#27](https://github.com/Dleifnesor/valor/issues/27) H1-H4 metrics dashboard and the 10-prompt test suite | Evaluation built into the product |
 | [#28](https://github.com/Dleifnesor/valor/issues/28) Agent knowledge: skills inside the appliance | The development skills, shipped with releases |
@@ -160,7 +160,7 @@ Describe, see, approve, watch, review.
 | Issue | Goal |
 |---|---|
 | [#48](https://github.com/Dleifnesor/valor/issues/48) Compliance framework skills | CIS, NIST 800-171/800-53, DISA STIGs, ISO 27001 — 🚧 NIST SP 800-171, NIST SP 800-53 Low/Moderate, PCI DSS, HIPAA and CIS L1 themes (#66); DISA STIGs and ISO/IEC 27001 to do |
-| [#49](https://github.com/Dleifnesor/valor/issues/49) Compliance reports | Evidence with "aligned with" wording — ✅ per-requirement report on the range's Verification tab (#66) |
+| [#49](https://github.com/Dleifnesor/valor/issues/49) Compliance reports | Evidence with "aligned with" wording — 🚧 per-requirement report on the range's Verification tab (#66); Markdown/PDF export to do |
 | [#50](https://github.com/Dleifnesor/valor/issues/50) Evaluation runs and capstone write-up | H1-H4 on the finished product |
 | [#51](https://github.com/Dleifnesor/valor/issues/51) Release packaging and license | Signed, checksummed releases |
 | [#52](https://github.com/Dleifnesor/valor/issues/52) Security review | Threat model, audits, ASVS L2 test — 🚧 route-level access, CSRF/origin and header tests; live port/TLS checks |
