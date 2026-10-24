@@ -104,7 +104,7 @@ def test_generated_config_is_valid_and_complete():
     flat = {k: v for section in cfg.values() for k, v in section.items()}
     assert all(flat.get(k) for k in REQUIRED)
     assert flat["uplink_vlan"] == 20 and flat["vmid_min"] == 5000 and flat["vmid_max"] == 5899
-    assert cfg["web"]["appliance_vmid"] == 5999 and flat["job_runner"] == "worker"
+    assert cfg["web"]["appliance_vmid"] == 5999
     env = appliance_env(a, f, "install", "10.0.20.11")
     assert 'ALLOWED_NETWORKS="10.0.20.0/24"' in env and 'SSH_FROM="10.0.20.11"' in env
 

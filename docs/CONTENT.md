@@ -2,7 +2,7 @@
 
 What VALOR ships to build ranges with, and how to add to it: service **roles**, hardening **baselines**, the
 **compliance framework** mapping, and the **OS and ISO catalogs**. Specs use these by name
-([spec reference](../.claude/skills/range-build/spec-reference.md)).
+([spec reference](../valor/spec-reference.md)).
 
 In the VALOR VM this content lives in `/opt/valor/share/` and is replaced by `./install.sh --upgrade`. Change it in
 the repository, not in the VM.
@@ -231,7 +231,7 @@ builds them (`./install.sh --template <os>`).
 3. Check the roles and baselines for its family; a new family needs work in `valor/roles.py`, `valor/baseline.py` and
    probably `valor/apply.py`.
 4. Build it on a test cluster (`./install.sh --template <os>`), build a range with it and verify it.
-5. Update the OS list in the [spec reference](../.claude/skills/range-build/spec-reference.md) (the AI reads it).
+5. Update the OS list in the [spec reference](../valor/spec-reference.md) (the AI reads it).
 
 ## ISO catalog
 
