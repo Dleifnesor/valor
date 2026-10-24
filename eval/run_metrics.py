@@ -4,8 +4,9 @@
 For each spec and each cycle: destroy -> plan -> apply --verify (timed) -> second apply (must change nothing)
 -> plan (must be all 'keep'). Plans of all cycles are compared (rebuild fidelity).
 
-Usage (as the operator or an admin):  python3 eval/run_metrics.py web2tier.yaml [pentest.yaml ...] --cycles 3
-Results: eval/results/<timestamp>.json and eval/results/<timestamp>.md
+Usage, as root inside the VALOR VM (copy this file in; the specs are names in /var/lib/valor/data/ranges):
+    python3 run_metrics.py web2tier.yaml [pentest.yaml ...] --cycles 3
+Results: results/<timestamp>.json and results/<timestamp>.md next to this file
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-VALOR = ["sudo", "-n", "-u", "valor", "/opt/valor/bin/valor", "--json"]
+VALOR = ["/opt/valor/bin/valor", "--json"]      # runs the engine as the valor user
 OUT = Path(__file__).resolve().parent / "results"
 
 

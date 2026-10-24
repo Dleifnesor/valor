@@ -1,12 +1,11 @@
 # Example pipeline: build a disposable range, verify it, always tear it down.
-# Copy to .github/workflows/valor-range.yml in the repository that holds your range specs.
+# Copy to .github/workflows/valor-range.yml in the repository that holds your range specs (in ranges/).
 #
 # Requirements
-# - A self-hosted runner on the Proxmox node (label "valor") running as the operator account `valorop`,
-#   which may run the engine as `valor` (sudo rule installed by `valor-admin deploy`).
+# - A self-hosted runner inside the VALOR VM (label "valor") running as the `valor` user, the account the engine
+#   runs as: it alone can read the Proxmox API token, so treat the runner like an administrator.
 # - Convention: the spec file name equals the range name (ranges/web2tier.yaml -> range "web2tier").
-# The engine is the same one Claude uses; no agent is involved. Non-zero exit codes fail the job:
-# 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy.
+# Non-zero exit codes fail the job: 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy.
 name: valor-range
 
 on:
@@ -16,7 +15,7 @@ on:
         description: Range spec name (without .yaml)
         default: web2tier
   push:
-    paths: ["ranges/**", "roles/**", "baselines/**"]
+    paths: ["ranges/**"]
 
 concurrency: valor-engine          # the engine runs one infrastructure job at a time anyway
 
@@ -25,15 +24,12 @@ jobs:
     runs-on: [self-hosted, valor]
     env:
       RANGE: ${{ inputs.range || 'web2tier' }}
-      VALOR: sudo -n -u valor /opt/valor/bin/valor
+      VALOR: /opt/valor/bin/valor
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish specs, roles and baselines to the VALOR project
-        run: |
-          rsync -a --delete ranges/ /srv/valor/ranges/
-          rsync -a roles/ /srv/valor/roles/
-          rsync -a baselines/ /srv/valor/baselines/
+      - name: Publish the specs to VALOR (ranges made in the web UI stay)
+        run: cp ranges/*.yaml /var/lib/valor/data/ranges/
 
       - name: Validate
         run: $VALOR validate "$RANGE.yaml"
@@ -49,7 +45,7 @@ jobs:
 
       - name: Journal
         if: always()
-        run: cat "/srv/valor/journals/$RANGE.md" >> "$GITHUB_STEP_SUMMARY" || true
+        run: cat "/var/lib/valor/data/journals/$RANGE.md" >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Destroy
         if: always()

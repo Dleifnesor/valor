@@ -25,8 +25,8 @@ from .sh import CommandError, pvesh, run
 from .templates import cpu_type
 
 STAGE = "/var/lib/valor-install"
-PAYLOAD_DIRS = ["valor", "appliance", "roles", "baselines", "templates", "ranges"]
-PAYLOAD_FILES = ["pyproject.toml", "README.md", ".claude/skills/range-build/spec-reference.md"]
+PAYLOAD_DIRS = ["valor", "appliance", "roles", "baselines", "templates", "examples"]
+PAYLOAD_FILES = ["pyproject.toml", "README.md"]
 
 
 def payload() -> bytes:
@@ -81,8 +81,7 @@ def config_toml(a: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: st
                       "max_memory_fraction": 0.7, "reserved_networks": a.reserved_networks,
                       "iso_storage": a.iso_storage, "iso_storages": a.iso_storages},
         "paths": {"content_dir": "/opt/valor/share", "data_dir": "/var/lib/valor/data",
-                  "state_dir": "/var/lib/valor/state", "ssh_public_key": "/etc/valor/ssh/id_ed25519.pub",
-                  "job_runner": "worker"},
+                  "state_dir": "/var/lib/valor/state", "ssh_public_key": "/etc/valor/ssh/id_ed25519.pub"},
         "guest": {"default_os": "ubuntu-24.04", "nameservers": a.nameservers, "internet_probe": a.internet_probe,
                   "guest_user": "valor"},
         "web": {"db": "/var/lib/valor/web.sqlite3", "secret_key_file": "/etc/valor/secret.key",
