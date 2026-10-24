@@ -82,7 +82,6 @@ ACCESS = {
     "GET /api/builder": "role:operator",
     "POST /api/jobs/{job_id}/fix": "role:operator",
     "GET /api/jobs/{job_id}/fix": "role:viewer",
-    "POST /api/builder/chat": "role:operator",
     "GET /api/ranges/{name}/draft": "role:viewer",
     "PUT /api/ranges/{name}/draft": "role:operator",
     "POST /api/ranges/{name}/draft/ops": "role:operator",

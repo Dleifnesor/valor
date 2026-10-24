@@ -1,11 +1,10 @@
-"""Chat builder: provider settings (encrypted key), the validate-and-fix loop, budgets, permissions, wire format."""
+"""AI providers: settings (encrypted key), the validate-and-fix loop, the wire formats, cut-off answers."""
 
-import dataclasses
 import json
 
 import pytest
 
-from valor import ai, validate
+from valor import ai
 from valor.spec import parse_spec
 from valor.web import builder, db
 
@@ -127,29 +126,14 @@ def test_wire_formats(monkeypatch):
 
     def post(url, headers, json, timeout, stream):
         sent.update(url=url, headers=headers, body=json, timeout=timeout, stream=stream)
-        if "anthropic" in url:
-            return Stream([{"type": "message_start", "message": {"usage": {"input_tokens": 12}}},
-                           {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-                           {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "O"}},
-                           {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "K"}},
-                           {"type": "content_block_stop", "index": 0},
-                           {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}])
         return Stream([{"choices": [{"delta": {"content": "O"}}]}, {"choices": [{"delta": {"content": "K"}, "finish_reason": "stop"}]},
                        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 2}}])
     monkeypatch.setattr(ai.requests, "post", post)
-    r = ai.Anthropic("claude-sonnet-5-5", api_key="k").complete("SYS", [{"role": "user", "content": "hi"}])
-    assert sent["url"] == "https://api.anthropic.com/v1/messages" and sent["headers"]["x-api-key"] == "k"
-    assert sent["headers"]["anthropic-version"] == "2023-06-01"
-    assert sent["body"]["system"] == [{"type": "text", "text": "SYS", "cache_control": {"type": "ephemeral"}}]
-    assert sent["body"]["thinking"] == {"type": "adaptive", "display": "summarized"}
-    assert sent["body"]["output_config"] == {"effort": "high"} and sent["body"]["fallbacks"] == "default"
-    assert sent["headers"]["anthropic-beta"] == "server-side-fallback-2026-07-01"
-    assert sent["body"]["stream"] is True and sent["stream"] is True and sent["timeout"] == (10, 300)
-    assert sent["body"]["model"] == "claude-sonnet-5-5" and (r.text, r.input_tokens, r.output_tokens) == ("OK", 12, 3)
     r = ai.OpenAICompatible("llama", api_key="t", base_url="http://10.0.0.5:8000/v1/").complete("SYS", [{"role": "user", "content": "hi"}])
     assert sent["url"] == "http://10.0.0.5:8000/v1/chat/completions" and sent["headers"]["authorization"] == "Bearer t"
     assert sent["body"]["messages"][0] == {"role": "system", "content": "SYS"} and sent["body"]["stream_options"]
-    assert (r.text, r.input_tokens, r.output_tokens) == ("OK", 9, 2)
+    assert sent["body"]["stream"] is True and sent["stream"] is True and sent["timeout"] == (10, 300)
+    assert sent["body"]["model"] == "llama" and (r.text, r.input_tokens, r.output_tokens) == ("OK", 9, 2)
 
 
 def test_streaming_edge_cases(monkeypatch):
@@ -245,83 +229,45 @@ def test_context_length_is_the_loaded_one(monkeypatch):
     assert "sent nothing for 60 s" in e.value.message and "raise the timeout" in e.value.hint
 
 
-def test_settings_and_chat(env, tmp_path, monkeypatch):
+def test_ai_settings(env):
     app, wcfg = env
-    cfg = dataclasses.replace(app.state.cfg, data_dir=str(tmp_path / "data"))
-    app.state.cfg = cfg
-    cfg.ranges_dir.mkdir(parents=True)
-    (cfg.ranges_dir / "taken.yaml").write_text(GOOD.replace("name: chatlab", "name: taken"))
-    builder._rate.clear()
-    with client(app) as adm, client(app) as op, client(app) as viewer:
+    with client(app) as adm, client(app) as op:
         ame, _ = enroll(adm, "admin")
         ah = {"X-CSRF-Token": ame["csrf"]}
-        ome, _ = enroll(op, "olivia")
-        oh = {"X-CSRF-Token": ome["csrf"]}
-        vme, _ = enroll(viewer, "vic")
-        ask = {"messages": [{"role": "user", "content": "a web server and a client that may browse it"}]}
-        assert op.post("/api/builder/chat", json=ask, headers=oh).status_code == 409          # no provider yet
+        enroll(op, "olivia")
         assert op.get("/api/settings/ai").status_code == 403
+        assert op.get("/api/builder").json() == {"configured": False, "default": "", "providers": []}
         lm = {"name": "LM Studio", "provider": "openai", "model": "m", "base_url": "http://example.com/v1"}
         assert adm.put("/api/settings/ai", json={"providers": [lm]}, headers=ah).status_code == 400   # http to a public name
         lm["base_url"] = "http://192.168.1.50:8000/v1"
-        cl = {"name": "Claude", "provider": "anthropic", "api_key": "sk-ant-SECRET", "default": True}
-        r = adm.put("/api/settings/ai", json={"providers": [lm, cl], "daily_tokens_per_user": 5000}, headers=ah)
+        orr = {"name": "OpenRouter", "provider": "openrouter", "model": "qwen/qwen3.8-27b", "api_key": "sk-or-SECRET",
+               "default": True}
+        r = adm.put("/api/settings/ai", json={"providers": [lm, orr], "daily_tokens_per_user": 5000}, headers=ah)
         assert r.status_code == 200, r.text
-        lm_out, cl_out = r.json()["providers"]
-        assert cl_out["api_key"] == builder.MASK and cl_out["model"] == "claude-sonnet-5-5" and cl_out["default"]
-        assert not lm_out["default"] and lm_out["api_key"] == "" and lm_out["id"] != cl_out["id"]
+        lm_out, or_out = r.json()["providers"]
+        assert or_out["api_key"] == builder.MASK and or_out["default"]
+        assert adm.get("/api/settings/ai").json()["kinds"] == ["openai", "openrouter"]
+        assert not lm_out["default"] and lm_out["api_key"] == "" and lm_out["id"] != or_out["id"]
         raw = db.connect(wcfg.db).execute("SELECT value FROM settings WHERE key='ai'").fetchone()[0]
-        assert "sk-ant-SECRET" not in raw
-        r = adm.put("/api/settings/ai", json={"providers": [lm_out, cl_out], "daily_tokens_per_user": 5000}, headers=ah)
+        assert "sk-or-SECRET" not in raw
+        r = adm.put("/api/settings/ai", json={"providers": [lm_out, or_out], "daily_tokens_per_user": 5000}, headers=ah)
         stored = json.loads(db.connect(wcfg.db).execute("SELECT value FROM settings WHERE key='ai'").fetchone()[0])
-        assert r.status_code == 200 and stored["providers"][1]["api_key"] and stored["default"] == cl_out["id"]  # key kept
-        for bad in ([lm_out, {**cl_out, "id": None, "name": "lm studio"}],                  # names are unique
-                    [{"name": "OR", "provider": "openrouter", "model": "qwen/qwen3.8-27b"}]):  # OpenRouter needs a key
+        assert r.status_code == 200 and stored["providers"][1]["api_key"] and stored["default"] == or_out["id"]  # key kept
+        for bad in ([lm_out, {**or_out, "id": None, "name": "lm studio"}],                  # names are unique
+                    [{"name": "OR", "provider": "openrouter", "model": "qwen/qwen3.8-27b"}],  # OpenRouter needs a key
+                    [{"name": "OR", "provider": "openrouter", "api_key": "k"}]):             # and a model
             assert adm.put("/api/settings/ai", json={"providers": bad}, headers=ah).status_code == 400
-
-        fake = Fake([f"Named it taken.\n```yaml\n{GOOD.replace('name: chatlab', 'name: taken')}```",
-                     f"Renamed.\n```yaml\n{GOOD}```"])
-        seen = {}
-
-        def provider_from(st, key):
-            seen["key"] = key
-            return fake
-        monkeypatch.setattr(ai, "provider_from", provider_from)
-        assert viewer.post("/api/builder/chat", json=ask, headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
-        r = op.post("/api/builder/chat", json={**ask, "spec": "name: draft"}, headers=oh)
-        assert r.status_code == 200, r.text
-        res = r.json()
-        assert res["ok"] and res["attempts"] == 2 and res["reply"] == "Renamed." and res["topology"]["nodes"]
-        assert len(res["fixed"]) == 1 and "already exists" in res["fixed"][0] and res["warnings"] == []
-        assert seen["key"] == "sk-ant-SECRET"                                               # decrypted server-side only
-        system, msgs = fake.calls[0]
-        assert "ad-dc" in system and "access:" in system and "taken" in system              # roles, reference, facts
-        assert "The current spec in the builder" in msgs[-1]["content"]
-        assert "already exists" in fake.calls[1][1][-1]["content"]
+        gone = {"name": "C", "provider": "anthropic", "model": "m", "api_key": "k"}           # no longer a provider kind
+        assert adm.put("/api/settings/ai", json={"providers": [gone]}, headers=ah).status_code == 422
         info = op.get("/api/builder").json()
-        assert info["configured"] and info["default"] == cl_out["id"] and "api_key" not in json.dumps(info)
+        assert info["configured"] and info["default"] == or_out["id"] and "api_key" not in json.dumps(info)
         assert [(p["name"], p["provider"], p["model"]) for p in info["providers"]] == [
-            ("LM Studio", "openai", "m"), ("Claude", "anthropic", "claude-sonnet-5-5")]
-        u = adm.get("/api/settings/ai/usage").json()["users"]
-        assert u[0]["username"] == "olivia" and u[0]["input"] == 2000 and u[0]["today"] == 2400
-        fake.replies = [f"No hardening.\n```yaml\n{GOOD}baseline: none\n```"]
-        res = op.post("/api/builder/chat", json=ask, headers=oh).json()
-        assert res["ok"] and res["fixed"] == [] and res["warnings"] == [validate.NO_BASELINE]   # shown, not hidden
-        fake.replies = [f"```yaml\n{GOOD}```"] * 5
-        for _ in range(2):                      # 2400 + 3 x 1200 tokens (with the one above) > the 5000 budget
-            op.post("/api/builder/chat", json=ask, headers=oh)
-        over = op.post("/api/builder/chat", json=ask, headers=oh)
-        assert over.status_code == 429 and over.json()["error"] == "ai_budget"
-        builder._rate.clear()
-        adm.put("/api/settings/ai", json={"providers": [lm_out, cl_out], "daily_tokens_per_user": 0}, headers=ah)
-        fake.replies = [f"```yaml\n{GOOD}```"] * 20
-        codes = [op.post("/api/builder/chat", json=ask, headers=oh).status_code for _ in range(builder.RATE[0] + 1)]
-        assert codes[-1] == 429 and codes[0] == 200
+            ("LM Studio", "openai", "m"), ("OpenRouter", "openrouter", "qwen/qwen3.8-27b")]
         audit = db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='settings.ai'").fetchone()[0]
-        assert audit == 3
+        assert audit == 2
 
 
-def test_cut_off_answers_and_defaults(env, monkeypatch):
+def test_cut_off_answers_and_defaults(env):
     assert ai.DEFAULTS["max_tokens"] >= 16384 and ai.Provider("m").max_tokens == ai.DEFAULTS["max_tokens"]
 
     class Cut(Fake):
@@ -331,21 +277,13 @@ def test_cut_off_answers_and_defaults(env, monkeypatch):
     cut = Cut([])
     with pytest.raises(ai.ValorError) as e:
         ai.build(cut, "S", [{"role": "user", "content": "x"}], lambda t: [])
-    assert e.value.code == "ai_truncated" and len(cut.calls) == 1          # no pointless retries
+    assert e.value.code == "ai_truncated" and len(cut.calls) == 1 and "Max tokens" in e.value.hint   # no retries
     app, wcfg = env
-    builder._rate.clear()
-    with client(app) as adm, client(app) as op:
+    with client(app) as adm:
         ame, _ = enroll(adm, "admin")
-        adm.put("/api/settings/ai", json={"providers": [{"name": "Claude", "provider": "anthropic", "api_key": "k"}]},
-                headers={"X-CSRF-Token": ame["csrf"]})
+        adm.put("/api/settings/ai", json={"providers": [{"name": "OR", "provider": "openrouter", "model": "m",
+                                                          "api_key": "k"}]}, headers={"X-CSRF-Token": ame["csrf"]})
         assert adm.get("/api/settings/ai").json()["providers"][0]["max_tokens"] == ai.DEFAULTS["max_tokens"]
-        ome, _ = enroll(op, "olivia")
-        monkeypatch.setattr(ai, "provider_from", lambda st, key: Cut([]))
-        r = op.post("/api/builder/chat", json={"messages": [{"role": "user", "content": "big lab"}]},
-                    headers={"X-CSRF-Token": ome["csrf"]})
-        assert r.status_code == 422 and r.json()["error"] == "ai_truncated" and "Max tokens" in r.json()["hint"]
-        spent = db.connect(wcfg.db).execute("SELECT SUM(output_tokens) FROM ai_usage").fetchone()[0]
-        assert spent == ai.DEFAULTS["max_tokens"]                             # cut-off answers still count
 
 
 def test_a_full_context_window_is_not_blamed_on_max_tokens():
@@ -362,9 +300,7 @@ def test_a_full_context_window_is_not_blamed_on_max_tokens():
 
 def test_cut_off_detected_on_the_wire(monkeypatch):
     monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout, stream: Stream(
-        [{"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 5}}]
-        if "anthropic" in url else [{"choices": [{"delta": {"content": "x"}, "finish_reason": "length"}]}]))
-    assert ai.Anthropic("m", api_key="k").complete("S", []).truncated
+        [{"choices": [{"delta": {"content": "x"}, "finish_reason": "length"}]}]))
     assert ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", []).truncated
     monkeypatch.setattr(ai.requests, "post", lambda url, headers, json, timeout, stream: Stream(
         [{"choices": [{"delta": {"reasoning_content": "hmm "}}]}, {"choices": [{"delta": {"content": "ok"}}]},
