@@ -184,8 +184,8 @@ The routes, their access levels and the request conventions are listed in [API.m
 
 ## AI: chat builder and range agent
 
-**Providers** ([`ai.py`](../valor/ai.py)): `Anthropic` (Messages API), `OpenAICompatible` (any `/v1` server, such as
-LM Studio or vLLM) and `OpenRouter`. Answers are streamed; the timeout is how long a model may stay silent. Reasoning
+**Providers** ([`ai.py`](../valor/ai.py)): `OpenAICompatible` (any `/v1` server, such as LM Studio or vLLM) and
+`OpenRouter` (hosted models, Claude among them). Answers are streamed; the timeout is how long a model may stay silent. Reasoning
 that a model writes inline (`<think>`) or as separate events is shown as "thinking". Tool calls that a local model
 writes into its text (`<tool_call>` tags) are recovered. Provider settings and encrypted keys live in the settings
 table; `builder.resolve` picks a chat's provider (or the default, then the others as a fallback for failed-build
