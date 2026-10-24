@@ -1,13 +1,14 @@
 """Saved chats: ownership, the background turn and its feed, question cards, the chat builder, and the range agent
 (read-only commands run at once, changes wait for approval, denial, allow-all, Question mode, spec drafts, stop)."""
 
+import dataclasses
 import json
 import sqlite3
 import time
 
 import pytest
 
-from valor import agent, ai, drafts
+from valor import agent, ai, drafts, validate
 from valor.cluster import VMState
 from valor.pve import ExecResult
 from valor.web import builder, chats, db
@@ -88,7 +89,8 @@ def start(app, monkeypatch, fake):
     adm, op = client(app), client(app)
     adm.__enter__(), op.__enter__()
     ame, _ = enroll(adm, "admin")
-    adm.put("/api/settings/ai", json={"providers": [{"name": "Claude", "provider": "anthropic", "api_key": "k"}]},
+    adm.put("/api/settings/ai", json={"providers": [{"name": "Hosted", "provider": "openrouter", "model": "m",
+                                                     "api_key": "k"}]},
             headers={"X-CSRF-Token": ame["csrf"]})
     monkeypatch.setattr(ai, "provider_from", lambda st, key: fake)
     me, _ = enroll(op, "olivia")
@@ -245,6 +247,57 @@ def test_builder_chat_asks_then_builds(lab, monkeypatch):
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+def test_every_turn_checks_key_prompt_budget_and_rate(env, tmp_path, monkeypatch):
+    """What every chat turn goes through: the provider (its key decrypted on the server only), the cluster reference
+    in the prompt, the spec check and fix loop, usage, the daily budget and the rate limit."""
+    app, wcfg = env
+    cfg = dataclasses.replace(app.state.cfg, data_dir=str(tmp_path / "data"))
+    app.state.cfg = cfg
+    cfg.ranges_dir.mkdir(parents=True)
+    (cfg.ranges_dir / "taken.yaml").write_text(GOOD.replace("name: chatlab", "name: taken"))
+    builder._rate.clear()
+    with client(app) as adm, client(app) as op, client(app) as viewer:
+        ame, _ = enroll(adm, "admin")
+        ah = {"X-CSRF-Token": ame["csrf"]}
+        ome, _ = enroll(op, "olivia")
+        h = {"X-CSRF-Token": ome["csrf"]}
+        vme, _ = enroll(viewer, "vic")
+        cid = op.post("/api/chats", json={"kind": "builder"}, headers=h).json()["id"]
+        ask = {"message": "a web server and a client that may browse it", "mode": "build"}
+        assert op.post(f"/api/chats/{cid}/messages", json=ask, headers=h).status_code == 409    # no provider yet
+        orr = {"name": "OpenRouter", "provider": "openrouter", "model": "qwen/qwen3.8-27b", "api_key": "sk-or-SECRET"}
+        adm.put("/api/settings/ai", json={"providers": [orr], "daily_tokens_per_user": 300}, headers=ah)
+        fake = Script([f"Named it taken.\n```yaml\n{GOOD.replace('name: chatlab', 'name: taken')}```",
+                       f"Renamed.\n```yaml\n{GOOD}```"])
+        seen = {}
+        monkeypatch.setattr(ai, "provider_from", lambda st, key: seen.update(key=key) or fake)
+        assert viewer.post(f"/api/chats/{cid}/messages", json=ask, headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
+        m = wait(op, cid, say(op, h, cid, ask["message"], "build"))
+        assert m["content"] == "Renamed." and m["meta"]["yaml"] == GOOD and m["meta"]["warnings"] == []
+        assert len(m["meta"]["fixed"]) == 1 and "already exists" in m["meta"]["fixed"][0]
+        assert seen["key"] == "sk-or-SECRET"                                              # decrypted server-side only
+        system = fake.calls[0]["system"]
+        assert "ad-dc" in system and "access:" in system and "taken" in system             # roles, reference, facts
+        assert "already exists" in fake.calls[1]["messages"][-1]["content"]
+        u = adm.get("/api/settings/ai/usage").json()["users"]
+        assert u[0]["username"] == "olivia" and u[0]["input"] == 200 and u[0]["today"] == 240
+        fake.replies = [f"No hardening.\n```yaml\n{GOOD}baseline: none\n```"]
+        m = wait(op, cid, say(op, h, cid, "no hardening", "build"))
+        assert m["meta"]["warnings"] == [validate.NO_BASELINE]                             # shown, not hidden
+        assert "The current spec in the builder" in fake.calls[-1]["messages"][-1]["content"]
+        over = op.post(f"/api/chats/{cid}/messages", json=ask, headers=h)                 # 360 tokens > 300 a day
+        assert over.status_code == 429 and over.json()["error"] == "ai_budget"
+        builder._rate.clear()
+        adm.put("/api/settings/ai", json={"providers": adm.get("/api/settings/ai").json()["providers"],
+                                          "daily_tokens_per_user": 0}, headers=ah)
+        fake.replies = [f"```yaml\n{GOOD}```"] * 20
+        ids = [op.post("/api/chats", json={"kind": "builder"}, headers=h).json()["id"] for _ in range(builder.RATE[0] + 1)]
+        sent = [op.post(f"/api/chats/{c}/messages", json=ask, headers=h) for c in ids]
+        assert [r.status_code for r in sent] == [200] * builder.RATE[0] + [429]
+        for c, r in zip(ids, sent[:-1]):
+            wait(op, c, r.json()["messages"][1]["id"])
+
+
 def test_failures_and_interrupted_turns(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
 
@@ -351,17 +404,6 @@ def test_tool_calls_on_the_wire(monkeypatch):
 
     def post(url, headers, json, timeout, stream):
         sent.update(body=json, headers=headers)
-        if "anthropic" in url:
-            return Stream([
-                {"type": "message_start", "message": {"usage": {"input_tokens": 10, "cache_read_input_tokens": 90}}},
-                {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "look first"}},
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "SIG"}},
-                {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1",
-                                                                               "name": "run_command", "input": {}}},
-                {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"host": "web", '}},
-                {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '"command": "ls"}'}},
-                {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 30}}])
         return Stream([
             {"choices": [{"delta": {"content": "<think>plan"}}]}, {"choices": [{"delta": {"content": " it</think>Let me look."}}]},
             {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "read_file", "arguments": '{"host":'}}]}}]},
@@ -369,42 +411,26 @@ def test_tool_calls_on_the_wire(monkeypatch):
                           "finish_reason": "tool_calls"}]}])
     monkeypatch.setattr(ai.requests, "post", post)
     tools = agent.tool_specs("code")
+    turn = [{"role": "user", "content": "go"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call_0", "name": "run_command",
+                                                                 "input": {"host": "web", "command": "ls"}}]},
+            {"role": "tool", "results": [{"id": "call_0", "name": "run_command", "content": "exit code 1", "error": True}]}]
     seen = []
-    r = ai.Anthropic("claude-opus-5-5", api_key="k").complete("S", [{"role": "user", "content": "go"}], tools=tools,
-                                                              on_delta=lambda k, t: seen.append((k, t)))
-    assert r.tool_calls == [{"id": "toolu_1", "name": "run_command", "input": {"host": "web", "command": "ls"}}]
-    assert r.reasoning == "look first" and r.input_tokens == 100 and r.output_tokens == 30
-    assert r.raw[0] == {"type": "thinking", "thinking": "look first", "signature": "SIG"}
-    assert ("thinking", "look first") in seen and ("tool", "run_command") in seen
-    assert all(t["eager_input_streaming"] for t in sent["body"]["tools"])
-    turn = [{"role": "user", "content": "go"}, {"role": "assistant", "content": "", "tool_calls": r.tool_calls, "raw": r.raw},
-            {"role": "tool", "results": [{"id": "toolu_1", "name": "run_command", "content": "exit code 1", "error": True}]}]
-    wire = ai.anthropic_messages(turn)
-    assert wire[1]["content"] == r.raw                                 # thinking blocks go back unchanged
-    assert wire[2] == {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1",
-                                                    "content": "exit code 1", "is_error": True}]}
-    seen.clear()
     o = ai.OpenAICompatible("qwen", base_url="http://10.0.0.5:1234/v1").complete("S", turn, tools=tools,
                                                                               on_delta=lambda k, t: seen.append((k, t)))
     assert o.text == "Let me look." and o.reasoning == "plan it"
     assert o.tool_calls == [{"id": "call_1", "name": "read_file", "input": {"host": "web", "path": "/etc/hosts"}}]
     assert "".join(t for k, t in seen if k == "thinking") == "plan it" and ("text", "Let me look.") in seen
+    assert ("tool", "read_file") in seen
     assert sent["body"]["tools"][0]["function"]["name"] == "run_command"
     msgs = sent["body"]["messages"]
     assert msgs[2]["tool_calls"][0]["function"] == {"name": "run_command", "arguments": '{"host": "web", "command": "ls"}'}
-    assert msgs[3] == {"role": "tool", "tool_call_id": "toolu_1", "content": "exit code 1"}
+    assert msgs[3] == {"role": "tool", "tool_call_id": "call_0", "content": "exit code 1"}
     text, calls = ai.text_tool_calls('Sure.\n<tool_call>{"name": "range_status", "arguments": {}}</tool_call>')
     assert text == "Sure." and calls[0]["name"] == "range_status" and calls[0]["input"] == {}
 
 
-def test_refusals_and_questions(monkeypatch):
-    monkeypatch.setattr(ai.requests, "post", lambda *a, **k: Stream([
-        {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
-        {"type": "message_delta", "delta": {"stop_reason": "refusal", "stop_details": {"category": "cyber"}},
-         "usage": {"output_tokens": 0}}]))
-    with pytest.raises(ai.ValorError) as e:
-        ai.Anthropic("claude-sonnet-5-5", api_key="k").complete("S", [{"role": "user", "content": "x"}])
-    assert e.value.code == "ai_refused" and "cyber" in e.value.message
+def test_questions(monkeypatch):
     qs, text = ai.extract_questions("Hi\n```questions\nquestions:\n  - question: A?\n    options: [x, x, y]\n"
                                     "    multiple: yes\n  - {options: [z]}\n```")
     assert text == "Hi" and qs == [{"id": 1, "header": "", "question": "A?", "options": ["x", "y"], "multiple": True,
@@ -418,11 +444,11 @@ def test_a_chat_uses_its_own_provider(lab, monkeypatch):
     adm, ah, op, h = start(app, monkeypatch, fake)
     used = []
     monkeypatch.setattr(ai, "provider_from", lambda st, key: used.append((st["name"], st["provider"], key)) or fake)
-    claude = adm.get("/api/settings/ai").json()["providers"][0]
-    r = adm.put("/api/settings/ai", json={"providers": [claude, {"name": "OpenRouter", "provider": "openrouter",
+    hosted = adm.get("/api/settings/ai").json()["providers"][0]
+    r = adm.put("/api/settings/ai", json={"providers": [hosted, {"name": "OpenRouter", "provider": "openrouter",
                                                                   "model": "qwen/qwen3.8-27b", "api_key": "sk-or-1"}]}, headers=ah)
-    claude, orr = r.json()["providers"]
-    assert claude["default"] and not orr["default"]
+    hosted, orr = r.json()["providers"]
+    assert hosted["default"] and not orr["default"]
     assert op.post("/api/chats", json={"kind": "builder", "provider": "nope"}, headers=h).status_code == 400
     chat = op.post("/api/chats", json={"kind": "builder", "provider": orr["id"]}, headers=h).json()
     assert chat["provider"] == orr["id"]
@@ -431,11 +457,11 @@ def test_a_chat_uses_its_own_provider(lab, monkeypatch):
     assert op.patch(f"/api/chats/{chat['id']}", json={"provider": "nope"}, headers=h).status_code == 400
     assert op.patch(f"/api/chats/{chat['id']}", json={"provider": ""}, headers=h).json()["provider"] is None
     wait(op, chat["id"], say(op, h, chat["id"], "again", "build"))
-    assert used[-1] == ("Claude", "anthropic", "k")                       # "" = the default
+    assert used[-1] == ("Hosted", "openrouter", "k")                      # "" = the default
     op.patch(f"/api/chats/{chat['id']}", json={"provider": orr["id"]}, headers=h)
-    adm.put("/api/settings/ai", json={"providers": [claude]}, headers=ah)  # its provider is removed
+    adm.put("/api/settings/ai", json={"providers": [hosted]}, headers=ah)  # its provider is removed
     wait(op, chat["id"], say(op, h, chat["id"], "once more", "build"))
-    assert used[-1][0] == "Claude"                                        # falls back to the default
+    assert used[-1][0] == "Hosted"                                        # falls back to the default
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
@@ -518,9 +544,9 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     m = wait(op, cid3, op.get(f"/api/chats/{cid3}").json()["messages"][1]["id"])
     assert "did not rebuild on its own: the plan would replace web" in m["meta"]["rebuild"]["note"]
     # a provider that cannot answer (LM Studio with an 8k context) hands over to the next one
-    claude = adm.get("/api/settings/ai").json()["providers"][0]
+    hosted = adm.get("/api/settings/ai").json()["providers"][0]
     local = {"name": "Local", "provider": "openai", "model": "q", "base_url": "http://192.168.1.50:1234/v1", "default": True}
-    adm.put("/api/settings/ai", json={"providers": [local, {**claude, "default": False}]}, headers=ah)
+    adm.put("/api/settings/ai", json={"providers": [local, {**hosted, "default": False}]}, headers=ah)
 
     class Small(ai.Provider):
         def complete(self, *a, **k):
@@ -531,9 +557,9 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     [cid4] = chats.fix_failed_builds(app)
     m = wait(op, cid4, op.get(f"/api/chats/{cid4}").json()["messages"][1]["id"])
     assert m["status"] == "done" and m["content"] == "Answered by the second provider."
-    assert any(s["type"] == "check" and "Local could not answer" in s["text"] and "VALOR asks Claude instead" in s["text"]
+    assert any(s["type"] == "check" and "Local could not answer" in s["text"] and "VALOR asks Hosted instead" in s["text"]
                for s in m["meta"]["steps"])
-    assert op.get(f"/api/chats/{cid4}").json()["provider"] == claude["id"]
+    assert op.get(f"/api/chats/{cid4}").json()["provider"] == hosted["id"]
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
@@ -568,11 +594,11 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     [cid2] = chats.fix_failed_builds(app)
     assert adm.get(f"/api/chats/{cid2}").json()["owner"] == "admin"
     wait(adm, cid2, adm.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
-    claude = adm.get("/api/settings/ai").json()["providers"][0]["id"]
+    hosted = adm.get("/api/settings/ai").json()["providers"][0]["id"]
     assert op.post(f"/api/jobs/{jid2}/fix", json={"provider": "nope"}, headers=h).status_code == 400
-    r = op.post(f"/api/jobs/{jid2}/fix", json={"provider": claude}, headers=h).json()
+    r = op.post(f"/api/jobs/{jid2}/fix", json={"provider": hosted}, headers=h).json()
     assert r["chat"] != chat["id"] and wait(op, r["chat"], op.get(f"/api/chats/{r['chat']}").json()["messages"][1]["id"])
-    assert op.get(f"/api/chats/{r['chat']}").json()["provider"] == claude
+    assert op.get(f"/api/chats/{r['chat']}").json()["provider"] == hosted
     # the worker stopped: the same build runs once more (no chat), never a third time; an old failure: nothing
     for kw in ({"error": "interrupted"}, {"age": 7200}):
         _failed_build(cfg, **kw)
@@ -582,11 +608,11 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     st = adm.get("/api/settings/ai").json()
     assert st["fix_failed_builds"] is True and st["fix_provider"] == ""
     # failed builds can go to another provider than the default (e.g. a hosted one while a local one is small)
-    r = adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_provider": claude}, headers=ah).json()
-    assert r["fix_provider"] == claude
+    r = adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_provider": hosted}, headers=ah).json()
+    assert r["fix_provider"] == hosted
     _failed_build(cfg)
     [cid3] = chats.fix_failed_builds(app)
-    assert op.get(f"/api/chats/{cid3}").json()["provider"] == claude
+    assert op.get(f"/api/chats/{cid3}").json()["provider"] == hosted
     wait(op, cid3, op.get(f"/api/chats/{cid3}").json()["messages"][1]["id"])
     assert adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_provider": "gone"}, headers=ah).json()["fix_provider"] == ""
     adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_failed_builds": False}, headers=ah)

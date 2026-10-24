@@ -1,10 +1,9 @@
-"""Chat builder API: AI provider settings (admin, key encrypted, never shown again), usage, and the chat itself
-(operators). The model's spec is validated here; saving and building stay explicit user actions."""
+"""AI settings API and what every chat shares: provider settings (admin, key encrypted, never shown again), usage,
+the rate limit and daily budget, the prompt's cluster reference and the spec check the model's specs must pass."""
 
 from __future__ import annotations
 
 import ipaddress
-import re
 import secrets
 import threading
 import time
@@ -20,7 +19,7 @@ from ..errors import ValorError
 from ..pve import PVE
 from ..spec import normalize, parse_spec
 from ..validate import NO_BASELINE, validate_cluster
-from . import db, topology
+from . import db
 from .core import ApiError, Session, require
 from .ranges import _cfg, role_list
 
@@ -38,7 +37,7 @@ class _In(BaseModel):
 class ProviderIn(_In):
     id: str | None = Field(default=None, max_length=32)
     name: str = Field(min_length=1, max_length=64)
-    provider: Literal["anthropic", "openai", "openrouter"]
+    provider: Literal["openai", "openrouter"]
     model: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9._:/-]*$")
     base_url: str = Field(default="", max_length=512)
     api_key: str | None = Field(default=None, max_length=512)
@@ -57,17 +56,6 @@ class AiSettingsIn(_In):
 
 class TestIn(_In):
     id: str = Field(max_length=32)
-
-
-class Message(_In):
-    role: str = Field(pattern="^(user|assistant)$")
-    content: str = Field(min_length=1, max_length=20_000)
-
-
-class ChatIn(_In):
-    messages: list[Message] = Field(min_length=1, max_length=60)
-    spec: str = Field(default="", max_length=256 * 1024)
-    range: str = Field(default="", max_length=15)       # editing this existing range (its name is allowed)
 
 
 def _key_context(pid: str) -> str:
@@ -90,8 +78,7 @@ def ai_settings(conn, box) -> dict:
         key = ""
         if st.get("api_key") and box is not None:
             key = box.seal_text(box.open_text(st["api_key"], "ai:api_key"), _key_context(pid))
-        new["providers"].append({"id": pid, "name": {"anthropic": "Anthropic", "openai": "Local model server"}.get(
-            st["provider"], st["provider"]), "provider": st["provider"], "model": st.get("model", ""),
+        new["providers"].append({"id": pid, "name": {"openai": "Local model server"}.get(st["provider"], st["provider"]), "provider": st["provider"], "model": st.get("model", ""),
             "base_url": st.get("base_url", ""), "api_key": key,
             "max_tokens": st.get("max_tokens", ai.DEFAULTS["max_tokens"]), "timeout": st.get("timeout", ai.DEFAULTS["timeout"])})
         new["default"] = pid
@@ -144,8 +131,7 @@ def _provider(request: Request, conn, pid: str | None = None) -> tuple[ai.Provid
 
 @router.get("/settings/ai")
 def get_ai(request: Request, s: Session = Depends(require("admin"))) -> dict:
-    return {**_masked(ai_settings(s.conn, request.app.state.box)), "kinds": list(ai.PROVIDERS),
-            "anthropic_models": list(ai.ANTHROPIC_MODELS)}
+    return {**_masked(ai_settings(s.conn, request.app.state.box)), "kinds": list(ai.PROVIDERS)}
 
 
 def _validate_provider(d: dict) -> None:
@@ -155,12 +141,10 @@ def _validate_provider(d: dict) -> None:
         if not d["base_url"]:
             raise ApiError(400, "invalid_ai", f"{name}: an OpenAI-compatible provider needs its base URL (ending in /v1).")
     else:
-        d["base_url"] = ""                                  # Anthropic and OpenRouter have fixed addresses
+        d["base_url"] = ""                                  # OpenRouter has a fixed address
     if not d["model"]:
-        if d["provider"] != "anthropic":
-            raise ApiError(400, "invalid_ai", f"{name}: name the model to use.")
-        d["model"] = ai.ANTHROPIC_MODELS[0]
-    if d["provider"] in ("anthropic", "openrouter") and not d["api_key"]:
+        raise ApiError(400, "invalid_ai", f"{name}: name the model to use.")
+    if d["provider"] == "openrouter" and not d["api_key"]:
         raise ApiError(400, "invalid_ai", f"{name}: {ai.KIND_NAMES[d['provider']]} needs an API key.")
 
 
@@ -343,38 +327,3 @@ def spec_check(cfg, pve: PVE | None, own_name: str = ""):
         return problems
     check.warnings = []
     return check
-
-
-def run_ai(s: Session, st: dict, fn):
-    """Call the model (fn), record the tokens either way, and turn AI errors into API errors."""
-    try:
-        res = fn()
-    except ValorError as e:
-        used = e.details if isinstance(e.details, dict) else {}
-        _record(s, st, int(used.get("input_tokens", 0)), int(used.get("output_tokens", 0)), False)
-        status = 422 if e.code in ("ai_truncated", "ai_context_full") else 502 if e.code.startswith("ai_") else 400
-        raise ApiError(status, e.code, e.message, hint=e.hint)
-    _record(s, st, res["input_tokens"], res["output_tokens"], not res.get("problems"))
-    return res
-
-
-@router.post("/builder/chat")
-def chat(body: ChatIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
-    cfg = _cfg(request)
-    prov, st, pve = start_ai(request, s)
-    system = ai.builder_prompt(reference_for(cfg, pve))
-    msgs = [m.model_dump() for m in body.messages]
-    if body.spec.strip() and msgs[-1]["role"] == "user":
-        msgs[-1] = {"role": "user", "content": msgs[-1]["content"] +
-                    f"\n\nThe current spec in the builder:\n```yaml\n{body.spec.strip()}\n```"}
-    check = spec_check(cfg, pve, body.range)
-    res = run_ai(s, st, lambda: ai.build(prov, system, msgs, check))
-    topo = None
-    if res["yaml"] and not res["problems"]:
-        topo = topology.build(normalize(parse_spec(res["yaml"]), cfg.default_os))
-    s.audit("builder.chat", detail={"attempts": res["attempts"], "ok": not res["problems"],
-                                    "tokens": res["input_tokens"] + res["output_tokens"]})
-    return {"reply": res["reply"], "yaml": res["yaml"], "ok": not res["problems"], "problems": res["problems"],
-            "attempts": res["attempts"], "fixed": res["fixed"] if not res["problems"] else [],
-            "warnings": check.warnings if not res["problems"] else [], "topology": topo,
-            "usage": {"input_tokens": res["input_tokens"], "output_tokens": res["output_tokens"]}}

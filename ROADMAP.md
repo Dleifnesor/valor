@@ -111,7 +111,7 @@ Describe, see, approve, watch, review.
 
 | Issue | Goal |
 |---|---|
-| [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix — ✅ Anthropic, OpenRouter and OpenAI-compatible servers (e.g. LM Studio); several providers with a default, keys encrypted; tested live with a local model and OpenRouter |
+| [#19](https://github.com/Dleifnesor/valor/issues/19) Agent service with pluggable AI providers | Anthropic, OpenAI-compatible, local models; strong + fast mix — ✅ OpenRouter and OpenAI-compatible servers (e.g. LM Studio; the direct Anthropic provider was dropped, Claude is reached through OpenRouter); several providers with a default, keys encrypted; tested live with a local model and OpenRouter |
 | [#20](https://github.com/Dleifnesor/valor/issues/20) Chat environment builder | Conversation -> range spec -> plan, refined iteratively — ✅ validate-and-fix loop, map preview, hand-off to plan → approve |
 | [#21](https://github.com/Dleifnesor/valor/issues/21) Plan approval for every build and destroy | The approved plan hash is the one that runs |
 | [#22](https://github.com/Dleifnesor/valor/issues/22) Topology map (React Flow), view-only | Router, segments, hosts and allowed flows |

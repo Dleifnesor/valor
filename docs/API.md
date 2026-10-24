@@ -131,7 +131,6 @@ page follows that table.
 | Method and path | Access | What it does |
 |---|---|---|
 | `GET /api/builder` | operator | The AI providers chats may use and the default (no secrets). |
-| `POST /api/builder/chat` | operator | One stateless chat-builder exchange (messages in, validated spec out). The UI uses the saved chats below. |
 | `GET /api/chats` | viewer | Your chats (`scope=all` for admins), filtered by `kind` (`builder` / `range`) and `range`. |
 | `POST /api/chats` | operator | A new chat (builder, or for a range). |
 | `GET /api/chats/{chat_id}` | viewer | A chat with its messages (owner or admin). |

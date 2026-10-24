@@ -35,7 +35,7 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 | Access | WireGuard per range on the range router: peer configs with QR codes, live connection status, new keys per peer |
 | ISO library | download from a verified catalog (signed checksums), by URL, upload from the browser, delete; attach an ISO to a host (`iso:`) or install a Rocky/Alma host from its ISO (`install: iso`) |
 | Blueprints | keep a spec as a blueprint and deploy copies - numbered or one per student - each with its own VLANs, networks and WireGuard peer |
-| Chat builder | describe an environment; an AI model writes the spec, VALOR validates it (and has the model fix what fails) and shows it on the map; building stays plan → approve. Providers (set up by an admin): Anthropic, OpenRouter or any OpenAI-compatible server such as LM Studio |
+| Chat builder | describe an environment; an AI model writes the spec, VALOR validates it (and has the model fix what fails) and shows it on the map; building stays plan → approve. Providers (set up by an admin): OpenRouter or any OpenAI-compatible server such as LM Studio |
 | Chats | every saved chat-builder and range conversation; a failed build can be handed to the assistant, which finds and fixes the cause (and, if an admin allows it, rebuilds on its own) |
 | Spec editor | write or paste a range spec, check it against the cluster, see it on the map |
 | Plan → approve | the plan is shown on the map in color (added / changed / rebuilt / removed). Approving runs exactly that plan. |

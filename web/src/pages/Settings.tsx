@@ -194,7 +194,7 @@ function DirectorySettings() {
   );
 }
 
-type AiKind = "anthropic" | "openai" | "openrouter";
+type AiKind = "openai" | "openrouter";
 interface AiProvider {
   id?: string;
   name: string;
@@ -213,15 +213,13 @@ interface Ai {
   fix_provider: string;
   fix_mode: "auto" | "fix" | "prepare";
   kinds?: AiKind[];
-  anthropic_models?: string[];
 }
 
 const AI_KIND: Record<AiKind, string> = {
-  anthropic: "Anthropic (Claude)",
   openrouter: "OpenRouter (hosted models, one key)",
   openai: "OpenAI-compatible server (e.g. LM Studio)",
 };
-const AI_NAME: Record<AiKind, string> = { anthropic: "Claude", openrouter: "OpenRouter", openai: "Local model" };
+const AI_NAME: Record<AiKind, string> = { openrouter: "OpenRouter", openai: "Local model" };
 
 function AiSettings() {
   const [s, setS] = useState<Ai | null>(null);
@@ -237,13 +235,13 @@ function AiSettings() {
     let name = AI_NAME[kind];
     for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${AI_NAME[kind]} ${n}`;
     setS({ ...s, providers: [...s.providers, {
-      name, provider: kind, model: kind === "anthropic" ? s.anthropic_models?.[0] ?? "" : "", base_url: "", api_key: "",
+      name, provider: kind, model: "", base_url: "", api_key: "",
       max_tokens: 32768, timeout: 300, default: !s.providers.length,
     }] });
   };
   const save = async () => {
     setBusy(true); setErr(null); setMsg(null);
-    const { kinds, anthropic_models, ...body } = s;
+    const { kinds, ...body } = s;
     try { setS({ ...s, ...(await put<Ai>("/api/settings/ai", body)) }); setMsg({ ok: true, text: "Saved." }); }
     catch (e) { setErr(e as ApiError); } finally { setBusy(false); }
   };
@@ -289,18 +287,10 @@ function AiSettings() {
               </div>
               <div className="grid cols-2">
                 <label className="field">Name<input name="provider-name" value={p.name} onChange={(e) => update(i, { name: e.target.value })} /></label>
-                {p.provider === "anthropic" ? (
-                  <label className="field">Model
-                    <select name="model" value={p.model || s.anthropic_models?.[0]} onChange={(e) => update(i, { model: e.target.value })}>
-                      {s.anthropic_models?.map((m) => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </label>
-                ) : (
-                  <label className="field">Model {p.provider === "openrouter" && <span className="hint">its id on openrouter.ai/models; Code mode needs tool support</span>}
-                    <input name="model" value={p.model} onChange={(e) => update(i, { model: e.target.value })}
-                      placeholder={p.provider === "openrouter" ? "qwen/qwen3.8-27b" : "llama-3.3-70b"} />
-                  </label>
-                )}
+                <label className="field">Model {p.provider === "openrouter" && <span className="hint">its id on openrouter.ai/models; Code mode needs tool support</span>}
+                  <input name="model" value={p.model} onChange={(e) => update(i, { model: e.target.value })}
+                    placeholder={p.provider === "openrouter" ? "qwen/qwen3.8-27b" : "llama-3.3-70b"} />
+                </label>
                 {p.provider === "openai" && (
                   <label className="field">Base URL <span className="hint">ending in /v1; http:// only to a private IP</span>
                     <input name="base-url" value={p.base_url} onChange={(e) => update(i, { base_url: e.target.value })} placeholder="http://192.168.1.50:1234/v1" />

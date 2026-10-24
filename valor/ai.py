@@ -1,7 +1,6 @@
 """Chat builder: describe an environment, an AI model writes the range spec.
 
-Providers are pluggable (Anthropic's Messages API, any OpenAI-compatible endpoint such as a local model server, or
-none). The model only ever produces text: VALOR extracts the YAML, validates it against the schema and the cluster,
+Providers are pluggable (any OpenAI-compatible endpoint such as a local model server, OpenRouter, or none). The model only ever produces text: VALOR extracts the YAML, validates it against the schema and the cluster,
 and asks the model to fix what fails. Nothing is saved or built without a person: the spec goes to the editor,
 then plan -> approve like any other range.
 """
@@ -22,9 +21,8 @@ from urllib.parse import urlparse
 from . import compliance
 from .errors import ValorError
 
-PROVIDERS = ("anthropic", "openai", "openrouter")
-KIND_NAMES = {"anthropic": "Anthropic", "openai": "An OpenAI-compatible server", "openrouter": "OpenRouter"}
-ANTHROPIC_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001")
+PROVIDERS = ("openai", "openrouter")
+KIND_NAMES = {"openai": "An OpenAI-compatible server", "openrouter": "OpenRouter"}
 # max_tokens is a ceiling, not a cost (only generated tokens count): high enough that a large spec is never cut off
 DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max_tokens": 32768,
             "daily_tokens_per_user": 400_000, "timeout": 300}
@@ -36,9 +34,6 @@ SPEC_BLOCK = re.compile(r"```[ \t]*\n(\s*apiVersion:.*?)```", re.S)     # a spec
 SPEC_TEXT = re.compile(r"^\s*apiVersion:", re.M)
 QUESTIONS_BLOCK = re.compile(r"```questions\s*\n(.*?)```", re.S)
 MAX_QUESTIONS, MAX_OPTIONS = 12, 10
-# Anthropic models that take adaptive thinking and an effort level (older ones get no thinking parameter)
-ADAPTIVE = re.compile(r"claude-(opus|sonnet|fable|mythos)-(5|4-[678])")
-FALLBACK_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")   # server-side refusal fallbacks (Claude API only)
 
 
 @dataclass
@@ -50,8 +45,6 @@ class Reply:
     reasoning: str = ""                 # the model's thinking, when the provider streams it separately
     context_full: bool = False          # the provider said the context window, not max_tokens, ran out
     tool_calls: list = field(default_factory=list)   # [{id, name, input}]; input None when it was not valid JSON
-    raw: list | None = None             # Anthropic: the content blocks, replayed verbatim within a turn (thinking
-                                        # blocks are bound to the conversation that produced them)
 
 
 CONTEXT_ERROR = re.compile(r"exceed\w*[_ ]context|context[_ ](size|length|window)|n_ctx", re.I)
@@ -75,7 +68,7 @@ class Provider:
     def complete(self, system: str, messages: list[dict], tools: list[dict] | None = None,
                  on_delta=None) -> Reply:   # pragma: no cover - interface
         """messages use VALOR's neutral format: {role: user|assistant, content}, an assistant turn may carry
-        tool_calls (and raw), and {role: tool, results: [{id, name, content, error}]} answers them.
+        tool_calls, and {role: tool, results: [{id, name, content, error}]} answers them.
         tools: [{name, description, input_schema}]. on_delta(kind, text) streams "thinking", "text" and "tool"."""
         raise NotImplementedError
 
@@ -154,113 +147,6 @@ class Provider:
                                   "AI providers (the provider reserves the whole maximum up front).")
         raise ValorError("ai_error", f"the AI provider answered HTTP {r.status_code} {detail}".strip(),
                          details={"status": r.status_code, "detail": detail})
-
-
-class Anthropic(Provider):
-    name = "anthropic"
-    URL = "https://api.anthropic.com/v1/messages"
-
-    def request_body(self, system: str, messages: list[dict], tools: list[dict] | None) -> tuple[dict, dict]:
-        model = self.model or ANTHROPIC_MODELS[0]
-        headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-        # the system prompt is large and the same for a whole conversation: cache it
-        body = {"model": model, "max_tokens": self.max_tokens, "stream": True,
-                "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                "messages": anthropic_messages(messages)}
-        if tools:
-            body["tools"] = [{**t, "eager_input_streaming": True} for t in tools]
-        if ADAPTIVE.match(model):
-            body["thinking"] = {"type": "adaptive", "display": "summarized"}     # readable reasoning for the feed
-            body["output_config"] = {"effort": "high"}
-        elif model.startswith("claude-haiku-4-5") and self.max_tokens > 4096:
-            body["thinking"] = {"type": "enabled", "budget_tokens": min(16000, self.max_tokens // 2)}
-        if model in FALLBACK_MODELS and not self.base_url:
-            # a lab-range builder talks about attacks and vulnerable services: when a safety classifier declines,
-            # let the API answer with the fallback model it picks instead of failing the request
-            headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
-            body["fallbacks"] = "default"
-        return headers, body
-
-    def complete(self, system: str, messages: list[dict], tools: list[dict] | None = None, on_delta=None) -> Reply:
-        headers, body = self.request_body(system, messages, tools)
-        emit = on_delta or (lambda kind, text: None)
-        blocks: dict[int, dict] = {}
-        tin = tout = 0
-        stop, refusal = None, None
-        for ev in self._events(self.base_url + "/v1/messages" if self.base_url else self.URL, headers, body):
-            kind = ev.get("type")
-            if kind == "message_start":
-                u = (ev.get("message") or {}).get("usage") or {}
-                tin = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
-                                                       "cache_creation_input_tokens"))
-            elif kind == "content_block_start":
-                b = dict(ev.get("content_block") or {})
-                if b.get("type") == "tool_use":
-                    b["_json"] = ""
-                    emit("tool", b.get("name", ""))
-                blocks[ev.get("index", len(blocks))] = b
-            elif kind == "content_block_delta":
-                d, b = ev.get("delta") or {}, blocks.get(ev.get("index"))
-                if b is None:
-                    continue
-                dt = d.get("type")
-                if dt == "text_delta":
-                    b["text"] = b.get("text", "") + d.get("text", "")
-                    emit("text", d.get("text", ""))
-                elif dt == "thinking_delta":
-                    b["thinking"] = b.get("thinking", "") + d.get("thinking", "")
-                    emit("thinking", d.get("thinking", ""))
-                elif dt == "signature_delta":
-                    b["signature"] = b.get("signature", "") + d.get("signature", "")
-                elif dt == "input_json_delta":
-                    b["_json"] += d.get("partial_json", "")
-            elif kind == "message_delta":
-                delta = ev.get("delta") or {}
-                stop = delta.get("stop_reason") or stop
-                refusal = delta.get("stop_details") or refusal
-                tout = int((ev.get("usage") or {}).get("output_tokens", tout))
-            elif kind == "error":
-                raise ValorError("ai_error", f"the AI provider reported an error: {json.dumps(ev.get('error'))[:300]}")
-        if stop == "refusal":
-            cat = (refusal or {}).get("category") if isinstance(refusal, dict) else None
-            raise ValorError("ai_refused", "the model declined this request" + (f" ({cat})" if cat else ""),
-                             hint="Rephrase the request (say it is an isolated training lab), or pick another model in "
-                                  "Settings -> AI providers.", details={"input_tokens": tin, "output_tokens": tout})
-        raw, calls = [], []
-        for i in sorted(blocks):
-            b = blocks[i]
-            if b.get("type") == "tool_use":
-                text = b.pop("_json")
-                try:
-                    args = json.loads(text) if text.strip() else {}
-                    args = args if isinstance(args, dict) else None
-                except ValueError:
-                    args = None                 # streamed input that is not valid JSON: answered as an error
-                b["input"] = args if args is not None else {}
-                calls.append({"id": b.get("id"), "name": b.get("name"), "input": args})
-            raw.append(b)
-        text = "".join(b.get("text", "") for b in raw if b.get("type") == "text")
-        thinking = "\n".join(b.get("thinking", "") for b in raw if b.get("type") == "thinking" and b.get("thinking"))
-        return Reply(text, tin, tout, truncated=stop in ("max_tokens", "model_context_window_exceeded"),
-                     reasoning=thinking, context_full=stop == "model_context_window_exceeded",
-                     tool_calls=calls, raw=raw)
-
-
-def anthropic_messages(messages: list[dict]) -> list[dict]:
-    out = []
-    for m in messages:
-        if m["role"] == "tool":
-            out.append({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": r["id"], "content": r.get("content") or "(no output)",
-                 **({"is_error": True} if r.get("error") else {})} for r in m["results"]]})
-        elif m["role"] == "assistant" and (m.get("raw") or m.get("tool_calls")):
-            blocks = m.get("raw") or (([{"type": "text", "text": m["content"]}] if m.get("content") else []) +
-                                      [{"type": "tool_use", "id": c["id"], "name": c["name"], "input": c.get("input") or {}}
-                                       for c in m["tool_calls"]])
-            out.append({"role": "assistant", "content": blocks})
-        else:
-            out.append({"role": m["role"], "content": m["content"]})
-    return out
 
 
 class OpenAICompatible(Provider):
@@ -454,8 +340,6 @@ def provider_from(settings: dict, api_key: str) -> Provider:
     args = dict(model=settings.get("model", ""), api_key=api_key, base_url=settings.get("base_url", ""),
                 max_tokens=int(settings.get("max_tokens", DEFAULTS["max_tokens"])),
                 timeout=int(settings.get("timeout", DEFAULTS["timeout"])))
-    if kind == "anthropic":
-        return Anthropic(**args)
     if kind == "openai":
         return OpenAICompatible(**args)
     if kind == "openrouter":
@@ -738,19 +622,6 @@ def cut_off(provider: Provider, r: Reply) -> ValorError:
 def _complete(provider: Provider, system: str, convo: list[dict], on_delta) -> Reply:
     # providers written before streaming callbacks (tests' fakes) take (system, messages) only
     return provider.complete(system, convo, on_delta=on_delta) if on_delta else provider.complete(system, convo)
-
-
-def ask(provider: Provider, system: str, messages: list[dict], on_delta=None) -> dict:
-    """One answer, no spec (question mode)."""
-    convo = trim(messages)
-    if not convo:
-        raise ValorError("ai_no_message", "Ask something.")
-    r = _complete(provider, system, convo, on_delta)
-    if r.truncated:
-        raise cut_off(provider, r)
-    questions, text = extract_questions(r.text.strip())
-    return {"reply": text, "questions": questions, "problems": [], "reasoning": r.reasoning,
-            "input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
 
 
 def build(provider: Provider, system: str, messages: list[dict], check, on_delta=None, on_check=None) -> dict:
