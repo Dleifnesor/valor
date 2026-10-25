@@ -5,7 +5,7 @@ export type IconName =
   | "dashboard" | "ranges" | "jobs" | "users" | "audit" | "settings" | "bell" | "logout" | "menu" | "plus"
   | "refresh" | "shield" | "account" | "theme" | "disc" | "copy" | "chat" | "chats" | "server" | "vm" | "play"
   | "power" | "stop" | "terminal" | "camera" | "check" | "key" | "file" | "book" | "clock" | "info" | "map"
-  | "caret" | "search" | "edit" | "trash" | "mail" | "link" | "bot" | "lock";
+  | "caret" | "search" | "edit" | "trash" | "mail" | "link" | "bot" | "lock" | "download";
 
 const PATHS: Record<IconName, string> = {
   dashboard: "M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z",
@@ -48,6 +48,7 @@ const PATHS: Record<IconName, string> = {
   link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
   bot: "M5 8h14v11H5zm7-5v5M9 13h.01M15 13h.01M2 12v4m20-4v4",
   lock: "M5 11h14v10H5zm3 0V7a4 4 0 0 1 8 0v4",
+  download: "M12 3v12m-5-5 5 5 5-5M5 20h14",
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
