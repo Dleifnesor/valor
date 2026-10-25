@@ -522,6 +522,24 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .check-notes { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .check-notes summary { cursor: pointer; }
 .check-notes ul { margin: 4px 0 0; padding-left: 18px; }
+/* the rendered range journal (components/Markdown.tsx) */
+.md { line-height: 1.5; max-width: 1600px; }
+.md > :first-child { margin-top: 0; }
+.md h2, .md h3, .md h4, .md h5, .md h6 { margin: 18px 0 8px; }
+.md .md-h1 { font-size: 17px; }
+.md .md-h2 { font-size: 14.5px; padding-bottom: 4px; border-bottom: 1px solid var(--border); margin-top: 22px; }
+.md p, .md ul, .md ol { margin: 8px 0; }
+.md ul, .md ol { padding-left: 22px; }
+.md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--accent); background: var(--surface-2); }
+.md code { background: var(--surface-2); border: 1px solid var(--grid-line); border-radius: var(--radius); padding: 0 4px; }
+.md .md-code { background: var(--surface-2); border: 1px solid var(--border); padding: 8px 10px; overflow: auto; white-space: pre; }
+.md .table-wrap { margin: 8px 0; }
+.md table { width: auto; min-width: 50%; border: 1px solid var(--border); }
+.md td { vertical-align: top; }
+.md table.md-kv td:first-child { font-weight: 600; white-space: nowrap; background: var(--surface-2); border-right: 1px solid var(--border); }
+.md .md-map .map { border-top: 0; }
+.md .md-pass { color: var(--ok); font-weight: 700; }
+.md .md-fail { color: var(--bad); font-weight: 700; }
 .scripts-review { padding: 12px 14px; border-color: var(--warn, #b7791f); }
 .scripts-review h3 { margin: 0 0 4px; font-size: 14px; }
 .scripts-review pre.script { max-height: 260px; overflow: auto; font-size: 12px; padding: 8px 10px; margin: 4px 0 10px;
