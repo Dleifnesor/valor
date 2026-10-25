@@ -3,7 +3,7 @@ import { ApiError, post, put } from "../api";
 import { go, useApi } from "../hooks";
 import { ErrorBox, Loading } from "../components/ui";
 import { TopologyMap } from "../components/Topology";
-import { BuilderInfo, Chat, ChatLog, ProviderPick, useChat } from "../components/ChatFeed";
+import { BuilderInfo, Chat, ChatLog, PendingApproval, ProviderPick, useChat } from "../components/ChatFeed";
 
 // Chat builder: describe an environment; the AI asks what it needs to know (clickable question cards), writes the
 // range spec, VALOR validates it and shows it on the map. Conversations are saved (Datacenter → Chats) and can be continued.
@@ -91,6 +91,7 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
           {chat ? <ChatLog chat={chat} ctl={ctl} onAnswer={send} empty={empty} /> : empty}
           {sending && !chat && <div className="bubble assistant"><span className="spinner" /> Starting…</div>}
         </div>
+        <PendingApproval chat={chat} ctl={ctl} />
         {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (
           <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(input); }}>
             <textarea name="message" rows={3} value={input} onChange={(e) => setInput(e.target.value)} disabled={sending || ctl.busy}
