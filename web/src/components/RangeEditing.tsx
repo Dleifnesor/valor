@@ -6,7 +6,7 @@ import { ErrorBox, Loading, Modal } from "./ui";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
 import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
-import { BuilderInfo, ChatLog, Mode, ProviderPick, useChat } from "./ChatFeed";
+import { BuilderInfo, ChatLog, Mode, PendingApproval, ProviderPick, useChat } from "./ChatFeed";
 
 // Editing a built range on its map. Map controls and the chat panel both change the range's draft; the draft is
 // drawn in the plan colors and built only through "Review plan" -> approve.
@@ -449,6 +449,7 @@ function RangeChat({ name, chatId, onView, onReview, onClose }: {
               empty={<div className="muted small">Ask about this range or describe a change. Conversations are saved (Datacenter → Chats).</div>} />
               : <div className="muted small">Ask about this range or describe a change. Conversations are saved (Datacenter → Chats).</div>}
           </div>
+          <PendingApproval chat={chat} ctl={ctl} />
           <ErrorBox error={err ?? ctl.error} />
           {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (
             <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(text); }}>
