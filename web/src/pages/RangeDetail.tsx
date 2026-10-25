@@ -4,6 +4,8 @@ import { ago, go, openTask, useApi, when } from "../hooks";
 import { Topology } from "../types";
 import { Card, DropButton, ErrorBox, Icon, Loading, MenuEntry, Modal, StateBadge, View } from "../components/ui";
 import { RangeMapTab } from "../components/RangeEditing";
+import { Markdown } from "../components/Markdown";
+import { TopologyMap } from "../components/Topology";
 import { PlanModal, PlanResponse } from "../components/PlanModal";
 import { HostPower, LoginModal, SnapshotsTab, runJob } from "../components/RangeActions";
 import { AccessTab } from "../components/Access";
@@ -115,9 +117,7 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
           <pre className="mono">{data.yaml}</pre>
         </Card>
       ))}
-      {active === "journal" && (
-        <Card title="Journal">{data.journal ? <pre className="mono">{data.journal}</pre> : <div className="empty">No journal yet (written after the first build).</div>}</Card>
-      )}
+      {active === "journal" && <Journal data={data} />}
       {active === "history" && <section className="card"><History data={data} /></section>}
 
       {plan && <PlanModal name={name} res={plan} onClose={() => setPlan(null)} />}
@@ -352,6 +352,30 @@ function Evidences({ items }: { items: Evidence[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** The build journal (journals/<range>.md) rendered; its Mermaid topology is shown as the range map. */
+function Journal({ data }: { data: Detail }) {
+  if (!data.journal) return <Card title="Journal"><div className="empty">No journal yet (written after the first build).</div></Card>;
+  const text = data.journal;
+  const download = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+    a.download = `${data.name}.md`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const fence = (lang: string, code: string) => lang === "mermaid" ? (
+    <>
+      <div className="card md-map"><TopologyMap topology={data.topology} /></div>
+      <details className="check-notes"><summary>Mermaid source (as in the file)</summary><pre className="md-code">{code}</pre></details>
+    </>
+  ) : undefined;
+  return (
+    <Card title="Journal" actions={<button className="btn small" onClick={download}><Icon name="download" size={14} /> Download .md</button>}>
+      <Markdown text={text} fence={fence} />
+    </Card>
   );
 }
 
