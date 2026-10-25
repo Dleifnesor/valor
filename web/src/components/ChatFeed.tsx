@@ -391,8 +391,8 @@ export function CheckNotes({ fixed, warnings }: { fixed?: string[]; warnings?: s
   );
 }
 
-export function AssistantMessage({ m, last, readonly, decide, stop, onAnswer, onReview, busy }: {
-  m: Message; last: boolean; readonly?: boolean; decide: Decide; stop: (m: Message) => void;
+export function AssistantMessage({ m, last, readonly, stop, onAnswer, onReview, busy }: {
+  m: Message; last: boolean; readonly?: boolean; stop: (m: Message) => void;
   onAnswer: (text: string) => void; onReview?: () => void; busy: boolean;
 }) {
   const live = m.status === "running" || m.status === "waiting";
@@ -414,8 +414,9 @@ export function AssistantMessage({ m, last, readonly, decide, stop, onAnswer, on
           {!readonly && <button className="btn ghost small" onClick={() => stop(m)}>Stop</button>}
         </div>
       )}
-      {m.status === "waiting" && <Approvals m={m} steps={steps} decide={decide} readonly={readonly} />}
-      {m.status === "waiting" && !readonly && <button className="btn ghost small" onClick={() => stop(m)}>Stop this answer</button>}
+      {m.status === "waiting" && (
+        <div className="muted small" style={{ marginTop: 6 }}>{readonly ? "Waiting for the chat's owner to approve." : "Waiting for your approval below."}</div>
+      )}
       {m.content && <div className="answer">{m.content}</div>}
       {meta.rebuild && (
         <div className="alert info small" style={{ marginTop: 8 }}>
@@ -450,21 +451,49 @@ export function AssistantMessage({ m, last, readonly, decide, stop, onAnswer, on
   );
 }
 
-/** The conversation: user bubbles and live assistant answers. */
+/** The conversation: user bubbles and live assistant answers. It sits in a scrolling box (its parent) and keeps
+ *  the newest output in view while the person is at the end, also when the box itself gets smaller; scrolling up
+ *  stops that until they scroll back down or a new message starts. */
 export function ChatLog({ chat, ctl, onAnswer, onReview, empty }: {
   chat: Chat; ctl: ReturnType<typeof useChat>; onAnswer: (text: string) => void; onReview?: () => void; empty?: ReactNode;
 }) {
-  const end = useRef<HTMLDivElement>(null);
-  const lastKey = chat.messages.length ? `${chat.messages.length}:${chat.messages[chat.messages.length - 1].version}` : "";
-  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [lastKey]);
+  const stream = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const toEnd = () => {
+    const log = stream.current?.parentElement;
+    if (log && follow.current) log.scrollTop = log.scrollHeight;
+  };
+  useEffect(() => {
+    const log = stream.current?.parentElement;
+    if (!log || !stream.current) return;
+    const onScroll = () => { follow.current = log.scrollHeight - log.clientHeight - log.scrollTop < 30; };
+    const resized = new ResizeObserver(toEnd);
+    resized.observe(log);
+    resized.observe(stream.current);
+    log.addEventListener("scroll", onScroll);
+    return () => { resized.disconnect(); log.removeEventListener("scroll", onScroll); };
+  }, []);
+  useEffect(() => { follow.current = true; toEnd(); }, [chat.id, chat.messages.length]);
   return (
-    <>
+    <div className="chat-stream" ref={stream}>
       {chat.messages.length === 0 && empty}
       {chat.messages.map((m, i) => m.role === "user"
         ? <div key={m.id} className="bubble user">{m.mode !== "build" && <span className="mode-tag">{m.mode}</span>}{m.content}</div>
         : <AssistantMessage key={m.id} m={m} last={i === chat.messages.length - 1} readonly={chat.readonly}
-            decide={ctl.decide} stop={ctl.stop} onAnswer={onAnswer} onReview={onReview} busy={ctl.busy} />)}
-      <div ref={end} />
-    </>
+            stop={ctl.stop} onAnswer={onAnswer} onReview={onReview} busy={ctl.busy} />)}
+    </div>
+  );
+}
+
+/** A chat's open approval, between its log and the message box: the buttons stay in one place while the log
+ *  scrolls. */
+export function PendingApproval({ chat, ctl }: { chat: Chat | null; ctl: ReturnType<typeof useChat> }) {
+  const m = [...(chat?.messages ?? [])].reverse().find((x) => x.role === "assistant" && x.status === "waiting");
+  if (!chat || !m) return null;
+  return (
+    <div className="approval-bar">
+      <Approvals m={m} steps={m.meta.steps ?? []} decide={ctl.decide} readonly={chat.readonly} />
+      {!chat.readonly && <button className="btn ghost small" onClick={() => ctl.stop(m)}>Stop this answer</button>}
+    </div>
   );
 }
