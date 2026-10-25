@@ -168,6 +168,48 @@ def test_a_timed_out_script_is_followed_not_started_twice(cfg, monkeypatch):
     assert e.value.code == "agent_exec_lost" and len(lost.runs) == 1
 
 
+
+def test_a_script_the_agent_lost_runs_again(cfg):
+    """hr-nist171 (2026-10-25): qemu-guest-agent restarted during the baseline on ntp and Proxmox answered 'PID ...
+    does not exist'. The build runs the (idempotent) script once more instead of failing."""
+    from types import SimpleNamespace
+    from valor import apply as A
+    from valor.pve import ExecResult
+    pve = PVE.__new__(PVE)
+    pve.cfg, waits = cfg, []
+    pve.vm = lambda vmid: SimpleNamespace(agent=lambda name: SimpleNamespace(get=None))
+    pve.wait_agent = lambda vmid, timeout=300: waits.append(vmid)
+
+    def gone(*a, **k):
+        raise ValorError("proxmox_api", "read command status in VM 5028: HTTP 500 Internal Server Error",
+                         details={"content": "Agent error: PID ld does not exist"})
+    pve.agent_call = gone
+    with pytest.raises(ValorError) as e:
+        pve.exec_wait(5028, 4711)
+    assert e.value.code == "agent_exec_lost" and "restarted" in e.value.message
+
+    runs = []
+
+    def flaky(lost):
+        def run():
+            runs.append(1)
+            if len(runs) <= lost:
+                raise ValorError("agent_exec_lost", "the guest agent of VM 5028 restarted while a command ran")
+            return ExecResult(0, "done", "")
+        return run
+    assert A.run_again_if_lost(pve, 5028, flaky(1)).out == "done" and len(runs) == 2 and waits == [5028]
+    runs.clear()
+    with pytest.raises(ValorError):                                    # lost twice: the build fails (and is fixed)
+        A.run_again_if_lost(pve, 5028, flaky(2))
+    runs.clear()
+
+    def broken():
+        runs.append(1)
+        raise ValorError("proxmox_api", "VM 5028 is not running")
+    with pytest.raises(ValorError):
+        A.run_again_if_lost(pve, 5028, broken)
+    assert len(runs) == 1                                              # other errors are not retried
+
 class AgentWire:
     """The guest agent as Proxmox's API presents it: text in and out is one character per byte (Latin-1)."""
 

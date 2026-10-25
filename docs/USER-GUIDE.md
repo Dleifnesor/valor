@@ -210,7 +210,9 @@ The assistant can fix failed builds:
   message. It looks inside the VMs, fixes the cause (in the VMs, in the spec, or both) and tells you whether to
   rebuild.
 - An administrator can make this automatic (**Datacenter -> AI providers**, *Failed builds go to*):
-  - **Fix and rebuild on its own**: the assistant fixes and VALOR rebuilds, up to 3 rounds. It never approves a plan
+  - **Fix and rebuild on its own**: the assistant fixes and VALOR rebuilds, up to 5 rounds (it stops when a rebuild
+    fails the same way three times). If the assistant stops before it is done (out of steps, VALOR restarted, the AI
+    provider was unreachable), VALOR starts it again, and after two tries rebuilds anyway. It never approves a plan
     that would replace or remove a VM; those wait for a person.
   - **Fix on its own; the person rebuilds.**
   - **Prepare the fix; the person approves each change.**
