@@ -70,7 +70,7 @@ The web UI is laid out like Proxmox VE's:
 | Right-click | Menu |
 |---|---|
 | **Datacenter** in the tree | Create range, Chat builder |
-| A range (tree or the Summary's range list) | Start / shut down / reboot / force-stop all VMs, Login, Verify, Plan changes, Edit spec, Destroy (asks you to type the name, as always) |
+| A range (tree or the Summary's range list) | Start / shut down / reboot / force-stop all VMs, Login, Verify, Plan changes, Edit spec, Destroy (asks you to type the name, as always); a range without VMs gets **Delete range** instead of Destroy |
 | A VM (tree, a range's VM list, its box on the map) | Start, Shut down, Reboot, Force stop, Console (noVNC), Serial console (xterm.js) |
 | A segment or VM on the **Map** | Details, plus the map's edits (add a VM or service, allow traffic, edit, remove) |
 | A task, a chat | Open it, open its range, copy the task ID / delete the chat |
@@ -156,7 +156,7 @@ Re-applying an unchanged spec makes no changes.
 
 Select a range in the tree. The title bar holds its actions: **Start** and **Shutdown** (shut down, reboot or force
 stop every VM), **Login**, **Verify**, **Plan build** / **Plan changes**, and under **More** **Edit spec** and
-**Destroy**. The sections:
+**Destroy** (or **Delete range** while it has no VMs). The sections:
 
 | Section | What it shows |
 |---|---|
@@ -266,6 +266,10 @@ Some storage types (ZFS) only roll back to the newest snapshot; VALOR says so an
 
 **Destroy** shows which VMs will be deleted and asks for confirmation. Only VMs in VALOR's range pool that carry the
 range's tag are removed. The spec stays, so the range can be built again (**Plan build** in the same place).
+
+A range without VMs (only planned, or destroyed) has **Delete range** instead (under **More**, or right-click it). It
+removes the range from VALOR: its spec, draft changes, build history, login and journal; you type its name to
+confirm. The audit log keeps a record of the deletion.
 
 ## ISO library
 
