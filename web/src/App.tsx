@@ -72,6 +72,10 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
 
   useEffect(() => { setTreeOpen(false); setTask(null); }, [route.join("/")]);
   useEffect(() => {
+    window.addEventListener("valor-ranges", ranges.reload);
+    return () => window.removeEventListener("valor-ranges", ranges.reload);
+  }, [ranges.reload]);
+  useEffect(() => {
     const on = (e: Event) => setTask((e as CustomEvent<string>).detail);
     window.addEventListener("valor-task", on);
     return () => window.removeEventListener("valor-task", on);

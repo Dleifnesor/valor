@@ -66,7 +66,7 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
       {a.login && data.logins && <ToolButton action={a.login} />}
       {a.verify && <ToolButton action={a.verify} />}
       <ToolButton action={a.plan} primary />
-      <DropButton label="More" items={[a.edit, a.destroy]} />
+      <DropButton label="More" items={[a.edit, a.destroy, a.remove]} />
     </>
   );
 
