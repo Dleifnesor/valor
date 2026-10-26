@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { ApiError, post } from "../api";
+import { ApiError } from "../api";
 import { ago, go, openTask, useApi, when } from "../hooks";
 import { Topology } from "../types";
-import { Card, DropButton, ErrorBox, Icon, Loading, MenuEntry, Modal, StateBadge, View } from "../components/ui";
+import { Card, DropButton, ErrorBox, Icon, Loading, MenuEntry, StateBadge, ToolButton, View } from "../components/ui";
 import { RangeMapTab } from "../components/RangeEditing";
 import { Markdown } from "../components/Markdown";
 import { TopologyMap } from "../components/Topology";
-import { PlanModal, PlanResponse } from "../components/PlanModal";
-import { HostPower, LoginModal, SnapshotsTab, runJob } from "../components/RangeActions";
+import { HostPower, SnapshotsTab, rangeActions, vmMenu } from "../components/RangeActions";
+import { showMenu } from "../components/ContextMenu";
 import { AccessTab } from "../components/Access";
 import { RangeEditor } from "./RangeEditor";
 
@@ -49,12 +49,8 @@ const ALIAS: Record<string, string> = { hosts: "summary", tests: "verification",
 
 /** A range, as Proxmox shows a node: its actions in the title bar, its sections on the left. */
 export function RangeView({ name, section, canOperate, chatId }: { name: string; section?: string; canOperate: boolean; chatId?: number }) {
-  const { data, error, loading, reload } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
-  const [planning, setPlanning] = useState(false);
-  const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const { data, error, loading } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
   const [actionError, setActionError] = useState<ApiError | null>(null);
-  const [destroying, setDestroying] = useState(false);
-  const [showLogin, setShowLogin] = useState(false);
   const active = SECTIONS.some((x) => x.id === section) ? section! : ALIAS[section ?? ""] ?? "summary";
   const menu = SECTIONS.map((x) => ({ ...x, href: `ranges/${name}${x.id === "summary" ? "" : `/${x.id}`}` }));
   const title = `Range '${name}'`;
@@ -62,38 +58,15 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
 
   const vmCount = Object.keys(data.vms).length;
   const running = Object.values(data.vms).filter((v) => v.status === "running").length;
-  const built = vmCount > 0;
-  const doPlan = async () => {
-    setPlanning(true);
-    setActionError(null);
-    try {
-      setPlan(await post<PlanResponse>(`/api/ranges/${name}/plan`));
-    } catch (e) {
-      setActionError(e as ApiError);
-    } finally {
-      setPlanning(false);
-    }
-  };
-  const power = (action: string) => runJob(post(`/api/ranges/${name}/power`, { action }), setActionError);
+  const a = rangeActions({ name, vms: vmCount, running }, setActionError);
   const tools = canOperate && (
     <>
-      {built && <button className="btn" onClick={() => power("start")} disabled={running === vmCount}><Icon name="play" size={14} /> Start</button>}
-      {built && (
-        <DropButton label="Shutdown" icon="power" disabled={!running} items={[
-          { label: "Shut down all VMs", icon: "power", onClick: () => power("shutdown") },
-          { label: "Reboot all VMs", icon: "refresh", onClick: () => power("reboot") },
-          { label: "Force stop all VMs", icon: "stop", danger: true, onClick: () => power("stop") },
-        ]} />
-      )}
-      {built && data.logins && <button className="btn" onClick={() => setShowLogin(true)}><Icon name="key" size={14} /> Login</button>}
-      {built && <button className="btn" onClick={() => runJob(post(`/api/ranges/${name}/verify`), setActionError)}><Icon name="check" size={14} /> Verify</button>}
-      <button className="btn primary" onClick={doPlan} disabled={planning}>
-        {planning ? <><span className="spinner" /> Planning…</> : built ? "Plan changes" : "Plan build"}
-      </button>
-      <DropButton label="More" items={[
-        { label: "Edit spec", icon: "edit", onClick: () => go(`ranges/${name}/edit`) },
-        ...(built ? [{ label: "Destroy", icon: "trash" as const, danger: true, onClick: () => setDestroying(true) }] : []),
-      ]} />
+      {a.start && <ToolButton action={a.start} label="Start" />}
+      {a.shutdown && <DropButton label="Shutdown" icon="power" disabled={!running} items={[a.shutdown, a.reboot, a.stop]} />}
+      {a.login && data.logins && <ToolButton action={a.login} />}
+      {a.verify && <ToolButton action={a.verify} />}
+      <ToolButton action={a.plan} primary />
+      <DropButton label="More" items={[a.edit, a.destroy]} />
     </>
   );
 
@@ -119,10 +92,6 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
       ))}
       {active === "journal" && <Journal data={data} />}
       {active === "history" && <section className="card"><History data={data} /></section>}
-
-      {plan && <PlanModal name={name} res={plan} onClose={() => setPlan(null)} />}
-      {destroying && <DestroyModal name={name} onClose={() => { setDestroying(false); reload(); }} />}
-      {showLogin && <LoginModal range={name} onClose={() => setShowLogin(false)} />}
     </View>
   );
 }
@@ -171,7 +140,8 @@ function Summary({ data, canOperate, onError }: { data: Detail; canOperate: bool
               {machinesOf(data).map((h) => {
                 const vm = data.vms[h.name];
                 return (
-                  <tr key={h.name} className="clickable" onClick={() => go(`ranges/${data.name}/vm/${h.name}`)}>
+                  <tr key={h.name} className="clickable" onClick={() => go(`ranges/${data.name}/vm/${h.name}`)}
+                    onContextMenu={(e) => showMenu(e, vmMenu(data.name, h.name, vm, canOperate))}>
                     <td className="nowrap"><b>{h.name}</b></td>
                     <td>{vm ? vm.vmid : "–"}</td>
                     <td className="nowrap">{vm ? <StateBadge state={vm.status === "running" ? "ok" : "unknown"} label={vm.status} /> : <span className="muted">not built</span>}</td>
@@ -397,34 +367,5 @@ function History({ data }: { data: Detail }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-function DestroyModal({ name, onClose }: { name: string; onClose: () => void }) {
-  const [confirm, setConfirm] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<ApiError | null>(null);
-  const run = async () => {
-    setBusy(true);
-    try {
-      const r = await post<{ job: string }>(`/api/ranges/${name}/destroy`, { confirm });
-      onClose();
-      openTask(r.job);
-    } catch (e) {
-      setErr(e as ApiError);
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal title={`Destroy ${name}?`} onClose={onClose} footer={
-      <>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn danger solid" disabled={confirm !== name || busy} onClick={run}>Destroy all VMs</button>
-      </>
-    }>
-      <div>This deletes every VM of the range (its spec stays, so you can build it again). Type <b>{name}</b> to confirm.</div>
-      <input name="confirm-name" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus aria-label="Range name" />
-      <ErrorBox error={err} />
-    </Modal>
   );
 }

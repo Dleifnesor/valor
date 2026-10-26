@@ -4,6 +4,8 @@ import {
   getBezierPath, getSmoothStepPath,
 } from "@xyflow/react";
 import { Change, TopoEdge, TopoNode, Topology as Topo } from "../types";
+import { MenuItems } from "./ui";
+import { showMenu } from "./ContextMenu";
 
 // View-only map of a range. Layout is computed here (no dragging, no editing): Internet on top, the range router
 // below it, one box per segment with its hosts inside, and the allowed flows between them as dashed arrows.
@@ -322,11 +324,12 @@ function colorMode(): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, edgeActions }: {
+export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, edgeActions, nodeMenu }: {
   topology: Topo; tall?: boolean; onConsole?: (host: string) => void;
   overlay?: ReactNode;                                   // e.g. editing / chat buttons over the map
   nodeActions?: (node: TopoNode, close: () => void) => ReactNode;   // buttons in the selected node's panel
   edgeActions?: (edge: TopoEdge, close: () => void) => ReactNode;   // buttons for a selected traffic rule
+  nodeMenu?: (node: TopoNode) => MenuItems;              // a node's right-click menu, after "Details"
 }) {
   const [selected, setSelected] = useState<TopoNode | null>(null);
   const [rules, setRules] = useState<TopoEdge[] | null>(null);
@@ -366,6 +369,22 @@ export function TopologyMap({ topology, tall, onConsole, overlay, nodeActions, e
           if (group?.length) { setRules(group); setSelected(null); }
         }}
         onPaneClick={() => { setSelected(null); setRules(null); }}
+        onNodeContextMenu={(e, n) => {
+          const node = (n.data as Data).raw;
+          if (node.kind === "internet") return;
+          showMenu(e, { title: node.label, items: [
+            { label: "Details", icon: "info", onClick: () => { setSelected(node); setRules(null); } },
+            "-",
+            ...(nodeMenu?.(node) ?? []),
+          ] });
+        }}
+        onEdgeContextMenu={(e, edge) => {
+          const group = (edge.data as { group?: TopoEdge[] } | undefined)?.group;
+          if (!group?.length) return;
+          showMenu(e, { title: group.length > 1 ? `${group.length} traffic rules` : "Traffic rule", items: [
+            { label: "Details", icon: "info", onClick: () => { setRules(group); setSelected(null); } },
+          ] });
+        }}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={20} size={1} />

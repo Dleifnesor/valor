@@ -1,6 +1,8 @@
 import { Check, RangeRow } from "../types";
 import { ago, go, useApi } from "../hooks";
 import { Card, ErrorBox, Icon, Loading, StateBadge } from "../components/ui";
+import { showMenu } from "../components/ContextMenu";
+import { rangeMenu } from "../components/RangeActions";
 
 interface Status {
   version: string;
@@ -77,7 +79,8 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
               <thead><tr><th>Name</th><th>Description</th><th>Layout</th><th>VMs</th><th>Last build</th><th>Verification</th></tr></thead>
               <tbody>
                 {ranges.map((r) => (
-                  <tr key={r.name} className={r.has_spec ? "clickable" : ""} onClick={() => r.has_spec && go(`ranges/${r.name}`)}>
+                  <tr key={r.name} className={r.has_spec ? "clickable" : ""} onClick={() => r.has_spec && go(`ranges/${r.name}`)}
+                    onContextMenu={(e) => r.has_spec && showMenu(e, rangeMenu(r, canOperate))}>
                     <td className="nowrap">
                       <b>{r.name}</b>
                       {!r.has_spec && <span className="badge warn" style={{ marginLeft: 8 }}>no spec</span>}

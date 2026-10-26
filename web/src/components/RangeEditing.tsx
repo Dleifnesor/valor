@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ApiError, del, get, post, put } from "../api";
-import { useApi, when } from "../hooks";
+import { go, useApi, when } from "../hooks";
 import { Topology, TopoNode } from "../types";
-import { ErrorBox, Loading, Modal } from "./ui";
+import { ErrorBox, Icon, Loading, MenuAction, MenuItems, Modal } from "./ui";
+import { vmActions } from "./RangeActions";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
 import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
@@ -72,6 +73,34 @@ export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: str
     </div>
   ) : null;
 
+  // What the map can change on a node: buttons in its panel and entries in its right-click menu.
+  const nodeEdits = (n: TopoNode, close: () => void): MenuAction[] => {
+    if (!canOperate) return [];
+    if (n.kind === "segment") return [
+      { label: "Add VM here", icon: "plus", onClick: () => { setModal({ kind: "addvm", segment: n.label }); close(); } },
+      { label: "Allow traffic", icon: "plus", onClick: () => { setModal({ kind: "rule", from: n.label }); close(); } },
+      { label: "Edit segment", icon: "edit", onClick: () => { setModal({ kind: "editseg", seg: n }); close(); } },
+      { label: "Remove", icon: "trash", danger: true, onClick: () => removeSegment(n, close) },
+    ];
+    if (n.kind !== "host" || n.change === "remove") return [];
+    const host = n.id.slice(5);
+    return [
+      { label: "Add service", icon: "plus", onClick: () => { setModal({ kind: "service", host: n }); close(); } },
+      { label: "Edit VM", icon: "edit", onClick: () => { setModal({ kind: "edit", host: n }); close(); } },
+      { label: "Remove VM", icon: "trash", danger: true,
+        onClick: () => { if (window.confirm(`Remove ${host} from the range? It is deleted when the plan is approved.`)) { edit([{ op: "remove_host", name: host }]); close(); } } },
+    ];
+  };
+  const editButtons = (n: TopoNode, close: () => void) => (
+    <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+      {nodeEdits(n, close).map((a) => (
+        <button key={a.label} className={`btn small${a.danger ? " danger" : ""}`} onClick={a.onClick}>
+          {a.icon && <Icon name={a.icon} size={13} />} {a.label}
+        </button>
+      ))}
+    </div>
+  );
+
   const nodeActions = (n: TopoNode, close: () => void) => {
     if (!canOperate) return null;
     if (n.kind === "segment") {
@@ -87,12 +116,7 @@ export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: str
                 onClick={() => edit([{ op: "remove_rule", index: r.index, from: r.from, to: r.to }])}>×</button>
             </div>
           ))}
-          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-            <button className="btn small" onClick={() => { setModal({ kind: "addvm", segment: n.label }); close(); }}>+ Add VM here</button>
-            <button className="btn small" onClick={() => { setModal({ kind: "rule", from: n.label }); close(); }}>+ Allow traffic</button>
-            <button className="btn small" onClick={() => { setModal({ kind: "editseg", seg: n }); close(); }}>Edit segment</button>
-            <button className="btn small danger" onClick={() => removeSegment(n, close)}>Remove</button>
-          </div>
+          {editButtons(n, close)}
         </div>
       );
     }
@@ -109,13 +133,18 @@ export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: str
             ))}
           </div>
         )}
-        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-          <button className="btn small" onClick={() => { setModal({ kind: "service", host: n }); close(); }}>+ Add service</button>
-          <button className="btn small" onClick={() => { setModal({ kind: "edit", host: n }); close(); }}>Edit VM</button>
-          <button className="btn small danger" onClick={() => { if (window.confirm(`Remove ${host} from the range? It is deleted when the plan is approved.`)) { edit([{ op: "remove_host", name: host }]); close(); } }}>Remove VM</button>
-        </div>
+        {editButtons(n, close)}
       </div>
     );
+  };
+
+  // Right-click on a VM or the router: its page, power and consoles (once built), then the map's edits.
+  const nodeMenu = (n: TopoNode): MenuItems => {
+    const host = n.kind === "router" ? "rtr" : n.kind === "host" ? n.id.slice(5) : "";
+    if (!host || !n.vmid) return nodeEdits(n, () => {});
+    const vm = vmActions(name, host, n.status);
+    const operate: MenuItems = canOperate ? [vm.start, vm.shutdown, vm.reboot, vm.stop, "-", vm.console, vm.serial] : [];
+    return [{ label: "Open VM page", icon: "vm", onClick: () => go(`ranges/${name}/vm/${host}`) }, ...operate, "-", ...nodeEdits(n, () => {})];
   };
 
   return (
@@ -139,7 +168,7 @@ export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: str
       <ErrorBox error={err} />
       <div className={`map-layout${chatOpen ? " with-chat" : ""}`}>
         <div className="map-main">
-          <TopologyMap topology={view.topology} tall onConsole={onConsole} overlay={overlay} nodeActions={nodeActions}
+          <TopologyMap topology={view.topology} tall onConsole={onConsole} overlay={overlay} nodeActions={nodeActions} nodeMenu={nodeMenu}
             edgeActions={canOperate ? (e, close) => {
               const index = Number(e.id.split(":")[1]);
               const from = e.source.replace(/^(host|seg):/, ""), to = e.target.replace(/^(host|seg):/, "");

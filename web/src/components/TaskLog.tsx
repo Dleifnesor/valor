@@ -1,7 +1,8 @@
 import { post } from "../api";
 import { JobSummary } from "../types";
-import { ago, openTask, useApi, when } from "../hooks";
+import { ago, go, openTask, useApi, when } from "../hooks";
 import { Icon, StateBadge } from "./ui";
+import { Menu, newTab, showMenu } from "./ContextMenu";
 
 // The panel along the bottom of every page, as in Proxmox: the latest jobs (Tasks) and VALOR's notifications.
 
@@ -19,7 +20,21 @@ const KIND: Record<string, string> = {
 export const jobTitle = (j: JobSummary) =>
   `${KIND[j.kind] ?? j.kind}${j.target.verify ? " + verify" : ""}${j.target.action ? ` (${j.target.action})` : ""}`;
 
-/** Jobs as a Proxmox task list; a row opens the task viewer. */
+function taskMenu(j: JobSummary): Menu {
+  const range = jobTarget(j.target);
+  return {
+    title: `${jobTitle(j)}${range ? ` · ${range}` : ""}`,
+    items: [
+      { label: "Open task", icon: "jobs", onClick: () => openTask(j.id) },
+      !!range && { label: `Open range '${range}'`, icon: "ranges", onClick: () => go(`ranges/${range}`) },
+      newTab(`jobs/${j.id}`),
+      "-",
+      { label: "Copy task ID", icon: "copy", onClick: () => navigator.clipboard?.writeText(j.id) },
+    ],
+  };
+}
+
+/** Jobs as a Proxmox task list; a row opens the task viewer, a right-click its menu. */
 export function TaskTable({ jobs }: { jobs: JobSummary[] }) {
   if (!jobs.length) return <div className="empty">No jobs yet.</div>;
   return (
@@ -30,7 +45,7 @@ export function TaskTable({ jobs }: { jobs: JobSummary[] }) {
       <tbody>
         {jobs.map((j) => (
           <tr key={j.id} className={`clickable${j.state === "running" ? " running" : ""}${j.state === "failed" ? " failed" : ""}`}
-            onClick={() => openTask(j.id)}>
+            onClick={() => openTask(j.id)} onContextMenu={(e) => showMenu(e, taskMenu(j))}>
             <td className="nowrap">{when(j.created)}</td>
             <td className="nowrap">{j.finished ? when(j.finished) : ""}</td>
             <td>{jobTarget(j.target)}</td>

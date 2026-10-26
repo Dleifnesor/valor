@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ApiError, del } from "../api";
 import { go, useApi, when } from "../hooks";
 import { ErrorBox, Loading } from "../components/ui";
+import { Menu, newTab, showMenu } from "../components/ContextMenu";
 
 // Saved conversations: the chat builder's and every range chat's. People see their own; administrators can also
 // read everyone's (for auditing) but only the owner continues a conversation.
@@ -18,7 +19,18 @@ export function Chats({ isAdmin }: { isAdmin: boolean }) {
   const [kind, setKind] = useState("");
   const list = useApi<{ chats: ChatRow[] }>(`/api/chats?scope=${scope}${kind ? `&kind=${kind}` : ""}`, 15000);
   const [err, setErr] = useState<ApiError | null>(null);
-  const open = (c: ChatRow) => go(c.kind === "builder" ? `builder/${c.id}` : `ranges/${c.range}/chat/${c.id}`);
+  const href = (c: ChatRow) => c.kind === "builder" ? `builder/${c.id}` : `ranges/${c.range}/chat/${c.id}`;
+  const open = (c: ChatRow) => go(href(c));
+  const menu = (c: ChatRow): Menu => ({
+    title: c.title || `Conversation ${c.id}`,
+    items: [
+      { label: "Open", icon: "chat", onClick: () => open(c) },
+      newTab(href(c)),
+      c.kind === "range" && { label: `Open range '${c.range}'`, icon: "ranges", onClick: () => go(`ranges/${c.range}`) },
+      "-",
+      { label: "Delete", icon: "trash", danger: true, onClick: () => remove(c) },
+    ],
+  });
   const remove = async (c: ChatRow) => {
     if (!window.confirm(`Delete the conversation "${c.title || c.id}"${c.owner ? ` (${c.owner})` : ""}?`)) return;
     try { await del(`/api/chats/${c.id}`); list.reload(); } catch (e) { setErr(e as ApiError); }
@@ -49,7 +61,7 @@ export function Chats({ isAdmin }: { isAdmin: boolean }) {
               {list.data.chats.map((c) => {
                 const [cls, label] = STATUS[c.status] ?? ["", c.status];
                 return (
-                  <tr key={c.id} className="clickable" onClick={() => open(c)}>
+                  <tr key={c.id} className="clickable" onClick={() => open(c)} onContextMenu={(e) => showMenu(e, menu(c))}>
                     <td>{c.title || <span className="muted">(empty)</span>}</td>
                     <td>{c.kind === "builder" ? "Chat builder" : <>Range <b>{c.range}</b></>}</td>
                     {scope === "all" && <td>{c.owner}</td>}

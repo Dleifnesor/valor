@@ -25,7 +25,8 @@ authentication is set up at the first sign-in. Unattended installs, every settin
 ## What the web UI does today
 
 The web UI is laid out like Proxmox VE's: a resource tree (VALOR, its ranges, their VMs), the selected object's
-panel with its actions and sections, and the task list along the bottom.
+panel with its actions and sections, and the task list along the bottom. Right-clicking a range, a VM, a map node, a
+task or a chat opens a menu of what can be done to it.
 
 | Page | |
 |---|---|

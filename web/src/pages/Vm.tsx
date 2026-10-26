@@ -1,8 +1,8 @@
 import { Suspense, lazy, useState } from "react";
-import { ApiError, post } from "../api";
-import { go, useApi } from "../hooks";
-import { Card, DropButton, ErrorBox, Icon, Loading, StateBadge, View } from "../components/ui";
-import { runJob } from "../components/RangeActions";
+import { ApiError } from "../api";
+import { useApi } from "../hooks";
+import { Card, DropButton, ErrorBox, Loading, StateBadge, ToolButton, View } from "../components/ui";
+import { vmActions } from "../components/RangeActions";
 import { Detail, machinesOf } from "./RangeDetail";
 
 // The console page carries noVNC and xterm.js: loaded only when a console is opened.
@@ -27,19 +27,12 @@ export function VmView({ range, host, console, canOperate }: {
   const spec = machinesOf(data).find((h) => h.name === host);
   const node = data.topology.nodes.find((n) => n.id === (host === "rtr" ? "rtr" : `host:${host}`));
   const on = vm?.status === "running";
-  const act = (action: string) => runJob(post(`/api/ranges/${range}/power`, { action, hosts: [host] }), setErr);
+  const a = vmActions(range, host, vm?.status, setErr);
   const tools = canOperate && vm && (
     <>
-      <button className="btn" onClick={() => act("start")} disabled={on}><Icon name="play" size={14} /> Start</button>
-      <DropButton label="Shutdown" icon="power" disabled={!on} items={[
-        { label: "Shut down", icon: "power", onClick: () => act("shutdown") },
-        { label: "Reboot", icon: "refresh", onClick: () => act("reboot") },
-        { label: "Force stop", icon: "stop", danger: true, onClick: () => act("stop") },
-      ]} />
-      <DropButton label="Console" icon="terminal" disabled={!on} items={[
-        { label: "Screen (noVNC)", icon: "vm", onClick: () => go(`${base}/console`) },
-        { label: "Serial console (xterm.js)", icon: "terminal", onClick: () => go(`${base}/console/serial`) },
-      ]} />
+      {a.start && <ToolButton action={a.start} />}
+      <DropButton label="Shutdown" icon="power" disabled={!on} items={[a.shutdown, a.reboot, a.stop]} />
+      <DropButton label="Console" icon="terminal" disabled={!on} items={[a.console, a.serial]} />
     </>
   );
 
