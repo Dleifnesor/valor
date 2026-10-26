@@ -5,6 +5,7 @@ import { go, useApi, useRoute, useStored } from "./hooks";
 import { DropButton, Icon, Loading, Logo, MenuEntry, Modal, PageGuard, View } from "./components/ui";
 import { ResourceTree, Selection } from "./components/Tree";
 import { TaskLog } from "./components/TaskLog";
+import { ContextMenuHost } from "./components/ContextMenu";
 import { SignIn } from "./pages/SignIn";
 import { Dashboard } from "./pages/Dashboard";
 import { RangeView } from "./pages/RangeDetail";
@@ -149,7 +150,7 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
         {treeOpen && <div className="nav-backdrop" onClick={() => setTreeOpen(false)} aria-hidden="true" />}
         <aside id="resource-tree" className={`tree-pane${treeOpen ? " open" : ""}`}>
           <PageGuard page={route.join("/")}>
-            <ResourceTree ranges={ranges.data?.ranges ?? null} instance={me.instance || "VALOR"} selected={selected} />
+            <ResourceTree ranges={ranges.data?.ranges ?? null} instance={me.instance || "VALOR"} selected={selected} canOperate={canOperate} />
           </PageGuard>
           {ranges.data?.cluster_error && <div className="alert warn small tree-alert">Live VM status unavailable: {ranges.data.cluster_error}</div>}
         </aside>
@@ -157,6 +158,7 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
       </div>
       <TaskLog open={logOpen} onOpen={setLogOpen} tab={logTab} onTab={setLogTab} />
       {task && <Modal title="Task viewer" wide onClose={() => setTask(null)}><JobDetail id={task} /></Modal>}
+      <ContextMenuHost page={route.join("/")} />
     </div>
   );
 }

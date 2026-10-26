@@ -182,9 +182,36 @@ export function View({ title, tools, menu, active, children, fill }: {
 }
 
 export interface MenuAction { label: string; icon?: IconName; onClick: () => void; danger?: boolean; disabled?: boolean }
+/** A menu's entries: "-" draws a line between groups and `false` entries are left out (`built && {...}`). */
+export type MenuItems = (MenuAction | "-" | false)[];
+
+/** The entries of a menu: a DropButton's or a right-click menu's. */
+export function MenuList({ items, onPick }: { items: MenuItems; onPick: (a: MenuAction) => void }) {
+  const shown: (MenuAction | "-")[] = [];
+  for (const i of items) if (i && (i !== "-" || (shown.length && shown[shown.length - 1] !== "-"))) shown.push(i);
+  if (shown[shown.length - 1] === "-") shown.pop();
+  return (
+    <>
+      {shown.map((i, n) => i === "-" ? <hr key={n} className="menu-sep" /> : (
+        <button key={n} role="menuitem" className={`menu-item${i.danger ? " danger" : ""}`} disabled={i.disabled} onClick={() => onPick(i)}>
+          {i.icon && <Icon name={i.icon} size={15} />} {i.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** A title-bar button for one action, the same action its right-click menu offers. */
+export function ToolButton({ action, label, primary }: { action: MenuAction; label?: string; primary?: boolean }) {
+  return (
+    <button className={`btn${primary ? " primary" : ""}`} onClick={action.onClick} disabled={action.disabled}>
+      {action.icon && <Icon name={action.icon} size={14} />} {label ?? action.label}
+    </button>
+  );
+}
 
 /** A toolbar button that opens a menu ("Shutdown ▾", "More ▾"). */
-export function DropButton({ label, icon, items, disabled }: { label: string; icon?: IconName; items: MenuAction[]; disabled?: boolean }) {
+export function DropButton({ label, icon, items, disabled }: { label: string; icon?: IconName; items: MenuItems; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -200,12 +227,7 @@ export function DropButton({ label, icon, items, disabled }: { label: string; ic
       </button>
       {open && (
         <div className="popover menu" role="menu">
-          {items.map((i) => (
-            <button key={i.label} role="menuitem" className={`menu-item${i.danger ? " danger" : ""}`} disabled={i.disabled}
-              onClick={() => { setOpen(false); i.onClick(); }}>
-              {i.icon && <Icon name={i.icon} size={15} />} {i.label}
-            </button>
-          ))}
+          <MenuList items={items} onPick={(i) => { setOpen(false); i.onClick(); }} />
         </div>
       )}
     </div>
