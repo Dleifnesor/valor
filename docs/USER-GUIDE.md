@@ -65,6 +65,20 @@ The web UI is laid out like Proxmox VE's:
 | **Panel** (right) | The selected entry: its actions in the title bar (for a range: Start, Shutdown, Login, Verify, Plan, More), its sections on the left, the section on the right. |
 | **Tasks** (bottom) | The latest jobs with their start and end time, range, user and status; click one for the task viewer (its steps, live). **Notifications** next to it holds VALOR's messages. The arrow at the right folds the list away. |
 
+**Right-click menus.** As in Proxmox, right-clicking something opens a menu of what you can do to it:
+
+| Right-click | Menu |
+|---|---|
+| **Datacenter** in the tree | Create range, Chat builder |
+| A range (tree or the Summary's range list) | Start / shut down / reboot / force-stop all VMs, Login, Verify, Plan changes, Edit spec, Destroy (asks you to type the name, as always) |
+| A VM (tree, a range's VM list, its box on the map) | Start, Shut down, Reboot, Force stop, Console (noVNC), Serial console (xterm.js) |
+| A segment or VM on the **Map** | Details, plus the map's edits (add a VM or service, allow traffic, edit, remove) |
+| A task, a chat | Open it, open its range, copy the task ID / delete the chat |
+
+Entries that do not apply right now (Start on a running VM) are greyed out; viewers see only the entries that change nothing.
+**Shift** + right-click opens the browser's own menu; the context-menu key (or Shift+F10) opens VALOR's menu on the
+focused entry, and the arrow keys move through it.
+
 The **Datacenter** sections: **Summary** (health, VMs, resources, every range, health checks), **Chats**,
 **Blueprints**, **ISO library**, **Jobs**, and for administrators **Users**, **Audit log** and the settings
 (**Directory (LDAP)**, **AI providers**, **Notifications**, **Certificate**).
