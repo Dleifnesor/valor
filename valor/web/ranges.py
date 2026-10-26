@@ -235,6 +235,9 @@ def delete_spec(name: str, request: Request, s: Session = Depends(require("opera
     if range_vms(PVE(cfg), name, with_config=False):
         raise ApiError(409, "range_exists", "Destroy the range's VMs before deleting its spec.")
     path.unlink()
+    state.forget(cfg, name)
+    for journal in (cfg.journals_dir / f"{name}.md", cfg.journals_dir / f"{name}.notes.md"):
+        journal.unlink(missing_ok=True)
     s.audit("range.spec.delete", target=name)
     return {"ok": True}
 

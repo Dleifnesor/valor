@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { ApiError, del, get, post } from "../api";
-import { go, openTask, useApi, when } from "../hooks";
+import { go, openTask, rangesChanged, useApi, when } from "../hooks";
 import { ErrorBox, Loading, MenuAction, MenuItems, Modal } from "./ui";
 import { Menu, newTab, openDialog, showError } from "./ContextMenu";
 import { PlanModal, PlanResponse } from "./PlanModal";
@@ -19,7 +19,8 @@ export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError)
   }
 }
 
-/** What can be done to a range; `false` for what needs built VMs. Errors go to `onError` (a dialog by default). */
+/** What can be done to a range; `false` for what does not apply (Destroy needs VMs, Delete needs none). Errors go to
+ *  `onError` (a dialog by default). */
 export function rangeActions(r: { name: string; vms: number; running: number }, onError: (e: ApiError) => void = showError) {
   const { name } = r;
   const built = r.vms > 0, off = !r.running;
@@ -34,13 +35,14 @@ export function rangeActions(r: { name: string; vms: number; running: number }, 
     plan: { label: built ? "Plan changes" : "Plan build", icon: "map", onClick: () => openDialog((close) => <PlanDialog name={name} onClose={close} />) },
     edit: { label: "Edit spec", icon: "edit", onClick: () => go(`ranges/${name}/edit`) },
     destroy: built && { label: "Destroy", icon: "trash", danger: true, onClick: () => openDialog((close) => <DestroyModal name={name} onClose={close} />) },
+    remove: !built && { label: "Delete range", icon: "trash", danger: true, onClick: () => openDialog((close) => <DeleteModal name={name} onClose={close} />) },
   } satisfies Record<string, MenuAction | false>;
 }
 
 /** The right-click menu of a range in the resource tree and the range list. */
 export function rangeMenu(r: { name: string; vms: number; running: number }, canOperate: boolean): Menu {
   const a = rangeActions(r);
-  const operate: MenuItems = canOperate ? [a.start, a.shutdown, a.reboot, a.stop, "-", a.login, a.verify, a.plan, a.edit, "-", a.destroy] : [];
+  const operate: MenuItems = canOperate ? [a.start, a.shutdown, a.reboot, a.stop, "-", a.login, a.verify, a.plan, a.edit, "-", a.destroy, a.remove] : [];
   return { title: `Range '${r.name}'`, items: [...operate, "-", newTab(`ranges/${r.name}`)] };
 }
 
@@ -97,6 +99,39 @@ export function DestroyModal({ name, onClose }: { name: string; onClose: () => v
       </>
     }>
       <div>This deletes every VM of the range (its spec stays, so you can build it again). Type <b>{name}</b> to confirm.</div>
+      <input name="confirm-name" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus aria-label="Range name" />
+      <ErrorBox error={err} />
+    </Modal>
+  );
+}
+
+/** A range without VMs (planned, or destroyed) is deleted outright: its spec, draft, history and journal. */
+function DeleteModal({ name, onClose }: { name: string; onClose: () => void }) {
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const run = async () => {
+    setBusy(true);
+    try {
+      await del(`/api/ranges/${name}/spec`);
+      onClose();
+      rangesChanged();
+      // leave the deleted range's pages
+      if (window.location.hash.split("/").slice(1, 3).join("/") === `ranges/${name}`) go("dashboard");
+    } catch (e) {
+      setErr(e as ApiError);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`Delete ${name}?`} onClose={onClose} footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn danger solid" disabled={confirm !== name || busy} onClick={run}>Delete range</button>
+      </>
+    }>
+      <div>{name} has no VMs. This deletes the range from VALOR: its spec, draft changes, build history and journal.
+        It cannot be undone. Type <b>{name}</b> to confirm.</div>
       <input name="confirm-name" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus aria-label="Range name" />
       <ErrorBox error={err} />
     </Modal>

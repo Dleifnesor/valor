@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 
@@ -13,6 +14,12 @@ def range_dir(cfg, name: str) -> Path:
     d = Path(cfg.state_dir) / "state" / "ranges" / name
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def forget(cfg, name: str) -> None:
+    """Drop everything kept for a deleted range (results, history, draft, login, WireGuard keys), so a new range of
+    the same name starts clean."""
+    shutil.rmtree(range_dir(cfg, name), ignore_errors=True)
 
 
 def save(cfg, name: str, kind: str, data: dict) -> None:

@@ -239,6 +239,32 @@ def test_ranges_without_cluster(env):
         assert c.get("/api/ranges/Bad_Name").status_code == 400
 
 
+def test_delete_a_range_without_vms(env, monkeypatch):
+    """A planned range (or one whose VMs were destroyed) can be deleted: its spec, records and journal go."""
+    app, _ = env
+    from valor import state
+    from valor.web import ranges
+    vms = [{"vmid": 5000}]
+    monkeypatch.setattr(ranges, "PVE", lambda cfg: None)
+    monkeypatch.setattr(ranges, "range_vms", lambda pve, name, **k: vms)
+    monkeypatch.setattr(ranges, "ranges_overview", lambda pve: {})
+    cfg = app.state.cfg
+    state.save(cfg, "web2tier", "apply", {"ok": False})
+    cfg.journals_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.journals_dir / "web2tier.md").write_text("# web2tier\n")
+    with client(app) as c:
+        me, _ = enroll(c, "olivia")
+        h = {"X-CSRF-Token": me["csrf"]}
+        r = c.delete("/api/ranges/web2tier/spec", headers=h)
+        assert r.status_code == 409 and r.json()["error"] == "range_exists"     # built: destroy it first
+        vms.clear()
+        assert c.delete("/api/ranges/web2tier/spec", headers=h).status_code == 200
+        assert "web2tier" not in {x["name"] for x in c.get("/api/ranges").json()["ranges"]}
+        assert state.load(cfg, "web2tier", "apply") is None
+        assert not (cfg.journals_dir / "web2tier.md").exists()
+        assert c.delete("/api/ranges/web2tier/spec", headers=h).status_code == 404
+
+
 def test_viewer_cannot_change_ranges(env):
     app, _ = env
     with client(app) as c:
