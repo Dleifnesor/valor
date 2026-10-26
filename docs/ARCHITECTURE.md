@@ -250,11 +250,12 @@ React and TypeScript, built with Vite; the map uses React Flow (`@xyflow/react`)
 | `src/App.tsx` | Sign-in gate, the shell laid out like Proxmox VE (header with search, resource tree, the selected object's panel, task list) and hash routing (`#/ranges/<name>/<section>`, `#/ranges/<name>/vm/<host>`, `#/jobs/<id>`...). |
 | `src/api.ts`, `src/hooks.ts` | API client (JSON, the `X-CSRF-Token` header, 401 handling) and hooks (`useRoute`, polling `useApi`, `openTask` for the task viewer). |
 | `src/components/ui.tsx`, `Tree.tsx`, `TaskLog.tsx` | Building blocks (`View`: title bar, section menu, body), the resource tree, the task list and notifications. |
+| `src/components/ContextMenu.tsx` | Right-click menus: `showMenu` from any `onContextMenu`, `openDialog` for what an entry opens; `ContextMenuHost` in the shell draws both. |
 | `src/pages/` | Dashboard (Datacenter summary), RangeDetail (a range's sections), Vm (one VM: summary, console), RangeEditor, Builder, Chats, Blueprints, Library, Jobs, Console, Users, Audit, Settings, Account, SignIn. |
 | `src/components/Topology.tsx` | The map: nodes, edges, plan colors, details panel. |
 | `src/components/RangeEditing.tsx`, `SegmentEditing.tsx` | Map editing (VMs, services, segments, traffic rules), the draft bar and the range chat panel. |
 | `src/components/ChatFeed.tsx` | The chat feed: streamed steps, approval cards, question cards. Used by the builder and range chats. |
-| `src/components/PlanModal.tsx`, `RangeActions.tsx`, `Access.tsx` | Plan review and approval; power, snapshots and logins; WireGuard peers. |
+| `src/components/PlanModal.tsx`, `RangeActions.tsx`, `Access.tsx` | Plan review and approval; power, snapshots and logins (`rangeActions` / `vmActions` feed both the title bars and the right-click menus); WireGuard peers. |
 
 `web/dist` is committed, so installing VALOR never needs Node.js; CI fails when it is out of date.
 

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { RangeRow } from "../types";
 import { go } from "../hooks";
 import { Icon } from "./ui";
+import { Menu, newTab, showMenu } from "./ContextMenu";
+import { rangeMenu, vmMenu } from "./RangeActions";
 
 // The resource tree on the left, as in Proxmox: VALOR itself, its ranges and each range's VMs.
 
@@ -9,7 +11,9 @@ export type Selection = "root" | `range:${string}` | `vm:${string}/${string}`;
 
 const rangeState = (r: RangeRow) => !r.vms ? "" : r.running === r.vms ? "ok" : r.running ? "warn" : "off";
 
-export function ResourceTree({ ranges, instance, selected }: { ranges: RangeRow[] | null; instance: string; selected: Selection | null }) {
+export function ResourceTree({ ranges, instance, selected, canOperate }: {
+  ranges: RangeRow[] | null; instance: string; selected: Selection | null; canOperate: boolean;
+}) {
   const [closed, setClosed] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("valor-tree-closed") ?? "[]"); } catch { return []; }
   });
@@ -26,7 +30,15 @@ export function ResourceTree({ ranges, instance, selected }: { ranges: RangeRow[
   return (
     <div className="tree" role="tree" aria-label="Resources" ref={ref}>
       <Row depth={0} icon="server" label={instance} selected={selected === "root"} href="dashboard"
-        open={rootOpen} onToggle={() => toggle("root")} />
+        open={rootOpen} onToggle={() => toggle("root")} menu={{
+          title: `Datacenter (${instance})`,
+          items: [
+            canOperate && { label: "Create range", icon: "plus", onClick: () => go("ranges/new") },
+            canOperate && { label: "Chat builder", icon: "chat", onClick: () => go("builder") },
+            "-",
+            newTab("dashboard"),
+          ],
+        }} />
       {rootOpen && ranges?.map((r) => {
         const open = !closed.includes(`range:${r.name}`);
         const machines = r.machines ?? [];
@@ -34,11 +46,12 @@ export function ResourceTree({ ranges, instance, selected }: { ranges: RangeRow[
           <div key={r.name} role="group">
             <Row depth={1} icon="ranges" label={r.name} state={rangeState(r)} selected={selected === `range:${r.name}`}
               href={r.has_spec ? `ranges/${r.name}` : undefined} title={r.has_spec ? r.description : "This range has VMs but no spec"}
-              open={machines.length ? open : undefined} onToggle={() => toggle(`range:${r.name}`)} />
+              open={machines.length ? open : undefined} onToggle={() => toggle(`range:${r.name}`)}
+              menu={r.has_spec ? rangeMenu(r, canOperate) : undefined} />
             {open && machines.map((m) => (
               <Row key={m.vmid} depth={2} icon="vm" label={`${m.vmid} (${m.host})`} state={m.status === "running" ? "ok" : "off"}
                 selected={selected === `vm:${r.name}/${m.host}`} href={r.has_spec ? `ranges/${r.name}/vm/${m.host}` : undefined}
-                title={`${m.host}: ${m.status}`} />
+                title={`${m.host}: ${m.status}`} menu={r.has_spec ? vmMenu(r.name, m.host, m, canOperate) : undefined} />
             ))}
           </div>
         );
@@ -48,14 +61,14 @@ export function ResourceTree({ ranges, instance, selected }: { ranges: RangeRow[
   );
 }
 
-function Row({ depth, icon, label, state, selected, href, title, open, onToggle }: {
+function Row({ depth, icon, label, state, selected, href, title, open, onToggle, menu }: {
   depth: number; icon: "server" | "ranges" | "vm"; label: string; state?: string; selected: boolean; href?: string;
-  title?: string; open?: boolean; onToggle?: () => void;
+  title?: string; open?: boolean; onToggle?: () => void; menu?: Menu;
 }) {
   return (
     <div className={`tree-row${selected ? " selected" : ""}${href ? "" : " disabled"}`} style={{ paddingLeft: 6 + depth * 16 }}
       role="treeitem" aria-selected={selected} aria-expanded={open} title={title}
-      onClick={() => href && go(href)}>
+      onClick={() => href && go(href)} onContextMenu={(e) => menu && showMenu(e, menu)}>
       {open === undefined ? <span className="twisty" /> : (
         <button className="twisty" aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
           onClick={(e) => { e.stopPropagation(); onToggle?.(); }}>

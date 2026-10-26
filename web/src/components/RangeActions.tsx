@@ -1,9 +1,12 @@
 import { Fragment, useEffect, useState } from "react";
 import { ApiError, del, get, post } from "../api";
 import { go, openTask, useApi, when } from "../hooks";
-import { ErrorBox, Loading, Modal } from "./ui";
+import { ErrorBox, Loading, MenuAction, MenuItems, Modal } from "./ui";
+import { Menu, newTab, openDialog, showError } from "./ContextMenu";
+import { PlanModal, PlanResponse } from "./PlanModal";
 
-// Actions on a built range: its login, power, snapshots. Every change runs as an engine job (see Jobs).
+// Actions on a range and its VMs: power, login, plan, destroy, snapshots. Every change runs as an engine job (see
+// Jobs). The title bars and the right-click menus take their actions from rangeActions / vmActions.
 
 // The job opens in the task viewer; `started` closes the dialog it was started from.
 export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError) => void, started?: () => void) {
@@ -14,6 +17,90 @@ export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError)
   } catch (e) {
     onError(e as ApiError);
   }
+}
+
+/** What can be done to a range; `false` for what needs built VMs. Errors go to `onError` (a dialog by default). */
+export function rangeActions(r: { name: string; vms: number; running: number }, onError: (e: ApiError) => void = showError) {
+  const { name } = r;
+  const built = r.vms > 0, off = !r.running;
+  const power = (action: string) => runJob(post(`/api/ranges/${name}/power`, { action }), onError);
+  return {
+    start: built && { label: "Start all VMs", icon: "play", disabled: r.running === r.vms, onClick: () => power("start") },
+    shutdown: built && { label: "Shut down all VMs", icon: "power", disabled: off, onClick: () => power("shutdown") },
+    reboot: built && { label: "Reboot all VMs", icon: "refresh", disabled: off, onClick: () => power("reboot") },
+    stop: built && { label: "Force stop all VMs", icon: "stop", danger: true, disabled: off, onClick: () => power("stop") },
+    login: built && { label: "Login", icon: "key", onClick: () => openDialog((close) => <LoginModal range={name} onClose={close} />) },
+    verify: built && { label: "Verify", icon: "check", onClick: () => runJob(post(`/api/ranges/${name}/verify`), onError) },
+    plan: { label: built ? "Plan changes" : "Plan build", icon: "map", onClick: () => openDialog((close) => <PlanDialog name={name} onClose={close} />) },
+    edit: { label: "Edit spec", icon: "edit", onClick: () => go(`ranges/${name}/edit`) },
+    destroy: built && { label: "Destroy", icon: "trash", danger: true, onClick: () => openDialog((close) => <DestroyModal name={name} onClose={close} />) },
+  } satisfies Record<string, MenuAction | false>;
+}
+
+/** The right-click menu of a range in the resource tree and the range list. */
+export function rangeMenu(r: { name: string; vms: number; running: number }, canOperate: boolean): Menu {
+  const a = rangeActions(r);
+  const operate: MenuItems = canOperate ? [a.start, a.shutdown, a.reboot, a.stop, "-", a.login, a.verify, a.plan, a.edit, "-", a.destroy] : [];
+  return { title: `Range '${r.name}'`, items: [...operate, "-", newTab(`ranges/${r.name}`)] };
+}
+
+/** What can be done to one VM of a range; `false` for everything while it is not built. */
+export function vmActions(range: string, host: string, status: string | undefined, onError: (e: ApiError) => void = showError) {
+  const built = status !== undefined, off = status !== "running";
+  const power = (action: string) => runJob(post(`/api/ranges/${range}/power`, { action, hosts: [host] }), onError);
+  return {
+    start: built && { label: "Start", icon: "play", disabled: !off, onClick: () => power("start") },
+    shutdown: built && { label: "Shut down", icon: "power", disabled: off, onClick: () => power("shutdown") },
+    reboot: built && { label: "Reboot", icon: "refresh", disabled: off, onClick: () => power("reboot") },
+    stop: built && { label: "Force stop", icon: "stop", danger: true, disabled: off, onClick: () => power("stop") },
+    console: built && { label: "Console (noVNC)", icon: "vm", disabled: off, onClick: () => go(`ranges/${range}/vm/${host}/console`) },
+    serial: built && { label: "Serial console (xterm.js)", icon: "terminal", disabled: off, onClick: () => go(`ranges/${range}/vm/${host}/console/serial`) },
+  } satisfies Record<string, MenuAction | false>;
+}
+
+/** The right-click menu of a VM in the resource tree and the range's VM list. */
+export function vmMenu(range: string, host: string, vm: { vmid: number; status: string } | undefined, canOperate: boolean): Menu {
+  const a = vmActions(range, host, vm?.status);
+  const operate: MenuItems = canOperate ? [a.start, a.shutdown, a.reboot, a.stop, "-", a.console, a.serial] : [];
+  return { title: vm ? `VM ${vm.vmid} (${host})` : host, items: [...operate, "-", newTab(`ranges/${range}/vm/${host}`)] };
+}
+
+/** "Plan changes": ask the engine for the plan, then show it. */
+function PlanDialog({ name, onClose }: { name: string; onClose: () => void }) {
+  const [res, setRes] = useState<PlanResponse | null>(null);
+  const [err, setErr] = useState<ApiError | null>(null);
+  useEffect(() => { post<PlanResponse>(`/api/ranges/${name}/plan`).then(setRes, setErr); }, [name]);
+  if (res) return <PlanModal name={name} res={res} onClose={onClose} />;
+  return <Modal title={`Plan for ${name}`} onClose={onClose}>{err ? <ErrorBox error={err} /> : <Loading label="Planning…" />}</Modal>;
+}
+
+export function DestroyModal({ name, onClose }: { name: string; onClose: () => void }) {
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await post<{ job: string }>(`/api/ranges/${name}/destroy`, { confirm });
+      onClose();
+      openTask(r.job);
+    } catch (e) {
+      setErr(e as ApiError);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`Destroy ${name}?`} onClose={onClose} footer={
+      <>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn danger solid" disabled={confirm !== name || busy} onClick={run}>Destroy all VMs</button>
+      </>
+    }>
+      <div>This deletes every VM of the range (its spec stays, so you can build it again). Type <b>{name}</b> to confirm.</div>
+      <input name="confirm-name" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus aria-label="Range name" />
+      <ErrorBox error={err} />
+    </Modal>
+  );
 }
 
 interface Account { username: string; hosts: string[]; kind: "linux" | "windows" | "domain"; domain?: string }
