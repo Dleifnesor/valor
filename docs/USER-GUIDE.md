@@ -170,7 +170,8 @@ stop every VM), **Login**, **Verify**, **Plan build** / **Plan changes**, and un
 | **History** | Every build and verification with its result and duration. |
 
 A VM in the tree has two sections: **Summary** (status, VMID, segment, address, OS, size, services) and **Console**,
-with **Start**, **Shutdown** and **Console** in its title bar.
+with **Start**, **Shutdown** and **Console** in its title bar. **Double-click** a VM in the tree to open its console
+in a window of its own, as Proxmox does.
 
 ## Changing a built range
 
@@ -234,7 +235,9 @@ The fix chat is listed under **Chats** and linked from the job.
 ## Getting into a range
 
 **Consoles.** Select a VM in the tree -> **Console** (or **Console** next to it on the range's **Summary**): its
-screen (noVNC) or serial console in the browser. The browser only talks to VALOR, never to Proxmox. **Type password** types the range login into the console.
+screen (noVNC) or serial console in the browser. **Double-clicking** the VM in the tree opens the console in a
+window of its own (one per VM; a VM that is off offers **Start now** and connects once it runs). The browser only
+talks to VALOR, never to Proxmox. **Type password** types the range login into the console.
 
 **Range login.** Every range has one generated password (shown with **Login**, operators only):
 

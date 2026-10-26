@@ -17,7 +17,9 @@ interface Opened { session: string; kind: Kind; vnc_password: string | null; log
 
 const utf8len = (s: string) => new TextEncoder().encode(s).length;
 
-export function ConsolePage({ range, host, kind }: { range: string; host: string; kind: Kind }) {
+/** `windowed`: in a console window of its own (App's console/<range>/<host> route) rather than the VM's page. */
+export function ConsolePage({ range, host, kind, windowed = false }: { range: string; host: string; kind: Kind; windowed?: boolean }) {
+  const link = (k: Kind) => (windowed ? `console/${range}/${host}` : `ranges/${range}/vm/${host}/console`) + (k === "serial" ? "/serial" : "");
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
   const ws = useRef<WebSocket | null>(null);
@@ -121,9 +123,9 @@ export function ConsolePage({ range, host, kind }: { range: string; host: string
       <div className="row">
         <div className="seg-control compact" role="tablist">
           <button role="tab" aria-selected={kind === "vnc"} className={kind === "vnc" ? "active" : ""}
-            onClick={() => go(`ranges/${range}/vm/${host}/console`)}>Screen</button>
+            onClick={() => go(link("vnc"))}>Screen</button>
           <button role="tab" aria-selected={kind === "serial"} className={kind === "serial" ? "active" : ""}
-            onClick={() => go(`ranges/${range}/vm/${host}/console/serial`)}>Serial</button>
+            onClick={() => go(link("serial"))}>Serial</button>
         </div>
         <span className={`badge ${state === "connected" ? "ok" : state === "error" ? "bad" : ""}`}>{state}</span>
         <span className="grow" />

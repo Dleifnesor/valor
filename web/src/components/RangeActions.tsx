@@ -65,6 +65,13 @@ export function vmMenu(range: string, host: string, vm: { vmid: number; status: 
   return { title: vm ? `VM ${vm.vmid} (${host})` : host, items: [...operate, "-", newTab(`ranges/${range}/vm/${host}`)] };
 }
 
+/** A VM's console in a browser window of its own, as Proxmox opens one on a double-click. One window per VM:
+ *  opening it again brings that window to the front. */
+export function openConsoleWindow(range: string, host: string) {
+  const w = window.open(`#/console/${range}/${host}`, `valor-console-${range}-${host}`, "popup,width=1100,height=800");
+  w?.focus();
+}
+
 /** "Plan changes": ask the engine for the plan, then show it. */
 function PlanDialog({ name, onClose }: { name: string; onClose: () => void }) {
   const [res, setRes] = useState<PlanResponse | null>(null);
