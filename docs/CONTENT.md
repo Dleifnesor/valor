@@ -71,7 +71,8 @@ families: [debian, rhel]       # debian | rhel | windows
 ports: [5432]                  # TCP ports the service listens on (the map and the AI use this) ...
 # ports_param: port            # ... or: take the ports from this parameter
 # category: generic            # for packages / custom-script style roles
-# wait_for: [dc]               # converge after the host named in this parameter (domain members after their DC)
+# wait_for: [dc]               # converge after the host named in this parameter (domain members after their DC);
+#                              # validation requires a policy rule that lets the host reach it
 params:                        # every parameter the script reads; unknown parameters in a spec are rejected
   allow_from:
     default: ""

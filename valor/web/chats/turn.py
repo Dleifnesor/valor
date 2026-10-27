@@ -31,6 +31,7 @@ from . import autofix
 log = logging.getLogger("valor.chats")
 
 MAX_ROUNDS = 40                 # model calls per turn in the agent loop
+WRAP_UP = 8                     # a fix turn is told to finish this many model calls before it runs out
 FLUSH = 0.4                     # seconds between feed writes while the model streams
 _active: dict[int, threading.Event] = {}          # assistant message id -> stop flag of the thread running it
 _lock = threading.Lock()
@@ -254,6 +255,8 @@ class Turn:
                 continue
             meta = json.loads(r["meta"] or "{}")
             text = r["content"] or ""
+            if not text:                         # an answer that ended early: what the model wrote along the way
+                text = "\n".join(s["text"] for s in meta.get("steps", []) if s.get("type") == "text" and s.get("text"))[-3000:]
             acts = [f"- {s.get('summary')} ({s.get('status')}{', exit ' + str(s['exit']) if s.get('exit') is not None else ''})"
                     for s in meta.get("steps", []) if s.get("type") == "tool"]
             if acts:
@@ -416,11 +419,18 @@ class Turn:
                       "history": self.history(), "transcript": []}
         else:
             self.run_pending(state_, ctx)
+        fixing = "job" in json.loads(self.chat["state"] or "{}")
         for i in range(MAX_ROUNDS):
             if self.feed.stop.is_set():
                 raise Stopped()
             if i or resume:
                 self.check_budget()
+            if fixing and i == MAX_ROUNDS - WRAP_UP and state_["transcript"][-1:] and \
+                    state_["transcript"][-1]["role"] == "tool":
+                # said in a tool result, not a user message: some providers refuse a user message after tool results
+                state_["transcript"][-1]["results"][-1]["content"] += (
+                    f"\n\n[VALOR] {WRAP_UP} steps are left in this turn. Stop investigating: make the fix now (record "
+                    "it with update_spec) and finish, or say what you found - VALOR rebuilds the range when you finish.")
             r = self.prov.complete(state_["system"], state_["history"] + state_["transcript"], tools=tools,
                                    on_delta=self.feed.delta)
             self.record(r)

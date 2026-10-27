@@ -111,6 +111,12 @@ def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
                     target = ref.params.get(pname)
                     if target and not any(x.name == target for x in spec.hosts):
                         err(f"hosts.{hi}.roles.{ri}.params.{pname}", f"'{target}' is not a host of this range")
+                    elif target and not spec.reaches(h.name, target):   # the role would wait for it until it times out
+                        seg = spec.host(target).segment
+                        err(f"hosts.{hi}.roles.{ri}.params.{pname}",
+                            f"role {ref.name} on {h.name} needs {target}, but no policy rule lets {h.segment} reach {seg}",
+                            f"Add a policy rule from {h.segment} to {seg} (or between the two hosts) for the traffic "
+                            f"the role needs - Active Directory needs proto: any.")
             except ValorError as e:
                 err(f"hosts.{hi}.roles.{ri}", e.message, e.hint)
     if baseline is not None and (getattr(baseline, "families", None) or ["debian"]) == ["windows"]:

@@ -504,12 +504,12 @@ def _end_build(cfg, jid, ok=True, error="baseline_failed"):
 
 def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     """Mode 'auto': the assistant's actions run without approval cards, VALOR rebuilds when it is done, a failed
-    rebuild goes on in the same chat (3 rounds, not when it fails the same way), a successful one closes it. A plan
-    that would replace a VM waits for the person. A provider that cannot answer hands over to the next one."""
+    rebuild goes on in the same chat (5 rounds; the same failure gets one more try, not two), a successful one closes
+    it. A plan that would replace a VM waits for the person. A provider that cannot answer hands over to the next one."""
     app, wcfg, cfg, pve = lab
     fake = Script([("Restarting nginx.", [("run_command", {"host": "web", "command": "systemctl restart nginx", "purpose": "fix"})]),
                    "Restarted nginx; the build will pass now.", "Round 2: fixed the baseline.",
-                   "Fixed for good.", "Changed the OS of web.", "Answered by the second provider."])
+                   "Round 3: fixed it another way.", "Fixed for good.", "Changed the OS of web.", "Answered by the second provider."])
     adm, ah, op, h = start(app, monkeypatch, fake)
     started = _fake_builds(monkeypatch, cfg)
     autofix._fix_seen.clear()
@@ -518,20 +518,29 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     chat = op.get(f"/api/chats/{cid}").json()
     m = wait(op, cid, chat["messages"][1]["id"])
     assert chat["allow_all"] and m["status"] == "done" and pve.ran and "systemctl restart nginx" in pve.ran[-1][1]
+    ask = chat["messages"][0]["content"]
+    assert "VALOR rebuilds and verifies the range as soon as you finish" in ask and "approval" not in ask.replace("without approval", "")
     [(rjob, origin)] = started
     assert origin == f"assistant:olivia:{cid}" and m["meta"]["rebuild"]["job"] == rjob     # rebuilt on its own
     assert "VALOR rebuilds the range now (1 converge)" in m["meta"]["rebuild"]["note"]
     assert op.get(f"/api/jobs/{rjob}/fix").json()["chats"][0]["id"] == cid
-    # the rebuild failed another way: round 2 in the same chat; then the same way again: VALOR stops
+    # the rebuild failed another way: round 2 in the same chat; the same way again: one more round to try another
+    # way; the same way a third time: VALOR stops
     _end_build(cfg, rjob, ok=False)
     assert chats.fix_failed_builds(app) == [cid]
     msgs = op.get(f"/api/chats/{cid}").json()["messages"]
-    assert msgs[2]["content"].startswith("[VALOR] Round 2 of 3: the rebuild failed too.")
+    assert msgs[2]["content"].startswith("[VALOR] Round 2 of 5: the rebuild failed too.")
     wait(op, cid, msgs[3]["id"])
+    _end_build(cfg, started[-1][0], ok=False)
+    assert chats.fix_failed_builds(app) == [cid]
+    msgs = op.get(f"/api/chats/{cid}").json()["messages"]
+    assert msgs[4]["content"].startswith("[VALOR] Round 3 of 5: the rebuild failed the same way again, so your last "
+                                         "fix did not help.")
+    wait(op, cid, msgs[5]["id"])
     _end_build(cfg, started[-1][0], ok=False)
     assert chats.fix_failed_builds(app) == []
     last = op.get(f"/api/chats/{cid}").json()["messages"][-1]
-    assert last["role"] == "assistant" and "the rebuild failed the same way again" in last["content"]
+    assert last["role"] == "assistant" and "the rebuild failed the same way three times" in last["content"]
     # a fix that works: the successful rebuild closes the chat
     _failed_build(cfg)
     [cid2] = chats.fix_failed_builds(app)
@@ -564,6 +573,69 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     assert op.get(f"/api/chats/{cid4}").json()["provider"] == hosted["id"]
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
+
+
+def test_a_fix_that_ends_early_is_started_again(lab, monkeypatch):
+    """hr-nist171 (2026-10-25): the fix turn used all its steps on a transient guest-agent error and nothing happened
+    until the person typed "continue" 15 hours later. Now a fix turn is told to finish before it runs out, one that
+    ends early anyway is started again, and after REVIVES tries VALOR rebuilds anyway. A person's own turn is theirs."""
+    app, wcfg, cfg, pve = lab
+    look = ("Looking.", [("run_command", {"host": "web", "command": "systemctl status nginx", "purpose": "look"})])
+    fake = Script([look, look, look, "It was transient; nginx is fine now.", "My own question, answered."])
+    adm, ah, op, h = start(app, monkeypatch, fake)
+    started = _fake_builds(monkeypatch, cfg)
+    monkeypatch.setattr(turn, "MAX_ROUNDS", 3)
+    monkeypatch.setattr(turn, "WRAP_UP", 2)
+    monkeypatch.setattr(autofix, "REVIVE_WAIT", 0)
+    autofix._fix_seen.clear()
+    _failed_build(cfg)
+    [cid] = chats.fix_failed_builds(app)
+    m = wait(op, cid, op.get(f"/api/chats/{cid}").json()["messages"][1]["id"])
+    assert m["status"] == "failed" and m["meta"]["error"]["code"] == "ai_too_many_steps" and not started
+    assert "2 steps are left in this turn" in json.dumps(fake.calls[1]["messages"])           # told to wrap up
+    assert "steps are left" not in json.dumps(fake.calls[0]["messages"])
+    assert chats.fix_failed_builds(app) == [cid]                                             # started again
+    msgs = op.get(f"/api/chats/{cid}").json()["messages"]
+    assert msgs[2]["content"].startswith("[VALOR] Your last answer ended early (the assistant used 3 steps")
+    assert "Looking." in fake.calls[3]["messages"][-2]["content"]                            # its notes so far
+    m = wait(op, cid, msgs[3]["id"])
+    assert m["status"] == "done" and m["meta"]["rebuild"]["job"] == started[-1][0]           # and it rebuilds
+    assert chats.fix_failed_builds(app) == []                                                # nothing more to do
+    # VALOR restarted while a fix turn ran: the turn is marked interrupted and started again
+    with sqlite3.connect(wcfg.db) as c:
+        c.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
+                  (cid, time.time(), "[VALOR] Round 2 of 5: the rebuild failed too."))
+        c.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', 'code', "
+                  "'running', '{\"steps\": []}')", (cid, time.time()))
+    fake.replies[:0] = ["Fixed after the restart."]
+    assert chats.fix_failed_builds(app) == [cid]
+    msgs = op.get(f"/api/chats/{cid}").json()["messages"]
+    assert msgs[-3]["status"] == "failed" and msgs[-3]["meta"]["error"]["code"] == "interrupted"
+    assert "ended early (VALOR restarted" in msgs[-2]["content"]
+    assert wait(op, cid, msgs[-1]["id"])["content"] == "Fixed after the restart."
+    # no provider answers at all: two more tries (after PROVIDER_WAIT), then VALOR rebuilds anyway
+    class Down(ai.Provider):
+        def complete(self, *a, **k):
+            raise ValorError("ai_unreachable", "cannot reach the AI provider")
+    monkeypatch.setattr(ai, "provider_from", lambda st, key: Down("m"))
+    _failed_build(cfg)
+    [cid2] = chats.fix_failed_builds(app)
+    m = wait(op, cid2, op.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
+    assert m["status"] == "failed" and chats.fix_failed_builds(app) == []                     # waits PROVIDER_WAIT
+    monkeypatch.setattr(autofix, "PROVIDER_WAIT", 0)
+    n = len(started)
+    for _ in range(autofix.REVIVES):
+        assert chats.fix_failed_builds(app) == [cid2]
+        wait(op, cid2, op.get(f"/api/chats/{cid2}").json()["messages"][-1]["id"])
+    assert chats.fix_failed_builds(app) == [cid2] and len(started) == n + 1
+    last = op.get(f"/api/chats/{cid2}").json()["messages"][-1]
+    assert last["content"] == "The assistant did not finish after 3 tries. VALOR rebuilds the range now (1 converge)."
+    assert chats.fix_failed_builds(app) == []
+    # a person who wrote in a fix chat themselves is there to try again: VALOR leaves that turn alone
+    r = op.post(f"/api/chats/{cid2}/messages", json={"message": "why?", "mode": "question"}, headers=h).json()
+    assert wait(op, cid2, r["messages"][1]["id"])["status"] == "failed"
+    assert chats.fix_failed_builds(app) == []
+    op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     app, wcfg, cfg, pve = lab

@@ -221,8 +221,12 @@ VALOR's checks).
 
 **Failed builds** ([`chats/autofix.py`](../valor/web/chats/autofix.py) `watch_failed_builds`, a thread in the web
 service): builds that failed in the last 30 minutes start a Code-mode chat (`start_fix`) with `fix_prompt(job)`. In
-mode `auto` VALOR rebuilds when the assistant is done (`continue_fix`), up to 3 rounds, stops if a rebuild fails the
-same way again, and never runs a plan that replaces or removes a VM.
+mode `auto` VALOR rebuilds when the assistant is done (`continue_fix`), up to 5 rounds; a rebuild that fails the same
+way as the one before gets one more round to try another way, a third identical failure stops it. It never runs a
+plan that replaces or removes a VM. A fix turn is told to finish `WRAP_UP` steps before it runs out; one that ends
+early anyway (out of steps, VALOR restarted, no provider answered) is started again by `revive_stalled`, twice per
+round, and then VALOR rebuilds anyway - so a fix never waits for someone to type "continue". In the build itself a
+role or baseline script that the guest agent lost (it restarted mid-script) runs once more (`run_again_if_lost`).
 
 ## The installer (`installer/`)
 

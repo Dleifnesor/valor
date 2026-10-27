@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -320,8 +321,15 @@ class PVE:
         end = time.time() + timeout
         delay = 0.5
         while time.time() < end:
-            st = self.agent_call(vmid, f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get,
-                                 resend=True, pid=pid)
+            try:
+                st = self.agent_call(vmid, f"read command status in VM {vmid}", self.vm(vmid).agent("exec-status").get,
+                                     resend=True, pid=pid)
+            except ValorError as e:
+                if not re.search(r"PID \S+ does not exist", f"{e.message} {e.details}"):
+                    raise
+                # the agent restarted (a package upgrade restarts qemu-guest-agent) and forgot - or killed - the process
+                raise ValorError("agent_exec_lost", f"the guest agent of VM {vmid} restarted while a command ran",
+                                 details=e.details, hint="Apply the range again to run the step again.") from e
             if st.get("exited"):
                 return ExecResult(st.get("exitcode"), from_agent(st.get("out-data", "") or ""),
                                   from_agent(st.get("err-data", "") or ""))
