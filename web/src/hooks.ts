@@ -22,6 +22,11 @@ export function openTask(id: string) {
   window.dispatchEvent(new CustomEvent("valor-task", { detail: id }));
 }
 
+// The range list (tree, Datacenter summary) reloads at once, e.g. after a range is deleted.
+export function rangesChanged() {
+  window.dispatchEvent(new Event("valor-ranges"));
+}
+
 export function useStored(key: string, initial: boolean): [boolean, (v: boolean) => void] {
   const [value, setValue] = useState(() => {
     try { const v = localStorage.getItem(key); return v === null ? initial : v === "1"; } catch { return initial; }

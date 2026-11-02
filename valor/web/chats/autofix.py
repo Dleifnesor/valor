@@ -3,7 +3,8 @@
 A build that fails (or whose verification fails) goes to a range chat in Code mode of the person who started it. In
 the mode 'auto' the assistant's actions run without approval cards and VALOR rebuilds the range when it is done - up
 to FIX_ROUNDS times, never when the plan would replace or remove a VM. A provider that cannot answer hands over to
-the next one.
+the next one, and a fix turn that ends early (out of steps, VALOR restarted, no provider answered) is started again,
+so a fix never waits for someone to type "continue".
 """
 
 from __future__ import annotations
@@ -56,7 +57,27 @@ def _verify_failures(cfg, job: dict) -> list[str]:
 
 
 
-def fix_prompt(job: dict, failures: list[str] | None = None) -> str:
+FINISH = {
+    "prepare": "Look inside the affected VMs first, then fix the cause where it is: in the VMs (commands that change "
+               "something wait for my approval), in the spec with update_spec when the spec is wrong, or both. The "
+               "next apply runs the failed step and the verification again, so make sure they will pass then. Finish "
+               "with what you found, what you changed, and whether I should re-apply.",
+    "fix": "Look inside the affected VMs first, then fix the cause where it is: in the VMs (your actions run without "
+           "approval cards), in the spec with update_spec when the spec is wrong, or both. The next apply runs the "
+           "failed step and the verification again, so make sure they will pass then. Finish with what you found, "
+           "what you changed, and whether I should re-apply.",
+    "auto": "Your actions run without approval cards, and VALOR rebuilds and verifies the range as soon as you finish "
+            "(you will hear here if that fails). Look inside the affected VMs first, then fix the cause where it is: "
+            "in the VMs, in the spec with update_spec when the spec is wrong, or both - and record every lasting "
+            "change in the spec, because a live change alone is lost when a VM is rebuilt. If the failure was "
+            "transient (the guest agent restarted, a download timed out) and the VMs are fine now, say so and "
+            "finish: the rebuild runs the step again. Make the range work as its spec describes; never make it pass "
+            "by dropping tests, policy rules, roles or hardening unless the spec itself asks for something that "
+            "cannot work. Finish with what you found and what you changed.",
+}
+
+
+def fix_prompt(job: dict, failures: list[str] | None = None, mode: str = "prepare") -> str:
     """What the assistant is told about a failed build (sent as the chat's first message)."""
     r = job.get("result") or {}
     lines = [f"[VALOR] The build of range {job_range(job)} failed (job {job['id']}). Find the cause and fix it so "
@@ -73,15 +94,15 @@ def fix_prompt(job: dict, failures: list[str] | None = None) -> str:
         lines.append(f"VALOR's hint: {r['hint']}")
     if r.get("completed_steps"):
         lines.append("Steps that completed before it: " + ", ".join(map(str, r["completed_steps"][-15:])))
-    lines.append("Look inside the affected VMs first, then fix the cause where it is: in the VMs (commands that change "
-                 "something wait for my approval), in the spec with update_spec when the spec is wrong, or both. The "
-                 "next apply runs the failed step and the verification again, so make sure they will pass then. Finish "
-                 "with what you found, what you changed, and whether I should re-apply.")
+    lines.append(FINISH.get(mode, FINISH["prepare"]))
     return "\n".join(lines)[:7900]
 
 
 
-FIX_ROUNDS = 3                     # automatic fix-and-rebuild rounds for one failed build
+FIX_ROUNDS = 5                     # automatic fix-and-rebuild rounds for one failed build
+REVIVES = 2                        # restarts of a fix turn that ended early, per round; then VALOR rebuilds anyway
+REVIVE_WAIT = 15                   # s before restarting it - PROVIDER_WAIT when no provider could answer
+PROVIDER_WAIT = 300
 PROVIDER_FAILED = {"ai_context_full", "ai_unreachable", "ai_auth", "ai_credits", "ai_rate_limited", "ai_error",
                    "ai_no_tools", "ai_truncated", "ai_not_configured"}      # another provider may well manage
 RISKY = ("replace", "remove")      # plan actions an automatic rebuild leaves to the person (VMs lost or rebuilt)
@@ -120,6 +141,14 @@ def _signature(cfg, job: dict) -> str:
     r = job.get("result") or {}
     return json.dumps([r.get("error"), r.get("step"), r.get("host")] if r.get("error") else
                       sorted(_verify_failures(cfg, job)))
+
+
+
+def _over_budget(conn, store: dict, username: str) -> bool:
+    """The person whose chat fixes a build used their daily AI budget (the fix waits until there is some again)."""
+    limit = int(store["daily_tokens_per_user"] or 0)
+    return bool(limit) and conn.execute("SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM ai_usage WHERE "
+                                        "username = ? AND ts > ?", (username, time.time() - 86400)).fetchone()[0] >= limit
 
 
 
@@ -167,26 +196,69 @@ def start_fix(app, conn, job: dict, username: str, auto: bool, provider: str | N
                        "(?, 'range', ?, ?, ?, ?, ?)", (username, name, title, now, now, json.dumps(state_))).lastrowid
     db.audit(conn, "chat.fix", "ok", username=username, target=name,
              detail={"chat": cid, "job": job["id"], "auto": auto, "mode": mode})
-    _ask(app, conn, cid, username, fix_prompt(job, failures))
+    _ask(app, conn, cid, username, fix_prompt(job, failures, mode))
     return cid
 
 
 
 def continue_fix(app, conn, chat, job: dict) -> int | None:
-    """The automatic rebuild failed: the same chat goes on (round 2, 3) - unless it failed the same way again."""
+    """The automatic rebuild failed: the same chat goes on (round 2, 3, ...). A rebuild that fails the same way as the
+    one before gets one more round to try another way; the same failure a third time ends it."""
     cfg, cs = app.state.cfg, json.loads(chat["state"] or "{}")
     rnd, sig = int(cs.get("round", 1)) + 1, _signature(cfg, job)
-    if sig == cs.get("sig") or rnd > FIX_ROUNDS:
-        why = "the rebuild failed the same way again" if sig == cs.get("sig") else f"{FIX_ROUNDS} rounds did not fix it"
+    again = sig == cs.get("sig")
+    if rnd > FIX_ROUNDS or (again and cs.get("again")):
+        why = "the rebuild failed the same way three times" if again else f"{FIX_ROUNDS} rounds did not fix it"
         _say(conn, chat["id"], f"VALOR stopped fixing this on its own: {why} (job {job['id']}). Read what the assistant "
                                "found above; ask it to try something else, or fix the spec and apply it yourself.")
         _set_state(conn, chat["id"], done="stopped")
         return None
-    _set_state(conn, chat["id"], round=rnd, sig=sig, jobs=[*cs.get("jobs", []), job["id"]])
+    _set_state(conn, chat["id"], round=rnd, sig=sig, again=again, revived=0, jobs=[*cs.get("jobs", []), job["id"]])
     res = job.get("result") or {}
-    _ask(app, conn, chat["id"], chat["owner"], f"[VALOR] Round {rnd} of {FIX_ROUNDS}: the rebuild failed too.\n" +
-         fix_prompt(job, [] if res.get("error") else _verify_failures(cfg, job)))
+    how = ("the rebuild failed the same way again, so your last fix did not help. Look again and fix it another way."
+           if again else "the rebuild failed too.")
+    _ask(app, conn, chat["id"], chat["owner"], f"[VALOR] Round {rnd} of {FIX_ROUNDS}: {how}\n" +
+         fix_prompt(job, [] if res.get("error") else _verify_failures(cfg, job), cs.get("fix", "prepare")))
     return chat["id"]
+
+
+
+def revive_stalled(app, conn, store: dict) -> list[int]:
+    """Mode 'auto': a fix turn that ended early - out of steps, VALOR restarted under it, no provider answered - is
+    started again (REVIVES times per round). After that VALOR rebuilds anyway: a transient failure passes then, and
+    one that fails again comes back as the next round."""
+    out = []
+    for chat in conn.execute("SELECT * FROM chats WHERE kind = 'range' AND updated > ?",
+                             (time.time() - 6 * 3600,)).fetchall():
+        cs = json.loads(chat["state"] or "{}")
+        if cs.get("fix") != "auto" or "job" not in cs or cs.get("done"):
+            continue
+        rows = conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY id DESC LIMIT 2",
+                            (chat["id"],)).fetchall()
+        if len(rows) < 2 or rows[0]["role"] != "assistant" or not str(rows[1]["content"]).startswith("[VALOR]"):
+            continue                             # only VALOR's own turns: a person who wrote in the chat is there
+        turn.mark_interrupted(conn, rows[0])     # a turn still marked running whose thread is gone
+        last = conn.execute("SELECT status, meta FROM chat_messages WHERE id = ?", (rows[0]["id"],)).fetchone()
+        if last["status"] != "failed":
+            continue
+        err = json.loads(last["meta"] or "{}").get("error") or {}
+        wait = PROVIDER_WAIT if err.get("code") in PROVIDER_FAILED else REVIVE_WAIT
+        if time.time() - chat["updated"] < wait or _over_budget(conn, store, chat["owner"]):
+            continue                             # over the daily AI budget: it waits until there is some again
+        n = int(cs.get("revived", 0))
+        if n < REVIVES:
+            _set_state(conn, chat["id"], revived=n + 1, tried=[])         # every provider gets another chance
+            _ask(app, conn, chat["id"], chat["owner"],
+                 f"[VALOR] Your last answer ended early ({err.get('message', 'error')}); what it did is above. Go on "
+                 "from there instead of starting over: make the fix now, record it in the spec, and finish - VALOR "
+                 "rebuilds the range as soon as you do.")
+        else:
+            res = rebuild(app, conn, chat, chat["owner"])
+            _say(conn, chat["id"], f"The assistant did not finish after {REVIVES + 1} tries. {res['note']}")
+            if not res.get("job"):
+                _set_state(conn, chat["id"], done="stopped")
+        out.append(chat["id"])
+    return out
 
 
 
@@ -232,7 +304,7 @@ def fix_failed_builds(app) -> list[int]:
     """Builds that ended in the last FIX_WINDOW s, while 'fix failed builds' is on and a provider is connected:
     a failed one goes to the assistant (a chat of the person who started it, or the first admin for CLI/MCP builds;
     a failed automatic rebuild continues its chat); one the worker did not finish runs once more; a successful
-    automatic rebuild closes its chat."""
+    automatic rebuild closes its chat. Fix turns that ended early are started again (revive_stalled)."""
     cfg, out = app.state.cfg, []
     conn = db.connect(app.state.wcfg.db)
     try:
@@ -271,15 +343,13 @@ def fix_failed_builds(app) -> list[int]:
                              detail={"job": r["job"], "rerun_of": job["id"], "by": "valor"})
                 continue
             owner = chat["owner"] if chat is not None else _owner(conn, origin)
-            limit = int(store["daily_tokens_per_user"] or 0)
-            spent = conn.execute("SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM ai_usage WHERE username = ? "
-                                 "AND ts > ?", (owner, time.time() - 86400)).fetchone()[0] if owner else 0
-            if owner is None or (limit and spent >= limit):
+            if owner is None or _over_budget(conn, store, owner):
                 continue
             cid = continue_fix(app, conn, chat, job) if chat is not None else \
                 start_fix(app, conn, job, owner, True, store["fix_provider"] or None, store["fix_mode"])
             if cid:
                 out.append(cid)
+        out += [c for c in revive_stalled(app, conn, store) if c not in out]
     finally:
         conn.close()
     return out
