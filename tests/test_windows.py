@@ -74,6 +74,10 @@ def test_dependency_cycle(cfg):
 def test_scripts_quote_and_wrap():
     s = windows.prep_script("dc1", "10.61.0.10", 24, "10.61.0.1", ["1.1.1.1"], "it's-a-p4ss")
     assert "'it''s-a-p4ss'" in s and "Rename-Computer" in s and windows.PREP_OK in s
+    # licensing: no license checks, and the evaluation renewed now and by a daily task (the script quoted intact)
+    assert "-Name NoGenTicket -Value 1" in s and "-Name NotificationDisabled -Value 1" in s
+    assert windows.q(windows.RENEW_PS1) in s and f"-TaskName {windows.q(windows.RENEW_TASK)}" in s
+    assert "ReArmWindows" in windows.RENEW_PS1 and str(windows.RENEW_DAYS * 1440) in windows.RENEW_PS1
     r = windows.role_script("x", "Changed", {"VALOR_PARAM_DOMAIN": "corp.lab", "VALOR_HOST": "o'neil"})
     assert "$VALOR_PARAM_DOMAIN = 'corp.lab'" in r and "$VALOR_HOST = 'o''neil'" in r and "VALOR-ROLE-CHANGED" in r
     assert "TcpClient" in windows.probe_script("tcp", "10.0.0.1", 389)

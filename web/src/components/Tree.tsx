@@ -3,9 +3,10 @@ import { RangeRow } from "../types";
 import { go } from "../hooks";
 import { Icon } from "./ui";
 import { Menu, newTab, showMenu } from "./ContextMenu";
-import { rangeMenu, vmMenu } from "./RangeActions";
+import { openConsoleWindow, rangeMenu, vmMenu } from "./RangeActions";
 
-// The resource tree on the left, as in Proxmox: VALOR itself, its ranges and each range's VMs.
+// The resource tree on the left, as in Proxmox: VALOR itself, its ranges and each range's VMs. Double-clicking a VM
+// opens its console in a window of its own.
 
 export type Selection = "root" | `range:${string}` | `vm:${string}/${string}`;
 
@@ -51,7 +52,8 @@ export function ResourceTree({ ranges, instance, selected, canOperate }: {
             {open && machines.map((m) => (
               <Row key={m.vmid} depth={2} icon="vm" label={`${m.vmid} (${m.host})`} state={m.status === "running" ? "ok" : "off"}
                 selected={selected === `vm:${r.name}/${m.host}`} href={r.has_spec ? `ranges/${r.name}/vm/${m.host}` : undefined}
-                title={`${m.host}: ${m.status}`} menu={r.has_spec ? vmMenu(r.name, m.host, m, canOperate) : undefined} />
+                title={`${m.host}: ${m.status}`} menu={r.has_spec ? vmMenu(r.name, m.host, m, canOperate) : undefined}
+                onOpen={r.has_spec && canOperate ? () => openConsoleWindow(r.name, m.host) : undefined} />
             ))}
           </div>
         );
@@ -61,14 +63,14 @@ export function ResourceTree({ ranges, instance, selected, canOperate }: {
   );
 }
 
-function Row({ depth, icon, label, state, selected, href, title, open, onToggle, menu }: {
+function Row({ depth, icon, label, state, selected, href, title, open, onToggle, menu, onOpen }: {
   depth: number; icon: "server" | "ranges" | "vm"; label: string; state?: string; selected: boolean; href?: string;
-  title?: string; open?: boolean; onToggle?: () => void; menu?: Menu;
+  title?: string; open?: boolean; onToggle?: () => void; menu?: Menu; onOpen?: () => void;
 }) {
   return (
     <div className={`tree-row${selected ? " selected" : ""}${href ? "" : " disabled"}`} style={{ paddingLeft: 6 + depth * 16 }}
       role="treeitem" aria-selected={selected} aria-expanded={open} title={title}
-      onClick={() => href && go(href)} onContextMenu={(e) => menu && showMenu(e, menu)}>
+      onClick={() => href && go(href)} onDoubleClick={onOpen} onContextMenu={(e) => menu && showMenu(e, menu)}>
       {open === undefined ? <span className="twisty" /> : (
         <button className="twisty" aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
           onClick={(e) => { e.stopPropagation(); onToggle?.(); }}>

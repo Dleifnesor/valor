@@ -1,4 +1,13 @@
+/*
+ * *paints everything in soft Proxmox colors* OwO web/src/styles.css: ALL of the web UI's styles! ^w^
+ * It's plain CSS (no framework). The look follows Proxmox VE's web UI on purpose, so it feels familiar. Colors are
+ * CSS variables (custom properties) defined once here, with a dark set for dark mode, so every rule below just says
+ * var(--text) and friends *wags tail*. Sections: theme variables, page basics, shell, tree, panels, task list, phone
+ * layout, building blocks, forms, tables, badges, alerts, tabs, dialogs, sign-in, map, events, menus, consoles,
+ * progress, chat builder, map editing, journal, compliance, chats and question cards
+ */
 :root {
+  /* Light theme: page and card backgrounds, input background, borders, the table grid line UwU */
   --bg: #f0f0f0;
   --surface: #ffffff;
   --surface-2: #f5f5f5;
@@ -6,6 +15,10 @@
   --border: #d0d0d0;
   --border-strong: #b4b4b4;
   --grid-line: #ececec;
+  /*
+   * Text colors, the blue accent (and its stronger and softer shades), links, text on the accent, hover/selected
+   * row colors, button colors >w<
+   */
   --text: #333333;
   --muted: #6a6a6a;
   --accent: #3892d4;
@@ -17,6 +30,7 @@
   --selected: #c6dff3;
   --btn-bg: #f5f5f5;
   --btn-hover: #e6e6e6;
+  /* State colors: run (a running VM's green dot), ok, warn, bad, info, each with a soft background version OwO */
   --run: #21bf4b;
   --ok: #2b8a3e;
   --ok-soft: #e6f4e9;
@@ -26,11 +40,16 @@
   --bad-soft: #fbe9e7;
   --info: #2b6ca3;
   --info-soft: #e5eff8;
+  /* Plan change colors on the map: create, update, replace, remove, keep ^w^ */
   --c-create: #2e7d32;
   --c-update: #b8730c;
   --c-replace: #d4520f;
   --c-remove: #c62828;
   --c-keep: #9a9a95;
+  /*
+   * Popover shadow, tell the browser this theme is light (scrollbars, form controls), corner radius, and the heights
+   * of the header, panel title bar and task list UwU
+   */
   --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.18);
   color-scheme: light;
   --radius: 2px;
@@ -39,10 +58,15 @@
   --log-h: 190px;
   /* everything above and below a page's body: the map, a chat or a console fills the rest of the window */
   --chrome: calc(var(--head-h) + var(--log-h) + var(--view-head-h) + 22px);
+  /*
+   * How tall the map/chat/console may be: at least 440px, otherwise the window minus the chrome; and the monospace
+   * font stack >w<
+   */
   --map-tall: max(440px, calc(100vh - var(--chrome)));
   --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
 }
 
+/* Dark theme, following the system setting unless the person picked light OwO */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #1d1d1d;
@@ -82,6 +106,7 @@
   }
 }
 
+/* Dark theme when the person picked it explicitly (data-theme="dark" on html) ^w^ */
 :root[data-theme="dark"] {
   --bg: #1d1d1d;
   --surface: #2a2a2a;
@@ -119,6 +144,7 @@
   color-scheme: dark;
 }
 
+/* Page basics: border-box sizing everywhere, full-height root, the body font and colors UwU */
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
@@ -128,6 +154,7 @@ body {
   font: 13px/1.45 "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+/* Links, link-looking buttons, error text, headings, code/monospace, preformatted text, and horizontal rules >w< */
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 button.link { background: none; border: 0; padding: 0; color: var(--link); cursor: pointer; font: inherit; text-align: left; }
@@ -141,12 +168,15 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 
 /* ---------------------------------------------------------------- shell: header, resource tree, panel, tasks */
+/* The shell is a full-window column; a folded task list shrinks to its tab bar OwO */
 .shell { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 .shell.log-closed { --log-h: 31px; }
+/* The header bar ^w^ */
 .topbar {
   height: var(--head-h); flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 4px;
   background: var(--surface); border-bottom: 1px solid var(--border); position: relative; z-index: 30;
 }
+/* Brand (logo + name + version), the search box and its results, and the user menu button UwU */
 .brand { display: flex; align-items: center; gap: 8px; color: var(--text); margin-right: 18px; white-space: nowrap; }
 .brand:hover { text-decoration: none; }
 .brand svg { color: var(--accent); flex: none; }
@@ -158,6 +188,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .search .search-hits { top: 32px; left: 0; right: auto; width: min(560px, 90vw); }
 .user-menu .btn { border-color: transparent; background: none; }
 .user-menu .btn:hover:not(:disabled) { background: var(--btn-bg); border-color: var(--border); }
+/* The workspace: the tree column (250px) and the content; hidden tree = content only >w< */
 .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
 .shell.tree-hidden .workspace { grid-template-columns: minmax(0, 1fr); }
 .shell.tree-hidden .tree-pane { display: none; }
@@ -167,6 +198,10 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .nav-backdrop { display: none; }
 
 /* the resource tree */
+/*
+ * Tree rows: 24px high, hover and selected backgrounds, links, the expand arrow (which rotates), and the icon with
+ * a state dot (green running, amber partly running) OwO
+ */
 .tree { padding: 4px 0; user-select: none; }
 .tree-row { display: flex; align-items: center; gap: 4px; height: 24px; padding-right: 8px; cursor: pointer; white-space: nowrap; }
 .tree-row:hover { background: var(--hover); }
@@ -187,6 +222,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .tree-icon.warn::after { background: var(--warn); }
 
 /* one object's panel: title bar with its actions, its sections on the left, the section on the right */
+/* The View panel: title bar, tools, the section menu on the left (active entry highlighted), and the body ^w^ */
 .view { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
 .view-head {
   min-height: var(--view-head-h); flex: none; display: flex; align-items: center; gap: 4px 12px; padding: 0 10px;
@@ -203,6 +239,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .view-menu a.active svg { color: var(--text); }
 .view-body { flex: 1; min-width: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
 /* the map and the console fill the panel's height */
+/* Wide screens: the map page and consoles fill the panel's height (only their insides scroll) UwU */
 @media (min-width: 861px) {
   .view-body.fill { overflow: hidden; }
   .view-body.fill > .map-page, .view-body.fill > .console-page { flex: 1; min-height: 0; height: auto; }
@@ -215,6 +252,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 }
 
 /* the task list along the bottom */
+/* The task list: tabs (the active one underlined), a scrolling body with a sticky table header >w< */
 .tasklog { flex: none; height: var(--log-h); display: flex; flex-direction: column; background: var(--surface);
   border-top: 1px solid var(--border-strong); }
 .tasklog-head { height: 30px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px 0 2px; background: var(--surface-2);
@@ -229,6 +267,10 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .tasklog .empty { padding: 16px; }
 tr.unread td:nth-child(2) { font-weight: 600; }
 
+/*
+ * Phones (860px and narrower): the page scrolls normally, the header sticks, the tree slides in from the left over
+ * a dark backdrop, the section menu becomes a scrolling tab row, and the task list is hidden OwO
+ */
 @media (max-width: 860px) {
   :root { --map-tall: 520px; }
   .shell { height: auto; min-height: 100vh; overflow: visible; }
@@ -252,6 +294,7 @@ tr.unread td:nth-child(2) { font-weight: 600; }
 }
 
 /* ---------------------------------------------------------------- building blocks */
+/* Cards: border, title bar, body. Grids and summary rows that wrap to fit the width ^w^ */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .card > .card-head { display: flex; align-items: center; gap: 10px; padding: 4px 10px; min-height: 32px;
   border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -261,11 +304,13 @@ tr.unread td:nth-child(2) { font-weight: 600; }
 .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; align-items: stretch; }
 .summary-row.two { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+/* The health mark on the dashboard; notes; plain lists UwU */
 .health { display: flex; align-items: center; gap: 14px; }
 .health-mark { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; flex: none; color: #fff; background: var(--run); }
 .health-mark.bad { background: var(--bad); }
 .notes { white-space: pre-wrap; }
 .plain-list { margin: 0; padding-left: 18px; }
+/* Small layout helpers: row, stack, muted, small, grow, right, nowrap >w< */
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; }
 .stack { display: flex; flex-direction: column; gap: 10px; }
@@ -275,6 +320,7 @@ tr.unread td:nth-child(2) { font-weight: 600; }
 .right { text-align: right; }
 .nowrap { white-space: nowrap; }
 
+/* Buttons: normal, hover, disabled, primary (blue), danger (red text or solid red), ghost (no border), small OwO */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; padding: 0 10px;
   border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--btn-bg); color: var(--text);
@@ -291,14 +337,20 @@ tr.unread td:nth-child(2) { font-weight: 600; }
 .btn.ghost:hover:not(:disabled) { background: var(--btn-bg); }
 .btn.small { height: 22px; padding: 0 8px; font-size: 12px; }
 /* row actions in tables read as quiet text until hovered; the row's data stays in front */
+/* Buttons inside table rows look like quiet links until hovered ^w^ */
 td .btn.small:not(.primary) { border-color: transparent; background: none; color: var(--link); padding: 0 6px; }
 td .btn.small:not(.primary):hover:not(:disabled) { background: var(--btn-bg); border-color: var(--border); }
 td .btn.small.danger { color: var(--bad); }
+/* Drop-down buttons, their menus, and the red notification count bubble UwU */
 .drop { position: relative; }
 .drop .popover.menu { top: 30px; right: 0; width: auto; min-width: 210px; }
 .count { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px;
   background: var(--bad); color: #fff; font-size: 10.5px; font-weight: 600; }
 
+/*
+ * Form fields: label above the input, hints, inputs/selects/textareas, the focus outline, the code editor textarea,
+ * and checkbox rows >w<
+ */
 label.field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 12.5px; }
 label.field .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
 input, select, textarea {
@@ -311,6 +363,10 @@ textarea.code { font-family: var(--mono); font-size: 12px; line-height: 1.45; mi
 .checkbox { display: flex; align-items: center; gap: 8px; }
 
 /* tables are Proxmox grids: a header row with column lines, quiet row lines, a blue hover */
+/*
+ * Tables like Proxmox grids: header row with column lines, quiet row lines, hover and selected rows, clickable rows,
+ * and a horizontally scrolling wrapper OwO
+ */
 table { width: 100%; border-collapse: collapse; background: var(--surface); }
 th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--grid-line); vertical-align: middle; }
 th { font-weight: 600; font-size: 12.5px; background: var(--surface-2); border-bottom-color: var(--border);
@@ -322,6 +378,7 @@ tr.selected { background: var(--selected); }
 tr.clickable { cursor: pointer; }
 .table-wrap { overflow-x: auto; }
 
+/* Badges: small labels; ok/warn/bad/info colors (borders mixed from the color at 35%) ^w^ */
 .badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 0 5px; border-radius: 2px; font-size: 11.5px; line-height: 18px;
   background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); white-space: nowrap;
@@ -330,6 +387,7 @@ tr.clickable { cursor: pointer; }
 .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .badge.bad { background: var(--bad-soft); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
 .badge.info { background: var(--info-soft); color: var(--info); border-color: color-mix(in srgb, var(--info) 35%, transparent); }
+/* Dots and state marks (StateBadge): a colored circle (or spinner) before the words UwU */
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--c-keep); flex: none; }
 /* a state in words with a coloured mark (StateBadge) */
 .status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -340,6 +398,7 @@ tr.clickable { cursor: pointer; }
 .status.info > i { background: var(--info); }
 .status.bad { color: var(--bad); }
 .status.bad > i { background: var(--bad); }
+/* Text that ends in "…" when too long; table rows that don't wrap; the dashboard's two-column grid >w< */
 .clip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td .row { flex-wrap: nowrap; }
 td.fill { width: 100%; max-width: 0; }                /* takes the spare width; its .clip text ends in … */
@@ -348,6 +407,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 @media (max-width: 860px) { .hide-narrow { display: none; } }
 .dot.ok { background: var(--run); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
 
+/* Alerts: a box with a thick left border, in error/warn/info/ok colors OwO */
 .alert { padding: 7px 10px; border-radius: var(--radius); border: 1px solid; border-left-width: 3px; font-size: 13px; color: var(--text); }
 .alert.error { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 30%, transparent); border-left-color: var(--bad); }
 .alert.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); border-left-color: var(--warn); }
@@ -355,6 +415,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .alert.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); border-left-color: var(--ok); }
 .alert ul { margin: 6px 0 0; padding-left: 18px; }
 
+/* Tabs: a row of buttons on a bottom border; the active one looks like a raised tab ^w^ */
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; }
 .tabs button {
   background: none; border: 1px solid transparent; border-bottom: 0; padding: 6px 12px; font: inherit; margin-bottom: -1px;
@@ -363,6 +424,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .tabs button:hover { color: var(--text); background: var(--hover); }
 .tabs button.active { color: var(--text); font-weight: 600; background: var(--surface); border-color: var(--border); }
 
+/* Empty states and the spinning loading circle UwU */
 .empty { padding: 30px; text-align: center; color: var(--muted); }
 .spinner {
   width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent);
@@ -371,6 +433,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------------------------------------------------------------- modal / popover */
+/* Dialogs: the dark backdrop, the box (wide variant), its sticky title bar, body and footer; and popovers >w< */
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: grid; place-items: center; z-index: 100; padding: 16px; }
 .modal { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); width: min(560px, 100%); max-height: 90vh; overflow: auto; box-shadow: var(--shadow-pop); }
 .modal.wide { width: min(980px, 100%); }
@@ -387,6 +450,10 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .popover .item.unread { background: var(--surface-2); }
 
 /* ---------------------------------------------------------------- sign-in */
+/*
+ * The sign-in page: a centered card with the logo strip, the QR code on white (scanners need contrast), and the
+ * recovery codes grid OwO
+ */
 .auth-wrap { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
 .auth-card { width: min(420px, 100%); padding: 0 0 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow-pop); }
 .auth-card > :not(.logo) { margin: 0 18px; }
@@ -399,6 +466,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
   background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: 3px; padding: 12px 16px; }
 
 /* ---------------------------------------------------------------- topology map */
+/* The map: its height (tall variant), React Flow's background color, the legend in the corner ^w^ */
 .map { height: 560px; border-top: 1px solid var(--border); position: relative; }
 .map-page .map-layout { border: 1px solid var(--border); background: var(--surface); }
 .map-page .map { border-top: 0; }
@@ -411,6 +479,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend i { width: 10px; height: 10px; border-radius: 1px; display: inline-block; }
+/* Map cards: hosts, the router (blue top), the Internet bubble (dashed pill), the VPN (green dashed) UwU */
 .tnode {
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 3px; padding: 8px 10px;
   font-size: 12px; width: 100%; height: 100%;
@@ -422,6 +491,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .tnode.router { border-color: var(--accent); border-top-width: 3px; }
 .tnode.internet { border-radius: 999px; text-align: center; background: var(--surface-2); border-color: var(--border-strong); border-style: dashed; color: var(--muted); font-weight: 600; display: grid; place-items: center; }
 .tnode.vpn { border-color: var(--ok); border-style: dashed; }
+/* Segment boxes: a translucent group with a header strip >w< */
 .tgroup {
   width: 100%; height: 100%; border: 1px solid var(--border-strong); border-radius: 4px;
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
@@ -429,10 +499,15 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .tgroup .g-head { padding: 7px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); border-radius: 4px 4px 0 0; }
 .tgroup .g-head b { font-size: 13px; }
 .tgroup .g-head .t-sub { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+/* Plan colors on map cards: a colored border and glow; removed ones faded and struck through OwO */
 .change-create { border-color: var(--c-create) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-create) 22%, transparent); }
 .change-update { border-color: var(--c-update) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-update) 22%, transparent); }
 .change-replace { border-color: var(--c-replace) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-replace) 22%, transparent); }
 .change-remove { border-color: var(--c-remove) !important; opacity: 0.75; text-decoration: line-through; }
+/*
+ * The side panel over the map, and edge labels (above everything; rule labels in accent color; clickable ones
+ * react to hover) ^w^
+ */
 .side-panel { position: absolute; right: 12px; top: 12px; z-index: 6; width: 280px; }
 /* edge labels are HTML above the nodes (Topology.tsx): a segment box or another line never covers them */
 .edge-label { position: absolute; z-index: 1000; pointer-events: none; font-family: var(--mono); font-size: 11px; line-height: 16px;
@@ -442,6 +517,7 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .edge-label.clickable:hover { border-color: var(--accent); }
 
 /* ---------------------------------------------------------------- events */
+/* The job event list (time, mark, text), and key/value lists (dl.kv) UwU */
 .events { font-family: var(--mono); font-size: 12px; display: flex; flex-direction: column; gap: 2px; max-height: max(420px, calc(100vh - 360px)); overflow: auto; }
 .events .ev { display: grid; grid-template-columns: 70px 18px 1fr; gap: 8px; padding: 3px 4px; border-radius: 2px; }
 .events .ev:hover { background: var(--surface-2); }
@@ -450,6 +526,10 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 /* ---------------------------------------------------------------- menus */
+/*
+ * Menus: items (hover, disabled, danger, keyboard focus), separators, the right-click menu (fixed at the pointer),
+ * its title, and highlighting the row or map node a menu belongs to >w<
+ */
 .popover.menu { top: 38px; padding: 4px; max-height: none; }
 .menu-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; padding: 6px 10px;
   border-radius: var(--radius); font: inherit; color: var(--text); cursor: pointer; white-space: nowrap; }
@@ -466,16 +546,27 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .react-flow__node[data-menu-open] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
 
 /* ---------------------------------------------------------------- consoles */
+/* Consoles: the page, the black screen, xterm's padding, the pop-out window version, and the "it's off" panel OwO */
 .console-page { height: var(--map-tall); display: flex; flex-direction: column; gap: 8px; }
 .console-screen { flex: 1; min-height: 360px; background: #000; overflow: hidden; position: relative; }
 .console-screen > div { width: 100%; height: 100%; }
 .console-screen .xterm { padding: 6px; height: 100%; }
+/* a console in a window of its own (double-click a VM in the tree): the screen fills the window */
+.console-window { height: 100%; padding: 8px; display: flex; flex-direction: column; background: var(--bg); }
+.console-window > .console-page { flex: 1; min-height: 0; height: auto; }
+.console-window .console-screen { min-height: 120px; }
+.console-off { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 
 /* ---------------------------------------------------------------- progress */
+/* Progress bars, and the QR SVG scaling ^w^ */
 .progress { height: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 1px; overflow: hidden; margin-top: 6px; }
 .progress > div { height: 100%; background: var(--accent); transition: width 0.4s; }
 .qr svg { display: block; max-width: 100%; height: auto; }
 /* chat builder */
+/*
+ * The chat builder: two columns (one on narrow screens), the chat card, the scrolling log, user and assistant
+ * bubbles, the input row, example buttons, and the checksum drop zone UwU
+ */
 .builder { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 10px; align-items: start; }
 @media (max-width: 1000px) { .builder { grid-template-columns: 1fr; } }
 .builder-chat { display: flex; flex-direction: column; }
@@ -495,6 +586,11 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); color: var(--text); outline: none; }
 .dropzone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 /* editing a range on its map */
+/*
+ * Editing a range on its map: tools over the map, the map + chat layout (stacked on narrow screens), the chat panel,
+ * mode tabs, the draft bar, change badges, node actions, role picker, parameters, diffs, plan lists, size inputs,
+ * service chips, segment presets, rule rows and fields, and VALOR's check notes >w<
+ */
 .map-tools { position: absolute; left: 12px; top: 12px; z-index: 5; display: flex; gap: 6px; }
 .map-layout { display: flex; align-items: stretch; }
 .map-layout .map-main { flex: 1; min-width: 0; }
@@ -531,6 +627,10 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .check-notes summary { cursor: pointer; }
 .check-notes ul { margin: 4px 0 0; padding-left: 18px; }
 /* the rendered range journal (components/Markdown.tsx) */
+/*
+ * The rendered journal (Markdown): headings, paragraphs, lists, quotes, inline and block code, tables (and key/value
+ * tables), the embedded map, pass/fail marks OwO
+ */
 .md { line-height: 1.5; max-width: 1600px; }
 .md > :first-child { margin-top: 0; }
 .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 18px 0 8px; }
@@ -548,6 +648,7 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .md .md-map .map { border-top: 0; }
 .md .md-pass { color: var(--ok); font-weight: 700; }
 .md .md-fail { color: var(--bad); font-weight: 700; }
+/* The custom-script review box in the plan dialog, and the rule list in the map's side panel ^w^ */
 .scripts-review { padding: 12px 14px; border-color: var(--warn, #b7791f); }
 .scripts-review h3 { margin: 0 0 4px; font-size: 14px; }
 .scripts-review pre.script { max-height: 260px; overflow: auto; font-size: 12px; padding: 8px 10px; margin: 4px 0 10px;
@@ -555,6 +656,7 @@ div.field > .hint { display: block; margin-bottom: 4px; }
 .rule-item + .rule-item { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
 
 /* compliance report */
+/* The compliance report: framework folds, evidence lists; on phones each requirement row becomes a small grid UwU */
 details.framework { border: 1px solid var(--border); border-radius: 3px; padding: 8px 12px; }
 details.framework > summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 ul.evidence { margin: 0; padding: 0; list-style: none; }
@@ -568,6 +670,11 @@ ul.evidence li.bad { color: var(--bad); }
 }
 
 /* chats: live feed of an answer (reasoning, tool calls, checks), approval and question cards */
+/*
+ * Chats: the live feed's steps (a ▸ that turns when open), tool icons by status, names, one-line summaries, the opened
+ * step's code/output, thinking text, VALOR check steps, the answer, token usage, approval cards (also in the bar under
+ * the log), and the old inline question cards >w<
+ */
 .bubble.assistant { width: 100%; max-width: 100%; box-sizing: border-box; }
 .bubble.user { white-space: pre-wrap; }
 .feed { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
@@ -611,6 +718,7 @@ ul.evidence li.bad { color: var(--bad); }
 .question .option input { margin: 0; }
 .question .other { flex: 1; min-width: 140px; font-size: 13px; }
 ol.asked { margin: 8px 0 0; padding-left: 18px; }
+/* The question dialog: chips per question, the question, numbered options, the "other" field, the review list OwO */
 .qw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .qw-chip { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 3px;
   padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
@@ -626,6 +734,10 @@ ol.asked { margin: 8px 0 0; padding-left: 18px; }
   color: var(--muted); }
 .qw-other { width: 100%; }
 .qw-review { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 10px; }
+/*
+ * Odds and ends: job error details, the allow-all row, the conversation picker, the provider picker, and compact
+ * segmented controls ^w^ *admires the pretty colors*
+ */
 .job-details { white-space: pre-wrap; max-height: 220px; overflow: auto; margin: 6px 0; }
 .allow-all { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; }
 .chat-pick { max-width: 210px; margin: 0 6px; font-size: 13px; }
