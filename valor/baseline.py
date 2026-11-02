@@ -1,4 +1,10 @@
-"""Compliance baselines: controls with a check (reads effective state) and an idempotent fix."""
+"""Compliance baselines: controls with a check (reads effective state) and an idempotent fix.
+
+A baseline (baselines/<id>.yaml) is a hardening profile: a list of controls, each a small shell `check` that
+succeeds when the host is compliant and a `fix` that makes it so. On every converge VALOR runs one generated
+script per host (`bundle`) that checks each control, fixes the failing ones and checks again; the
+"before/after" result per control goes into the build journal and the compliance report.
+"""
 
 from __future__ import annotations
 
@@ -53,19 +59,19 @@ def load_baseline(baselines_dir: Path, name: str, _seen: tuple = ()) -> Baseline
                          hint=f"Available: {', '.join(available(baselines_dir))}")
     text = path.read_text()
     raw = yaml.safe_load(text)
-    own = [Control(**c) for c in raw.get("controls") or []]
-    digest_src = text
+    controls = [Control(**control) for control in raw.get("controls") or []]
+    digest_source = text
     if raw.get("extends"):
         parent = load_baseline(baselines_dir, raw["extends"], (*_seen, name))
-        mine = {c.id for c in own}
-        own = [c for c in parent.controls if c.id not in mine] + own
-        digest_src = parent.digest + text
-    return Baseline(raw["id"], raw["title"], raw.get("families", ["debian"]), own,
-                    hashlib.sha256(digest_src.encode()).hexdigest()[:16], raw.get("windows", WINDOWS_BASELINE))
+        own_ids = {control.id for control in controls}
+        controls = [control for control in parent.controls if control.id not in own_ids] + controls
+        digest_source = parent.digest + text
+    return Baseline(raw["id"], raw["title"], raw.get("families", ["debian"]), controls,
+                    hashlib.sha256(digest_source.encode()).hexdigest()[:16], raw.get("windows", WINDOWS_BASELINE))
 
 
 def available(baselines_dir: Path) -> list[str]:
-    return sorted(p.stem for p in baselines_dir.glob("*.yaml"))
+    return sorted(path.stem for path in baselines_dir.glob("*.yaml"))
 
 
 WINDOWS_BASELINE = "windows-l1"
@@ -83,8 +89,9 @@ def baseline_for(baselines_dir: Path, spec_baseline: str, family: str) -> Baseli
     return load_baseline(baselines_dir, spec_baseline)
 
 
-def _fn(cid: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_]", "_", cid)
+def _fn(control_id: str) -> str:
+    """A control id as a shell function name suffix (ssh-root-login -> ssh_root_login)."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", control_id)
 
 
 def bundle(baseline: Baseline, is_router: bool, *, fix: bool) -> str:
@@ -101,32 +108,36 @@ def bundle(baseline: Baseline, is_router: bool, *, fix: bool) -> str:
              "else apt_settle; $APT update >/dev/null && $APT install \"$@\" >/dev/null; fi; }",
              # sshd -T / -t need /run/sshd, which only exists while sshd runs; Ubuntu 24.04 socket-activates ssh.
              "[ -d /run/sshd ] || install -d -m 0755 /run/sshd 2>/dev/null || true"]
-    for c in baseline.controls:
-        if not c.applies(is_router):
+    for control in baseline.controls:
+        if not control.applies(is_router):
             continue
-        f = _fn(c.id)
-        parts.append(f"check_{f}() (\n{c.check.strip()}\n)")  # subshell: `exit` ends only this check
-        parts.append(f"fix_{f}() (\n{c.fix.strip()}\n)")
+        name = _fn(control.id)
+        parts.append(f"check_{name}() (\n{control.check.strip()}\n)")  # subshell: `exit` ends only this check
+        parts.append(f"fix_{name}() (\n{control.fix.strip()}\n)")
         if fix:
+            # check -> (fix -> check again); a fix's output only shows when it didn't help
             parts.append(
-                f"if check_{f} >/dev/null 2>&1; then echo 'VALOR-CONTROL {c.id} pass pass'; "
-                f"else fix_{f} >/tmp/valor-fix-{f}.log 2>&1; "
-                f"if check_{f} >/dev/null 2>&1; then echo 'VALOR-CONTROL {c.id} fail pass'; "
-                f"else echo 'VALOR-CONTROL {c.id} fail fail'; tail -5 /tmp/valor-fix-{f}.log >&2; fi; fi")
+                f"if check_{name} >/dev/null 2>&1; then echo 'VALOR-CONTROL {control.id} pass pass'; "
+                f"else fix_{name} >/tmp/valor-fix-{name}.log 2>&1; "
+                f"if check_{name} >/dev/null 2>&1; then echo 'VALOR-CONTROL {control.id} fail pass'; "
+                f"else echo 'VALOR-CONTROL {control.id} fail fail'; tail -5 /tmp/valor-fix-{name}.log >&2; fi; fi")
         else:
-            parts.append(f"if check_{f} >/dev/null 2>&1; then echo 'VALOR-CONTROL {c.id} pass pass'; "
-                         f"else echo 'VALOR-CONTROL {c.id} fail fail'; fi")
+            parts.append(f"if check_{name} >/dev/null 2>&1; then echo 'VALOR-CONTROL {control.id} pass pass'; "
+                         f"else echo 'VALOR-CONTROL {control.id} fail fail'; fi")
     parts.append("exit 0")
     return "\n".join(parts) + "\n"
 
 
 def parse_results(baseline: Baseline, output: str) -> list[dict]:
-    by_id = {c.id: c for c in baseline.controls}
-    res = []
+    """The bundle's 'VALOR-CONTROL <id> <before> <after>' lines as result records (unknown ids are ignored)."""
+    by_id = {control.id: control for control in baseline.controls}
+    results = []
     for line in output.splitlines():
-        m = re.match(r"VALOR-CONTROL (\S+) (pass|fail) (pass|fail)$", line.strip())
-        if m and m.group(1) in by_id:
-            c = by_id[m.group(1)]
-            res.append({"control": c.id, "area": c.area, "title": c.title, "reference": c.reference, "theme": c.theme,
-                        "before": m.group(2), "after": m.group(3), "fixed": m.group(2) == "fail" and m.group(3) == "pass"})
-    return res
+        match = re.match(r"VALOR-CONTROL (\S+) (pass|fail) (pass|fail)$", line.strip())
+        if match and match.group(1) in by_id:
+            control = by_id[match.group(1)]
+            before, after = match.group(2), match.group(3)
+            results.append({"control": control.id, "area": control.area, "title": control.title,
+                            "reference": control.reference, "theme": control.theme,
+                            "before": before, "after": after, "fixed": before == "fail" and after == "pass"})
+    return results

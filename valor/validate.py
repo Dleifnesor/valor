@@ -1,4 +1,10 @@
-"""Validation: schema (spec.py) plus checks against the live cluster, before any change (FR-02)."""
+"""Validation: schema (spec.py) plus checks against the live cluster, before any change (FR-02).
+
+spec.py already guarantees the spec is consistent with itself. Here VALOR checks it against what actually
+exists: are the templates built, is the VLAN free, does the node have the memory, do the roles support the OS,
+does the baseline match, can a role reach the host it waits for. The result lists every problem with a location
+in the spec and, where possible, a hint on how to fix it - the UI shows it and the AI builder reads it.
+"""
 
 from __future__ import annotations
 
@@ -18,150 +24,224 @@ NO_BASELINE = "baseline 'none': no hardening (compliance controls) on any host"
 
 
 def validate_cluster(pve: PVE, spec: RangeSpec) -> dict:
-    cfg = pve.cfg
-    errors: list[dict] = []
-    warnings: list[dict] = []
+    """{"ok": bool, "errors": [...], "warnings": [...]}; each entry has a location, a message and maybe a hint."""
+    checks = _ClusterChecks(pve, spec)
+    checks.install_from_iso()
+    checks.operating_systems()
+    checks.bridges()
+    checks.segments()
+    baseline = checks.load_baseline()
+    checks.nested_virtualization()
+    checks.isos_and_roles()
+    checks.baseline_fits_hosts(baseline)
+    checks.compliance()
+    checks.vm_names()
+    checks.resources()
+    return {"ok": not checks.errors, "errors": checks.errors, "warnings": checks.warnings}
 
-    def err(loc, msg, hint=None):
-        errors.append({"location": loc, "message": msg, **({"hint": hint} if hint else {})})
 
-    catalog = load_catalog(cfg)
-    tpls = templates(pve, catalog)
-    used_os = {spec.router.os, *(h.os for h in spec.hosts if h.install == "template")}
-    for hi, h in enumerate(spec.hosts):
-        if h.install != "iso":
-            continue
-        entry = catalog.get(h.os or "", {})
-        if not entry.get("install_iso"):
-            err(f"hosts.{hi}.install", f"install: iso is not available for {h.os}",
-                "Supported: " + ", ".join(k for k, v in catalog.items() if v.get("install_iso")) +
-                " (Windows always installs from its ISO when the template is built)")
-        elif installer_iso(pve, entry["install_iso"]) is None:
-            err(f"hosts.{hi}.install", f"the installer ISO for {h.os} is not in the ISO library",
-                f"Download '{entry['install_iso']}' from the catalog in the ISO library first.")
-    for os_name in sorted(used_os):
-        if os_name not in catalog:
-            err("os", f"unknown OS '{os_name}'", f"Known: {', '.join(catalog)}")
-        elif not tpls[os_name]["present"]:
-            err("os", f"no template built for '{os_name}' yet",
-                f"An administrator can build it on a Proxmox node: ./install.sh --template {os_name}")
-        elif catalog[os_name].get("family") not in HOST_FAMILIES:
-            err("os", f"'{os_name}' ({catalog[os_name].get('family')}) is not supported for range hosts yet")
-    router_family = catalog.get(spec.router.os or "", {}).get("family")
-    if router_family and router_family != "debian":
-        err("router.os", f"the range router runs {spec.router.os}; routers must be Ubuntu or Debian",
-            "Remove router.os to use the default")
+class _ClusterChecks:
+    """One method per kind of check; each adds to `errors` / `warnings`. They run in a fixed order, so the list
+    reads the same way every time (the AI fixes them top to bottom)."""
 
-    bridges = {i["iface"]: i for i in pve.network() if i.get("type") == "bridge"}
-    if cfg.segment_bridge not in bridges:
-        err("network", f"segment bridge {cfg.segment_bridge} is missing or not usable by the engine",
-            "Re-run the installer on the range node to recreate it")
-    elif not bridges[cfg.segment_bridge].get("bridge_vlan_aware"):
-        err("network", f"{cfg.segment_bridge} is not VLAN-aware")
-    if cfg.uplink_bridge not in bridges:
-        err("network", f"uplink bridge {cfg.uplink_bridge} is missing or not usable by the engine")
+    def __init__(self, pve: PVE, spec: RangeSpec):
+        self.pve = pve
+        self.cfg = pve.cfg
+        self.spec = spec
+        self.errors: list[dict] = []
+        self.warnings: list[dict] = []
+        self.catalog = load_catalog(self.cfg)
+        # OSes that need a template: the router's and every host that is cloned (not installed from an ISO).
+        self.used_os = {spec.router.os, *(host.os for host in spec.hosts if host.install == "template")}
 
-    used = vlans_in_use(pve)
-    for i, s in enumerate(spec.segments):
-        if not cfg.vlan_min <= s.vlan <= cfg.vlan_max:
-            err(f"segments.{i}.vlan", f"VLAN {s.vlan} is outside the range VALOR may use ({cfg.vlan_min}-{cfg.vlan_max})")
-        owner = used.get(s.vlan)
-        if owner and owner != spec.name:
-            free = [v for v in range(cfg.vlan_min, cfg.vlan_max + 1) if v not in used][:5]
-            err(f"segments.{i}.vlan", f"VLAN {s.vlan} is already used by range '{owner}'",
-                f"Free VLANs include {free}")
-        for net in cfg.reserved_networks:
-            if s.cidr.overlaps(ipaddress.IPv4Network(net, strict=False)):
-                err(f"segments.{i}.cidr", f"{s.cidr} overlaps reserved network {net} (a network of the cluster itself)",
-                    "Pick another private range, e.g. 10.1xx.0.0/24")
+    def error(self, location: str, message: str, hint: str | None = None) -> None:
+        self.errors.append({"location": location, "message": message, **({"hint": hint} if hint else {})})
 
-    baseline = None
-    try:
-        baseline = load_baseline(cfg.baselines_dir, spec.baseline)
-        if baseline is None:
-            warnings.append({"location": "baseline", "message": NO_BASELINE})
-    except ValorError as e:
-        err("baseline", e.message, e.hint)
+    def family(self, os_name: str | None) -> str | None:
+        return self.catalog.get(os_name or "", {}).get("family")
 
-    if any(h.nested for h in spec.hosts):
-        flags = set(str(pve.node_status().get("cpuinfo", {}).get("flags", "")).split())
+    # ---- Operating systems and templates ----
+
+    def install_from_iso(self) -> None:
+        """`install: iso` needs an OS with a kickstart installer and that installer ISO in the library."""
+        for i, host in enumerate(self.spec.hosts):
+            if host.install != "iso":
+                continue
+            entry = self.catalog.get(host.os or "", {})
+            if not entry.get("install_iso"):
+                supported = ", ".join(name for name, os_entry in self.catalog.items() if os_entry.get("install_iso"))
+                self.error(f"hosts.{i}.install", f"install: iso is not available for {host.os}",
+                           f"Supported: {supported} (Windows always installs from its ISO when the template is built)")
+            elif installer_iso(self.pve, entry["install_iso"]) is None:
+                self.error(f"hosts.{i}.install", f"the installer ISO for {host.os} is not in the ISO library",
+                           f"Download '{entry['install_iso']}' from the catalog in the ISO library first.")
+
+    def operating_systems(self) -> None:
+        built = templates(self.pve, self.catalog)
+        for os_name in sorted(self.used_os):
+            if os_name not in self.catalog:
+                self.error("os", f"unknown OS '{os_name}'", f"Known: {', '.join(self.catalog)}")
+            elif not built[os_name]["present"]:
+                self.error("os", f"no template built for '{os_name}' yet",
+                           f"An administrator can build it on a Proxmox node: ./install.sh --template {os_name}")
+            elif self.family(os_name) not in HOST_FAMILIES:
+                self.error("os", f"'{os_name}' ({self.family(os_name)}) is not supported for range hosts yet")
+        router_family = self.family(self.spec.router.os)
+        if router_family and router_family != "debian":
+            self.error("router.os", f"the range router runs {self.spec.router.os}; routers must be Ubuntu or Debian",
+                       "Remove router.os to use the default")
+
+    # ---- Network ----
+
+    def bridges(self) -> None:
+        bridges = {iface["iface"]: iface for iface in self.pve.network() if iface.get("type") == "bridge"}
+        segment_bridge, uplink_bridge = self.cfg.segment_bridge, self.cfg.uplink_bridge
+        if segment_bridge not in bridges:
+            self.error("network", f"segment bridge {segment_bridge} is missing or not usable by the engine",
+                       "Re-run the installer on the range node to recreate it")
+        elif not bridges[segment_bridge].get("bridge_vlan_aware"):
+            self.error("network", f"{segment_bridge} is not VLAN-aware")
+        if uplink_bridge not in bridges:
+            self.error("network", f"uplink bridge {uplink_bridge} is missing or not usable by the engine")
+
+    def segments(self) -> None:
+        """Each segment's VLAN must be in VALOR's range and not taken by another range; its subnet must not
+        overlap a network of the cluster itself (reserved_networks), or range traffic could reach it."""
+        cfg = self.cfg
+        used = vlans_in_use(self.pve)
+        for i, segment in enumerate(self.spec.segments):
+            if not cfg.vlan_min <= segment.vlan <= cfg.vlan_max:
+                self.error(f"segments.{i}.vlan",
+                           f"VLAN {segment.vlan} is outside the range VALOR may use ({cfg.vlan_min}-{cfg.vlan_max})")
+            owner = used.get(segment.vlan)
+            if owner and owner != self.spec.name:
+                free = [vlan for vlan in range(cfg.vlan_min, cfg.vlan_max + 1) if vlan not in used][:5]
+                self.error(f"segments.{i}.vlan", f"VLAN {segment.vlan} is already used by range '{owner}'",
+                           f"Free VLANs include {free}")
+            for net in cfg.reserved_networks:
+                if segment.cidr.overlaps(ipaddress.IPv4Network(net, strict=False)):
+                    self.error(f"segments.{i}.cidr",
+                               f"{segment.cidr} overlaps reserved network {net} (a network of the cluster itself)",
+                               "Pick another private range, e.g. 10.1xx.0.0/24")
+
+    # ---- Hosts: nested virtualization, ISOs, roles ----
+
+    def nested_virtualization(self) -> None:
+        if not any(host.nested for host in self.spec.hosts):
+            return
+        flags = set(str(self.pve.node_status().get("cpuinfo", {}).get("flags", "")).split())
         if not flags & {"vmx", "svm"}:
-            err("hosts", f"node {cfg.node} does not offer hardware virtualization (vmx/svm), so 'nested: true' "
-                         "cannot work", "Enable VT-x/AMD-V in the firmware and nested KVM on the node.")
-    library = None
-    for hi, h in enumerate(spec.hosts):
-        family = catalog.get(h.os or "", {}).get("family")
-        if h.iso:
-            if library is None:
+            self.error("hosts", f"node {self.cfg.node} does not offer hardware virtualization (vmx/svm), so "
+                                "'nested: true' cannot work",
+                       "Enable VT-x/AMD-V in the firmware and nested KVM on the node.")
+
+    def isos_and_roles(self) -> None:
+        library = None                  # ISO names, listed once and only when a host attaches an ISO
+        for i, host in enumerate(self.spec.hosts):
+            if host.iso:
+                if library is None:
+                    try:
+                        library = {iso["name"] for iso in list_isos(self.pve)}
+                    except ValorError:
+                        library = set()
+                if host.iso not in library:
+                    self.error(f"hosts.{i}.iso", f"ISO {host.iso} is not in the ISO library",
+                               "Download or upload it in the ISO library (or fix the file name).")
+            for j, ref in enumerate(host.roles):
                 try:
-                    library = {i["name"] for i in list_isos(pve)}
-                except ValorError:
-                    library = set()
-            if h.iso not in library:
-                err(f"hosts.{hi}.iso", f"ISO {h.iso} is not in the ISO library",
-                    "Download or upload it in the ISO library (or fix the file name).")
-        for ri, ref in enumerate(h.roles):
-            try:
-                role = load_role(cfg.roles_dir, ref.name)
-                role_env(spec, h, role, ref.params)
-                if family and family not in role.families:
-                    err(f"hosts.{hi}.roles.{ri}", f"role {ref.name} does not support {h.os} ({family})",
-                        f"It supports: {', '.join(role.families)}")
-                for pname in role.meta.get("wait_for") or []:
-                    target = ref.params.get(pname)
-                    if target and not any(x.name == target for x in spec.hosts):
-                        err(f"hosts.{hi}.roles.{ri}.params.{pname}", f"'{target}' is not a host of this range")
-                    elif target and not spec.reaches(h.name, target):   # the role would wait for it until it times out
-                        seg = spec.host(target).segment
-                        err(f"hosts.{hi}.roles.{ri}.params.{pname}",
-                            f"role {ref.name} on {h.name} needs {target}, but no policy rule lets {h.segment} reach {seg}",
-                            f"Add a policy rule from {h.segment} to {seg} (or between the two hosts) for the traffic "
-                            f"the role needs - Active Directory needs proto: any.")
-            except ValorError as e:
-                err(f"hosts.{hi}.roles.{ri}", e.message, e.hint)
-    if baseline is not None and (getattr(baseline, "families", None) or ["debian"]) == ["windows"]:
-        err("baseline", f"'{spec.baseline}' is the Windows baseline; `baseline` names the range's Linux baseline",
-            "Use ubuntu-l1 (the default, or leave the line out): Windows hosts get windows-l1 automatically. "
-            "'none' would turn hardening off for every host.")
-        baseline = None
-    if baseline is not None:
-        bfam = getattr(baseline, "families", None) or ["debian"]
-        for os_name in sorted(used_os):
-            fam = catalog.get(os_name, {}).get("family")
-            if fam == "windows":
-                try:
-                    baseline_for(cfg.baselines_dir, spec.baseline, "windows")     # Windows hosts use windows-l1
+                    self._role(i, host, j, ref)
                 except ValorError as e:
-                    err("baseline", e.message)
-            elif fam and fam not in bfam:
-                err("baseline", f"baseline {spec.baseline} does not support {os_name} ({fam})")
+                    self.error(f"hosts.{i}.roles.{j}", e.message, e.hint)
 
-    comp = spec.compliance
-    if comp and comp.frameworks:
+    def _role(self, i: int, host, j: int, ref) -> None:
+        role = load_role(self.cfg.roles_dir, ref.name)
+        role_env(self.spec, host, role, ref.params)            # raises on missing or invalid parameters
+        family = self.family(host.os)
+        if family and family not in role.families:
+            self.error(f"hosts.{i}.roles.{j}", f"role {ref.name} does not support {host.os} ({family})",
+                       f"It supports: {', '.join(role.families)}")
+        # A role that waits for another host (e.g. ad-member waits for its DC) would wait until it times out if
+        # the policy doesn't let it reach that host - catch that here, before anything is built.
+        for param in role.meta.get("wait_for") or []:
+            target = ref.params.get(param)
+            if target and not any(other.name == target for other in self.spec.hosts):
+                self.error(f"hosts.{i}.roles.{j}.params.{param}", f"'{target}' is not a host of this range")
+            elif target and not self.spec.reaches(host.name, target):
+                target_segment = self.spec.host(target).segment
+                self.error(f"hosts.{i}.roles.{j}.params.{param}",
+                           f"role {ref.name} on {host.name} needs {target}, but no policy rule lets {host.segment} "
+                           f"reach {target_segment}",
+                           f"Add a policy rule from {host.segment} to {target_segment} (or between the two hosts) for "
+                           f"the traffic the role needs - Active Directory needs proto: any.")
+
+    # ---- Baseline and compliance ----
+
+    def load_baseline(self):
+        """The range's (Linux) baseline, or None for 'none' or when it can't be loaded (that is an error)."""
         try:
-            need = compliance.required_profile(cfg.baselines_dir, comp.frameworks)
-            have = compliance.STRENGTH.get(spec.baseline)
-            if have is not None and have < compliance.STRENGTH.get(need, 0):
-                err("baseline", f"compliance {', '.join(comp.frameworks)} needs baseline {need}; the range uses "
-                                f"'{spec.baseline}'",
-                    f"Set baseline: {need} (Windows hosts then get its Windows counterpart). It adds account lockout, "
-                    "password policy, login notices, idle-session limits, audit rules and time sync.")
-            families = {h.name: catalog.get(h.os or "", {}).get("family", "debian") for h in spec.hosts}
-            warnings += compliance.design_warnings(cfg.baselines_dir, spec, families)
+            baseline = load_baseline(self.cfg.baselines_dir, self.spec.baseline)
         except ValorError as e:
-            err("compliance", e.message, e.hint)
+            self.error("baseline", e.message, e.hint)
+            return None
+        if baseline is None:
+            self.warnings.append({"location": "baseline", "message": NO_BASELINE})
+        return baseline
 
-    others = {vm.name for vm in range_vms(pve, with_config=False) if f"valor-range-{spec.name}" not in vm.tags}
-    for name in ["rtr", *(h.name for h in spec.hosts)]:
-        if f"{spec.name}-{name}" in others:
-            err("name", f"VM name {spec.name}-{name} is already used by another range")
+    def baseline_fits_hosts(self, baseline) -> None:
+        """`baseline` names the Linux baseline; Windows hosts get its Windows counterpart automatically."""
+        spec = self.spec
+        if baseline is not None and (getattr(baseline, "families", None) or ["debian"]) == ["windows"]:
+            self.error("baseline",
+                       f"'{spec.baseline}' is the Windows baseline; `baseline` names the range's Linux baseline",
+                       "Use ubuntu-l1 (the default, or leave the line out): Windows hosts get windows-l1 "
+                       "automatically. 'none' would turn hardening off for every host.")
+            return
+        if baseline is None:
+            return
+        baseline_families = getattr(baseline, "families", None) or ["debian"]
+        for os_name in sorted(self.used_os):
+            family = self.family(os_name)
+            if family == "windows":
+                try:
+                    baseline_for(self.cfg.baselines_dir, spec.baseline, "windows")
+                except ValorError as e:
+                    self.error("baseline", e.message)
+            elif family and family not in baseline_families:
+                self.error("baseline", f"baseline {spec.baseline} does not support {os_name} ({family})")
 
-    need = spec.router.memory + sum(h.memory for h in spec.hosts)
-    ns = pve.node_status()
-    free = ns["memory"]["free"] // 2**20
-    if need > free:
-        err("resources", f"range needs {need} MiB RAM but only {free} MiB is free on {cfg.node}")
-    st = pve.storage_status()
-    if st.get("avail", 0) < 5 * 2**30:
-        warnings.append({"location": "resources", "message": f"storage {cfg.storage} has under 5 GiB free"})
-    return {"ok": not errors, "errors": errors, "warnings": warnings}
+    def compliance(self) -> None:
+        frameworks = self.spec.compliance.frameworks if self.spec.compliance else []
+        if not frameworks:
+            return
+        try:
+            needed = compliance.required_profile(self.cfg.baselines_dir, frameworks)
+            current = compliance.STRENGTH.get(self.spec.baseline)
+            if current is not None and current < compliance.STRENGTH.get(needed, 0):
+                self.error("baseline", f"compliance {', '.join(frameworks)} needs baseline {needed}; the range uses "
+                                       f"'{self.spec.baseline}'",
+                           f"Set baseline: {needed} (Windows hosts then get its Windows counterpart). It adds account "
+                           "lockout, password policy, login notices, idle-session limits, audit rules and time sync.")
+            families = {host.name: self.catalog.get(host.os or "", {}).get("family", "debian")
+                        for host in self.spec.hosts}
+            self.warnings += compliance.design_warnings(self.cfg.baselines_dir, self.spec, families)
+        except ValorError as e:
+            self.error("compliance", e.message, e.hint)
+
+    # ---- Names and resources ----
+
+    def vm_names(self) -> None:
+        """VM names are <range>-<host>; another range must not already use one (e.g. range "a-b" host "c" and
+        range "a" host "b-c")."""
+        spec = self.spec
+        others = {vm.name for vm in range_vms(self.pve, with_config=False) if f"valor-range-{spec.name}" not in vm.tags}
+        for name in ["rtr", *(host.name for host in spec.hosts)]:
+            if f"{spec.name}-{name}" in others:
+                self.error("name", f"VM name {spec.name}-{name} is already used by another range")
+
+    def resources(self) -> None:
+        needed = self.spec.router.memory + sum(host.memory for host in self.spec.hosts)
+        free = self.pve.node_status()["memory"]["free"] // 2**20
+        if needed > free:
+            self.error("resources", f"range needs {needed} MiB RAM but only {free} MiB is free on {self.cfg.node}")
+        if self.pve.storage_status().get("avail", 0) < 5 * 2**30:
+            self.warnings.append({"location": "resources", "message": f"storage {self.cfg.storage} has under 5 GiB free"})

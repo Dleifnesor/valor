@@ -93,10 +93,13 @@ class Config:
         return Path(self.state_dir) / "jobs"
 
 
+# TOML gives lists; the frozen Config keeps these as tuples so it stays hashable and read-only.
 TUPLES = ("nameservers", "reserved_networks", "iso_storages")
 
 
 def load_config(path: Path | None = None) -> Config:
+    """Read the config file. Its sections ([proxmox], [resources], ...) are only there for people: they are
+    flattened into one Config. Keys VALOR doesn't know end up in `extra`."""
     path = path or CONFIG_PATH
     if not path.exists():
         return Config()
@@ -105,10 +108,10 @@ def load_config(path: Path | None = None) -> Config:
     flat: dict = {}
     for section in ("proxmox", "resources", "paths", "guest"):
         flat.update(raw.get(section, {}))
-    for k in TUPLES:
-        if k in flat:
-            flat[k] = tuple(flat[k])
-    known = {f for f in Config.__dataclass_fields__}
-    extra = {k: v for k, v in flat.items() if k not in known}
-    kwargs = {k: v for k, v in flat.items() if k in known}
-    return Config(**kwargs, extra=extra)
+    for key in TUPLES:
+        if key in flat:
+            flat[key] = tuple(flat[key])
+    known = set(Config.__dataclass_fields__)
+    extra = {key: value for key, value in flat.items() if key not in known}
+    settings = {key: value for key, value in flat.items() if key in known}
+    return Config(**settings, extra=extra)
