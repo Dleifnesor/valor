@@ -86,7 +86,7 @@ Proxmox nodes only.
 | | [`netpolicy.py`](../valor/netpolicy.py) | Compiles the policy into the router's nftables ruleset: forward default drop, one accept per rule, NAT egress only for `internet: true` segments and never to private or reserved networks. Also the temporary build egress. |
 | | [`roles.py`](../valor/roles.py) | Loads roles, resolves parameters (host names become `/32`, segment names their network), builds the script with VALOR's shell helpers (`PRELUDE`). |
 | | [`baseline.py`](../valor/baseline.py) | Loads baseline profiles (with `extends:`), bundles their controls into one script, parses `VALOR-CONTROL` result lines. |
-| | [`windows.py`](../valor/windows.py) | Windows hosts have no cloud-init: guest preparation (name, address, DNS, Administrator password), the PowerShell role wrapper, the baseline bundle and probes. |
+| | [`windows.py`](../valor/windows.py) | Windows hosts have no cloud-init: guest preparation (name, address, DNS, Administrator password, licensing: no license checks, the evaluation renewed), the PowerShell role wrapper, the baseline bundle and probes. |
 | | [`kickstart.py`](../valor/kickstart.py), [`iso9660.py`](../valor/iso9660.py) | `install: iso` for Rocky/Alma: a kickstart on an `OEMDRV` CD, written by a pure-Python ISO writer (the worker's sandbox blocks `genisoimage`). |
 | | [`credentials.py`](../valor/credentials.py) | The range login: one generated password per range, encrypted, set in the guests over stdin. |
 | | [`wireguard.py`](../valor/wireguard.py) | Keys (X25519, generated in Python), tunnel addresses, router and peer configs, `wg show` parsing. Keys are stored encrypted. |

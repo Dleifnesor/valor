@@ -9,7 +9,7 @@ import { ContextMenuHost } from "./components/ContextMenu";
 import { SignIn } from "./pages/SignIn";
 import { Dashboard } from "./pages/Dashboard";
 import { RangeView } from "./pages/RangeDetail";
-import { VmView } from "./pages/Vm";
+import { ConsoleWindow, VmView } from "./pages/Vm";
 import { RangeEditor } from "./pages/RangeEditor";
 import { Jobs, JobDetail } from "./pages/Jobs";
 import { Users } from "./pages/Users";
@@ -24,6 +24,7 @@ import { Chats } from "./pages/Chats";
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [checked, setChecked] = useState(false);
+  const [p0, p1, p2, p3] = useRoute();
 
   const refreshMe = useCallback(() => {
     get<Me>("/api/auth/me")
@@ -51,6 +52,11 @@ export default function App() {
         }}
       />
     );
+  }
+  if (p0 === "console" && p1 && p2) {
+    // console/<range>/<host>[/serial]: a console window (double-click on a VM in the tree), without the shell
+    const canOperate = me.user.role === "admin" || me.user.role === "operator";
+    return <PageGuard><ConsoleWindow range={p1} host={p2} kind={p3 === "serial" ? "serial" : "vnc"} canOperate={canOperate} /></PageGuard>;
   }
   return <PageGuard><Shell me={me} setMe={setMe} /></PageGuard>;
 }

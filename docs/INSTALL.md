@@ -158,8 +158,12 @@ the cluster**): the Windows evaluation medium and the VirtIO drivers (`virtio-wi
 ./install.sh --template windows-server-2022          # also -2022-core, windows-server-2025(-core), windows-11
 ```
 
-A Windows build takes a while (setup, updates, sysprep). Evaluation media expire; bring your own license for longer
-use. `--rebuild` builds a fresh template and removes the old one (or keeps it, with a warning, while linked clones
+A Windows build takes a while (setup, updates, sysprep). Range VMs are test systems, so VALOR turns off their license
+checks (online license validation, activation attempts and notifications) and renews the evaluation before it runs
+out: with Microsoft's rearm (`slmgr /rearm`), when less than 14 days are left, at every build and from a daily task in
+the VM (scheduled task *VALOR evaluation renewal*, 03:00; Windows restarts 10 minutes after a rearm). Windows Server
+can be rearmed 5 times (180 days each), Windows 11 once (90 days); after that, rebuild the template from current
+evaluation media and replace the hosts, or bring your own license. `--rebuild` builds a fresh template and removes the old one (or keeps it, with a warning, while linked clones
 of it still exist). Ranges use the newest template: the next plan of an existing range shows `replace` for its hosts
 on that OS, so they are rebuilt from the new template only when someone approves that plan.
 
