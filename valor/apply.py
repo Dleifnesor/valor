@@ -26,6 +26,7 @@ from .validate import validate_cluster
 TEMPLATE_DISK_GIB = 8
 WINDOWS_TEMPLATE_DISK_GIB = 64
 PARALLEL_HOSTS = 4
+AGENT_LOST_RETRIES = 1              # a role or baseline script the guest agent lost runs once more
 
 
 def now() -> str:
@@ -331,6 +332,18 @@ def windows_prep(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, login: dict |
         raise ValorError("windows_prep_failed", f"{d.host} still asks for a reboot after renaming", host=d.host)
 
 
+def run_again_if_lost(pve: PVE, vmid: int, run):
+    """Role and baseline scripts are idempotent: when the guest agent lost one (it restarted while the script ran, or
+    never started it), wait for the agent and run the script again instead of failing the build."""
+    for attempt in range(AGENT_LOST_RETRIES + 1):
+        try:
+            return run()
+        except ValorError as e:
+            if e.code != "agent_exec_lost" or attempt == AGENT_LOST_RETRIES:
+                raise
+            pve.wait_agent(vmid, 300)
+
+
 def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps, login: dict | None = None) -> list[dict]:
     cfg = pve.cfg
     host = spec.host(d.host)
@@ -345,7 +358,7 @@ def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps, lo
                            VALOR_NAMESERVERS=" ".join(cfg.nameservers))
                 script = windows.role_script(ref.name, role.ps_script, env)
                 for attempt in range(4):                     # e.g. AD promotion: run, reboot, run again
-                    res = pve.ps(vmid, script, timeout=3600)
+                    res = run_again_if_lost(pve, vmid, lambda: pve.ps(vmid, script, timeout=3600))
                     if not res.ok:
                         break
                     changed |= "VALOR-ROLE-CHANGED=1" in res.out
@@ -354,7 +367,8 @@ def run_roles(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps, lo
                     windows_reboot(pve, vmid)
             else:
                 env["VALOR_NAMESERVERS"] = " ".join(cfg.nameservers)
-                res = pve.script(vmid, build_script(role, env), timeout=1800)
+                body = build_script(role, env)
+                res = run_again_if_lost(pve, vmid, lambda: pve.script(vmid, body, timeout=1800))
                 changed = "VALOR-ROLE-CHANGED=1" in res.out
             if not res.ok:
                 details = res.tail().replace(login["password"], "***") if login else res.tail()
@@ -371,9 +385,11 @@ def run_baseline(pve: PVE, spec: RangeSpec, d: Desired, vmid: int, steps: Steps)
         return []
     with steps.step(f"baseline {baseline.id}", d.host):
         if d.family == "windows":
-            res = pve.ps(vmid, windows.baseline_bundle(baseline, d.is_router, fix=True), timeout=1800)
+            body = windows.baseline_bundle(baseline, d.is_router, fix=True)
+            res = run_again_if_lost(pve, vmid, lambda: pve.ps(vmid, body, timeout=1800))
         else:
-            res = pve.script(vmid, bundle(baseline, d.is_router, fix=True), timeout=1800)
+            body = bundle(baseline, d.is_router, fix=True)
+            res = run_again_if_lost(pve, vmid, lambda: pve.script(vmid, body, timeout=1800))
         results = parse_results(baseline, res.out)
         failed = [r["control"] for r in results if r["after"] != "pass"]
         if not res.ok or failed:

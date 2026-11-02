@@ -280,6 +280,12 @@ class RangeSpec(_Strict):
     def hosts_in(self, segment: str) -> list[Host]:
         return [h for h in self.hosts if h.segment == segment]
 
+    def reaches(self, src: str, dst: str) -> bool:
+        """Whether host src may open connections to host dst at all: same segment, or a policy rule between them."""
+        a, b = self.host(src), self.host(dst)
+        return a.segment == b.segment or any(r.from_ in (a.name, a.segment) and r.to in (b.name, b.segment)
+                                             for r in self.policy)
+
 
 def normalize(spec: RangeSpec, default_os: str) -> RangeSpec:
     """Fill defaults that depend on engine configuration (OS)."""

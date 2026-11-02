@@ -88,7 +88,8 @@ access:                         # optional remote access to the range
 - Roles: `ad-dc` (new forest: `domain`, optional `netbios`), `ad-dc-replica` (`domain`, `dc`), `ad-member`
   (`domain`, `dc`, optional `dc2`), `iis`. A host whose role names another host in `dc`/`dc2` waits for it
   (domain controllers first, then members).
-- Domain traffic needs a policy rule between the segments, e.g. `{from: users, to: srv, proto: any}`.
+- Domain traffic needs a policy rule from every member's segment (workstations, file servers, ...) to the domain
+  controllers' segment, e.g. `{from: users, to: srv, proto: any}`; validation rejects a member that cannot reach its DC.
 - Windows hosts get the `windows-l1` baseline (SMBv1 off, SMB signing, firewall, NLA, LLMNR off, audit, Defender);
   with `baseline: linux-moderate` they get `windows-moderate` (plus lockout, password history and complexity, logon
   notice, screen lock, audit policy, security log size, time sync - on domain controllers set as domain policy).
