@@ -161,3 +161,22 @@ hosts:
     warned = [w["message"] for w in v["warnings"] if w["location"] == "baseline"]
     assert (warning in warned[0]) if warning else not warned
     assert v["ok"] is (error is None), v["errors"]
+
+
+def test_a_domain_member_must_reach_its_domain_controllers(cfg, monkeypatch):
+    """hr-nist171 (2026-10-25): the file server's segment had no rule to the DCs' segment, so ad-member waited for
+    DNS until it timed out. Validation names the missing rule before anything is built."""
+    from valor import validate as V
+    monkeypatch.setattr(V, "templates", lambda pve, catalog: {k: {"present": True, "vmid": 9000} for k in catalog})
+    monkeypatch.setattr(V, "vlans_in_use", lambda pve: {})
+    monkeypatch.setattr(V, "range_vms", lambda pve, with_config=True: [])
+    ok = normalize(parse_spec(SPEC), "ubuntu-24.04")
+    assert V.validate_cluster(ValidatePVE(cfg), ok)["ok"]                    # dc2 shares dc1's segment: no rule needed
+    for policy in ("policy: []", "policy:\n  - {from: users, to: web, proto: tcp, ports: [80]}"):
+        spec = normalize(parse_spec(SPEC.replace("policy:\n  - {from: users, to: srv, proto: any}", policy)), "ubuntu-24.04")
+        errors = V.validate_cluster(ValidatePVE(cfg), spec)["errors"]
+        assert [e["location"] for e in errors] == ["hosts.2.roles.0.params.dc", "hosts.2.roles.0.params.dc2"]
+        assert "role ad-member on pc1 needs dc1, but no policy rule lets users reach srv" in errors[0]["message"]
+        assert "from users to srv" in errors[0]["hint"] and "proto: any" in errors[0]["hint"]
+    host_rule = SPEC.replace("{from: users, to: srv, proto: any}", "{from: pc1, to: dc1, proto: any}\n  - {from: pc1, to: dc2, proto: any}")
+    assert V.validate_cluster(ValidatePVE(cfg), normalize(parse_spec(host_rule), "ubuntu-24.04"))["ok"]
