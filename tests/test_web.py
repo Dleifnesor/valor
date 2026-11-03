@@ -149,19 +149,19 @@ def test_roles_and_user_admin(env):
     app, _ = env
     with client(app) as admin, client(app) as op:
         me, _ = enroll(admin, "admin")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         ome, _ = enroll(op, "olivia")
         assert op.get("/api/users").status_code == 403
-        r = admin.post("/api/users", json={"username": "newbie", "role": "viewer"}, headers=h)
+        r = admin.post("/api/users", json={"username": "newbie", "role": "viewer"}, headers=csrf_headers)
         assert r.status_code == 200 and len(r.json()["temporary_password"]) >= 12 and r.json()["must_change_password"]
-        assert admin.post("/api/users", json={"username": "newbie"}, headers=h).status_code == 409
-        assert admin.post("/api/users", json={"username": "weak", "password": "short"}, headers=h).status_code == 400
+        assert admin.post("/api/users", json={"username": "newbie"}, headers=csrf_headers).status_code == 409
+        assert admin.post("/api/users", json={"username": "weak", "password": "short"}, headers=csrf_headers).status_code == 400
         admin_id = me["user"]["id"]
-        r = admin.patch(f"/api/users/{admin_id}", json={"role": "viewer"}, headers=h)
+        r = admin.patch(f"/api/users/{admin_id}", json={"role": "viewer"}, headers=csrf_headers)
         assert r.status_code == 400 and r.json()["error"] == "last_admin"
-        assert admin.delete(f"/api/users/{admin_id}", headers=h).status_code == 400
+        assert admin.delete(f"/api/users/{admin_id}", headers=csrf_headers).status_code == 400
         oid = ome["user"]["id"]
-        assert admin.post(f"/api/users/{oid}/reset-mfa", headers=h).json()["mfa"] is False
+        assert admin.post(f"/api/users/{oid}/reset-mfa", headers=csrf_headers).json()["mfa"] is False
         assert op.get("/api/auth/me").status_code == 401             # their sessions were ended
         audit = admin.get("/api/audit").json()["entries"]
         assert {"user.create", "user.reset_mfa", "login"} <= {e["action"] for e in audit}
@@ -191,15 +191,15 @@ def test_notification_secrets_are_encrypted_and_masked(env):
     url = "https://discord.com/api/webhooks/123/very-secret-token"
     with client(app) as c:
         me, _ = enroll(c, "admin")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         body = {"channels": [{"type": "discord", "name": "ops", "events": "all", "config": {"url": url}}]}
-        r = c.put("/api/settings/notifications", json=body, headers=h)
+        r = c.put("/api/settings/notifications", json=body, headers=csrf_headers)
         assert r.status_code == 200 and r.json()["channels"][0]["config"]["url"] == "********"
         ch = r.json()["channels"][0]
         # saving the masked value again keeps the stored secret
-        assert c.put("/api/settings/notifications", json={"channels": [ch]}, headers=h).status_code == 200
+        assert c.put("/api/settings/notifications", json={"channels": [ch]}, headers=csrf_headers).status_code == 200
         bad = {"channels": [{"type": "slack", "name": "x", "config": {"url": "http://insecure"}}]}
-        assert c.put("/api/settings/notifications", json=bad, headers=h).status_code == 400
+        assert c.put("/api/settings/notifications", json=bad, headers=csrf_headers).status_code == 400
     conn = db.connect(wcfg.db)
     raw = conn.execute("SELECT value FROM settings WHERE key='notification_channels'").fetchone()[0]
     assert "very-secret-token" not in raw
@@ -212,11 +212,11 @@ def test_ldap_settings_validation(env):
     app, _ = env
     with client(app) as c:
         me, _ = enroll(c, "admin")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         base = {"enabled": True, "url": "ldap://dc.example.com", "bind_dn": "cn=svc", "bind_password": "pw",
                 "user_base": "dc=example,dc=com", "group_admin": "cn=admins,dc=example,dc=com"}
-        assert c.put("/api/settings/ldap", json=base, headers=h).status_code == 400          # plain LDAP
-        r = c.put("/api/settings/ldap", json={**base, "url": "ldaps://dc.example.com"}, headers=h)
+        assert c.put("/api/settings/ldap", json=base, headers=csrf_headers).status_code == 400          # plain LDAP
+        r = c.put("/api/settings/ldap", json={**base, "url": "ldaps://dc.example.com"}, headers=csrf_headers)
         assert r.status_code == 200 and r.json()["bind_password"] == "********"
 
 
@@ -254,15 +254,15 @@ def test_delete_a_range_without_vms(env, monkeypatch):
     (cfg.journals_dir / "web2tier.md").write_text("# web2tier\n")
     with client(app) as c:
         me, _ = enroll(c, "olivia")
-        h = {"X-CSRF-Token": me["csrf"]}
-        r = c.delete("/api/ranges/web2tier/spec", headers=h)
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
+        r = c.delete("/api/ranges/web2tier/spec", headers=csrf_headers)
         assert r.status_code == 409 and r.json()["error"] == "range_exists"     # built: destroy it first
         vms.clear()
-        assert c.delete("/api/ranges/web2tier/spec", headers=h).status_code == 200
+        assert c.delete("/api/ranges/web2tier/spec", headers=csrf_headers).status_code == 200
         assert "web2tier" not in {x["name"] for x in c.get("/api/ranges").json()["ranges"]}
         assert state.load(cfg, "web2tier", "apply") is None
         assert not (cfg.journals_dir / "web2tier.md").exists()
-        assert c.delete("/api/ranges/web2tier/spec", headers=h).status_code == 404
+        assert c.delete("/api/ranges/web2tier/spec", headers=csrf_headers).status_code == 404
 
 
 def test_viewer_cannot_change_ranges(env):
@@ -307,7 +307,7 @@ def test_range_logins_power_and_snapshot_endpoints(env):
     cfg = app.state.cfg
     with client(app) as op, client(app) as viewer:
         me, _ = enroll(op, "olivia")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         vme, _ = enroll(viewer, "vic")
         assert op.get("/api/ranges/web2tier/credentials").status_code == 404           # not built yet
         login = credentials.ensure(cfg, "web2tier")
@@ -316,20 +316,20 @@ def test_range_logins_power_and_snapshot_endpoints(env):
         assert viewer.get("/api/ranges/web2tier/credentials").status_code == 403
         audit = db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='range.credentials.view'").fetchone()[0]
         assert audit == 1
-        j = op.post("/api/ranges/web2tier/power", json={"action": "reboot", "hosts": ["web"]}, headers=h)
+        j = op.post("/api/ranges/web2tier/power", json={"action": "reboot", "hosts": ["web"]}, headers=csrf_headers)
         assert j.status_code == 200 and j.json()["state"] == "queued"
         assert jobs.status(cfg, j.json()["job"])["target"] == {"range": "web2tier", "action": "reboot", "hosts": ["web"]}
-        assert op.post("/api/ranges/web2tier/power", json={"action": "suspend"}, headers=h).status_code == 422
-        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "valor-clean"}, headers=h).status_code == 400
-        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "a b"}, headers=h).status_code == 422
-        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "before-test"}, headers=h).status_code == 200
-        r = op.post("/api/ranges/web2tier/snapshots/valor-clean/rollback", json={"confirm": "nope"}, headers=h)
+        assert op.post("/api/ranges/web2tier/power", json={"action": "suspend"}, headers=csrf_headers).status_code == 422
+        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "valor-clean"}, headers=csrf_headers).status_code == 400
+        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "a b"}, headers=csrf_headers).status_code == 422
+        assert op.post("/api/ranges/web2tier/snapshots", json={"name": "before-test"}, headers=csrf_headers).status_code == 200
+        r = op.post("/api/ranges/web2tier/snapshots/valor-clean/rollback", json={"confirm": "nope"}, headers=csrf_headers)
         assert r.status_code == 400
-        r = op.post("/api/ranges/web2tier/snapshots/valor-clean/rollback", json={"confirm": "web2tier"}, headers=h)
+        r = op.post("/api/ranges/web2tier/snapshots/valor-clean/rollback", json={"confirm": "web2tier"}, headers=csrf_headers)
         assert r.status_code == 200
         assert viewer.post("/api/ranges/web2tier/power", json={"action": "start"},
                            headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
-        assert op.post("/api/ranges/web2tier/credentials/rotate", headers=h).status_code == 200
+        assert op.post("/api/ranges/web2tier/credentials/rotate", headers=csrf_headers).status_code == 200
 
 
 def test_iso_library_permissions(env):
@@ -337,18 +337,18 @@ def test_iso_library_permissions(env):
     with client(app) as op, client(app) as viewer:
         me, _ = enroll(op, "olivia")
         vme, _ = enroll(viewer, "vic")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         r = viewer.get("/api/isos/catalog")
         assert r.status_code == 200 and {"windows-server-2025-eval", "virtio-win"} <= {e["id"] for e in r.json()["entries"]}
         assert viewer.post("/api/isos/download", json={"catalog": "virtio-win"},
                            headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
-        r = op.post("/api/isos/download", json={"url": "https://x.example/a.iso"}, headers=h)
+        r = op.post("/api/isos/download", json={"url": "https://x.example/a.iso"}, headers=csrf_headers)
         assert r.status_code == 400                                   # file name missing
         r = op.post("/api/isos/download", json={"url": "https://x.example/a.iso", "filename": "a.iso", "checksum": "ab"},
-                    headers=h)
+                    headers=csrf_headers)
         assert r.status_code == 400                                   # checksum without algorithm
-        assert op.delete("/api/isos/iso-store:iso/a.iso", headers=h).status_code == 403          # admins only
-        r = op.post("/api/isos/upload?filename=../x.iso", content=b"x", headers={**h, "Content-Type": "application/octet-stream"})
+        assert op.delete("/api/isos/iso-store:iso/a.iso", headers=csrf_headers).status_code == 403          # admins only
+        r = op.post("/api/isos/upload?filename=../x.iso", content=b"x", headers={**csrf_headers, "Content-Type": "application/octet-stream"})
         assert r.status_code == 400
 
 
@@ -361,10 +361,10 @@ def test_iso_upload_checks_any_listed_algorithm(env):
     data = b"not really an iso" * 100
     with client(app) as op:
         me, _ = enroll(op, "olivia")
-        h = {"X-CSRF-Token": me["csrf"], "Content-Type": "application/octet-stream"}
+        csrf_headers = {"X-CSRF-Token": me["csrf"], "Content-Type": "application/octet-stream"}
         def up(checksum, algorithm=None):
             q = f"filename=t.iso&checksum={checksum}" + (f"&algorithm={algorithm}" if algorithm else "")
-            return op.post(f"/api/isos/upload?{q}", content=data, headers=h)
+            return op.post(f"/api/isos/upload?{q}", content=data, headers=csrf_headers)
         r = up("ab" * 20, "sha256")                                   # 40 hex chars are not a SHA-256
         assert r.status_code == 400 and r.json()["error"] == "invalid_checksum" and "64" in r.json()["message"]
         r = up(hashlib.sha1(b"other").hexdigest())                   # SHA-1 guessed from the length, wrong file

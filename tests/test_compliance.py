@@ -117,10 +117,10 @@ def test_design_checks():
 
 
 def test_design_warnings_name_the_requirements():
-    w = compliance.design_warnings(BASELINES, spec_of(), FAMILIES)
-    assert len(w) == 1 and "nist-800-171 3.3.1" in w[0]["message"] and "pci-dss 10.3.3" in w[0]["message"]
-    w = compliance.design_warnings(BASELINES, spec_of(comp="compliance: {frameworks: [hipaa]}"), FAMILIES)
-    assert any(x["location"] == "compliance.scope" for x in w)
+    warning = compliance.design_warnings(BASELINES, spec_of(), FAMILIES)
+    assert len(warning) == 1 and "nist-800-171 3.3.1" in warning[0]["message"] and "pci-dss 10.3.3" in warning[0]["message"]
+    warning = compliance.design_warnings(BASELINES, spec_of(comp="compliance: {frameworks: [hipaa]}"), FAMILIES)
+    assert any(x["location"] == "compliance.scope" for x in warning)
     assert compliance.design_warnings(BASELINES, spec_of(comp=""), FAMILIES) == []
 
 
@@ -138,18 +138,18 @@ def test_report_statuses_and_coverage():
     tests = [{"expect": "closed", "pass": True}]
     r = compliance.report(BASELINES, s, base, tests, FAMILIES)
     assert "not an assessment or certification" in r["claim"]
-    nist = {q["id"]: q for q in r["frameworks"]["nist-800-171"]["requirements"]}
+    nist = {question["id"]: question for question in r["frameworks"]["nist-800-171"]["requirements"]}
     assert nist["3.1.8"]["status"] == "fail"                                   # lockout failed on files
     assert nist["3.3.7"]["status"] == "partial" and nist["3.3.7"]["no_evidence_on"] == ["files"]
     assert nist["3.13.6"]["status"] == "pass" and nist["3.13.6"]["evidence"][0]["kind"] == "design"
     assert nist["3.3.1"]["status"] == "fail"                                   # central logging gap
     assert {"id": "3.5.3", "title": nist_title("3.5.3")} in r["frameworks"]["nist-800-171"]["not_covered"]
-    ids = [q["id"] for q in r["frameworks"]["nist-800-171"]["requirements"]]
+    ids = [question["id"] for question in r["frameworks"]["nist-800-171"]["requirements"]]
     assert ids == sorted(ids, key=compliance._order) and ids.index("3.1.8") < ids.index("3.13.6")
-    low = {q["id"] for q in r["frameworks"]["nist-800-53-low"]["requirements"]}
+    low = {question["id"] for question in r["frameworks"]["nist-800-53-low"]["requirements"]}
     assert "AC-7" in low and "IA-2" in low and "AC-6" not in low               # only the Low baseline's ids
     cis = r["frameworks"]["cis-l1"]
-    assert [q["id"] for q in cis["requirements"]] == ["CIS Level 1 - SSH"] and cis["not_covered"] == []
+    assert [question["id"] for question in cis["requirements"]] == ["CIS Level 1 - SSH"] and cis["not_covered"] == []
     assert compliance.report(BASELINES, spec_of(comp=""), base, tests, FAMILIES) is None
 
 
@@ -175,4 +175,4 @@ def test_validation_requires_the_framework_profile(cfg, monkeypatch, baseline, c
     else:
         assert not errors, errors
     if "nist" in comp:
-        assert any("3.3.1" in w["message"] for w in v["warnings"])            # the logging gap is a warning
+        assert any("3.3.1" in warning["message"] for warning in v["warnings"])            # the logging gap is a warning
