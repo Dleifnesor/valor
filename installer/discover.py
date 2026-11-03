@@ -137,10 +137,10 @@ def parse_mgmt(default_routes: list[dict], links: list[dict], addrs: list[dict])
     """(bridge, vlan, node_ip, network, gateway) from `ip -j route show default`, `ip -j -d link`, `ip -j -4 addr`."""
     if not default_routes:
         raise RuntimeError("this node has no default route; VALOR needs one to reach the internet")
-    r = default_routes[0]
-    dev, gw = r["dev"], r.get("gateway", "")
+    route = default_routes[0]
+    dev, gateway = route["dev"], route.get("gateway", "")
     bridge, vlan = dev, 0
-    link = next((l for l in links if l.get("ifname") == dev), {})
+    link = next((link for link in links if link.get("ifname") == dev), {})
     info = link.get("linkinfo", {})
     if info.get("info_kind") == "vlan":                       # e.g. vmbr0.20 -> bridge vmbr0, VLAN 20
         vlan = int(info.get("info_data", {}).get("id", 0))
@@ -150,7 +150,7 @@ def parse_mgmt(default_routes: list[dict], links: list[dict], addrs: list[dict])
     if not ai:
         raise RuntimeError(f"no IPv4 address on {dev}")
     iface = ipaddress.IPv4Interface(f"{ai['local']}/{ai['prefixlen']}")
-    return bridge, vlan, str(iface.ip), str(iface.network), gw
+    return bridge, vlan, str(iface.ip), str(iface.network), gateway
 
 
 def parse_networks(addrs: list[dict], routes: list[dict]) -> list[str]:
@@ -210,43 +210,50 @@ def check_internet() -> tuple[bool, str]:
 
 
 def collect(instance: str, check_net: bool = True) -> Facts:
+    """Ask this node (pvesh, ip, /etc and /proc) everything the installer needs to know."""
     version = pvesh("get", "/version")
     status = pvesh("get", "/cluster/status")
-    me = next((s for s in status if s.get("type") == "node" and s.get("local")), None)
-    node = me["name"] if me else socket.gethostname().split(".")[0]
-    cluster = next((s.get("name") for s in status if s.get("type") == "cluster"), None)
-    nodes = [{"name": s["name"], "ip": s.get("ip"), "online": bool(s.get("online"))}
-             for s in status if s.get("type") == "node"]
-    nstat = pvesh("get", f"/nodes/{node}/status")
-    configs = {c["storage"]: c for c in pvesh("get", "/storage")}
+    this_node = next((entry for entry in status if entry.get("type") == "node" and entry.get("local")), None)
+    node = this_node["name"] if this_node else socket.gethostname().split(".")[0]
+    cluster = next((entry.get("name") for entry in status if entry.get("type") == "cluster"), None)
+    nodes = [{"name": entry["name"], "ip": entry.get("ip"), "online": bool(entry.get("online"))}
+             for entry in status if entry.get("type") == "node"]
+    node_status = pvesh("get", f"/nodes/{node}/status")
+    configs = {config["storage"]: config for config in pvesh("get", "/storage")}
     storages = parse_storages(pvesh("get", f"/nodes/{node}/storage"), configs)
     bridges = parse_bridges(pvesh("get", f"/nodes/{node}/network"))
     addrs = _ipj("-4", "addr")
-    mgmt_bridge, mgmt_vlan, node_ip, mgmt_net, gw = parse_mgmt(_ipj("route", "show", "default"), _ipj("-d", "link"), addrs)
+    mgmt_bridge, mgmt_vlan, node_ip, mgmt_net, gateway = parse_mgmt(_ipj("route", "show", "default"),
+                                                                    _ipj("-d", "link"), addrs)
     networks = parse_networks(addrs, _ipj("-4", "route"))
-    ns, search = parse_resolv(Path("/etc/resolv.conf").read_text() if Path("/etc/resolv.conf").exists() else "")
+    resolv = Path("/etc/resolv.conf")
+    nameservers, search = parse_resolv(resolv.read_text() if resolv.exists() else "")
     resources = pvesh("get", "/cluster/resources", type="vm")
-    roles = {r["roleid"]: set(filter(None, (r.get("privs") or "").split(","))) for r in pvesh("get", "/access/roles")}
+    roles = {role["roleid"]: set(filter(None, (role.get("privs") or "").split(",")))
+             for role in pvesh("get", "/access/roles")}
+    # Administrator holds every privilege this Proxmox version knows: the list VALOR's roles are checked against.
     admin = pvesh("get", "/access/roles/Administrator") or {}
     privileges = set(admin.keys()) if isinstance(admin, dict) else set()
     record_file = RECORD_DIR / f"{instance}.json"
     facts = Facts(
         pve_version=version.get("version", "0.0"), node=node, node_ip=node_ip, cluster_name=cluster, nodes=nodes,
-        cpu_threads=int(nstat.get("cpuinfo", {}).get("cpus", 0)),
+        cpu_threads=int(node_status.get("cpuinfo", {}).get("cpus", 0)),
         cpu_flags=parse_cpu_flags(Path("/proc/cpuinfo").read_text()),
-        mem_total=int(nstat["memory"]["total"]), mem_free=int(nstat["memory"].get("available", nstat["memory"]["free"])),
+        mem_total=int(node_status["memory"]["total"]),
+        mem_free=int(node_status["memory"].get("available", node_status["memory"]["free"])),
         storages=storages, bridges=bridges, mgmt_bridge=mgmt_bridge, mgmt_vlan=mgmt_vlan, mgmt_network=mgmt_net,
-        mgmt_gateway=gw, networks=networks, nameservers=ns, search_domain=search,
-        used_vmids={int(r["vmid"]) for r in resources},
-        vm_pools={int(r["vmid"]): r.get("pool", "") for r in resources},
-        pools={p["poolid"] for p in pvesh("get", "/pools")},
-        users={u["userid"]: u.get("comment", "") for u in pvesh("get", "/access/users")},
+        mgmt_gateway=gateway, networks=networks, nameservers=nameservers, search_domain=search,
+        used_vmids={int(vm["vmid"]) for vm in resources},
+        vm_pools={int(vm["vmid"]): vm.get("pool", "") for vm in resources},
+        pools={pool["poolid"] for pool in pvesh("get", "/pools")},
+        users={user["userid"]: user.get("comment", "") for user in pvesh("get", "/access/users")},
         roles=roles, privileges=privileges,
-        valor_templates=[r for r in resources if r.get("template") and "valor-template" in re.split(r"[;, ]", r.get("tags") or "")],
+        valor_templates=[vm for vm in resources
+                         if vm.get("template") and "valor-template" in re.split(r"[;, ]", vm.get("tags") or "")],
         pending_network_changes=Path("/etc/network/interfaces.new").exists(),
         record=json.loads(record_file.read_text()) if record_file.exists() else None,
     )
-    facts.interfaces = {l["ifname"] for l in _ipj("link")}
+    facts.interfaces = {link["ifname"] for link in _ipj("link")}
     if check_net:
         facts.internet = check_internet()
     return facts

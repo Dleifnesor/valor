@@ -11,7 +11,7 @@ from . import ui
 class CommandError(Exception):
     def __init__(self, cmd: list[str], code: int, out: str, err: str):
         self.cmd, self.code, self.out, self.err = cmd, code, out, err
-        shown = " ".join(c if len(c) < 80 else c[:77] + "..." for c in cmd)
+        shown = " ".join(arg if len(arg) < 80 else arg[:77] + "..." for arg in cmd)
         super().__init__(f"command failed ({code}): {shown}\n{(err or out).strip()[-1500:]}")
 
 
@@ -29,14 +29,14 @@ def run(cmd: list[str], check: bool = True, input: str | None = None, timeout: f
 
 def _args(params: dict) -> list[str]:
     out: list[str] = []
-    for k, v in params.items():
-        if v is None:
+    for key, value in params.items():
+        if value is None:
             continue
-        values = v if isinstance(v, (list, tuple)) else [v]
+        values = value if isinstance(value, (list, tuple)) else [value]
         for item in values:
             if isinstance(item, bool):
                 item = int(item)
-            out += [f"--{k}", str(item)]
+            out += [f"--{key}", str(item)]
     return out
 
 

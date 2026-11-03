@@ -89,7 +89,7 @@ class Record:
         def merged(section: str) -> dict:
             mine, theirs = self.data.get(section, {}), disk.get(section, {})
             out = {**mine, **theirs}
-            out.update({k: v for k, v in mine.items() if (section, k) in self._dirty})
+            out.update({key: value for key, value in mine.items() if (section, key) in self._dirty})
             return out
 
         objects = merged("objects")
