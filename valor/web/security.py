@@ -67,13 +67,14 @@ def b32(secret: bytes) -> str:
 
 def totp_code(secret: bytes, step: int, digits: int = 6) -> str:
     mac = hmac.new(secret, struct.pack(">Q", step), hashlib.sha1).digest()
-    off = mac[-1] & 0x0F
-    value = (struct.unpack(">I", mac[off:off + 4])[0] & 0x7FFFFFFF) % 10 ** digits
+    offset = mac[-1] & 0x0F                     # RFC 4226 dynamic truncation
+    value = (struct.unpack(">I", mac[offset:offset + 4])[0] & 0x7FFFFFFF) % 10 ** digits
     return f"{value:0{digits}d}"
 
 
 def verify_totp(secret: bytes, code: str, last_step: int, now: float | None = None, window: int = 1) -> int | None:
-    """Returns the matched time step (store it to block replays), or None."""
+    """Returns the matched time step (store it to block replays), or None. window: steps of clock drift accepted
+    on either side; a step at or before last_step was used already."""
     code = (code or "").replace(" ", "").strip()
     if len(code) != 6 or not code.isdigit():
         return None
@@ -102,8 +103,9 @@ def new_recovery_codes(n: int = 10) -> list[str]:
 
 
 def normalize_recovery_code(code: str) -> str:
-    c = "".join(ch for ch in (code or "").lower() if ch.isalnum())
-    return f"{c[:5]}-{c[5:]}" if len(c) == 10 else ""
+    """A typed recovery code in its stored form (any case, with or without the dash or spaces)."""
+    letters = "".join(char for char in (code or "").lower() if char.isalnum())
+    return f"{letters[:5]}-{letters[5:]}" if len(letters) == 10 else ""
 
 
 def hash_token(value: str) -> str:
@@ -125,10 +127,11 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def _prune(self, key: str, now: float) -> deque:
-        q = self._hits.setdefault(key, deque())
-        while q and q[0] <= now - self.window:
-            q.popleft()
-        return q
+        """The key's hits inside the window (older ones dropped)."""
+        hits = self._hits.setdefault(key, deque())
+        while hits and hits[0] <= now - self.window:
+            hits.popleft()
+        return hits
 
     def blocked(self, key: str) -> bool:
         with self._lock:
@@ -139,5 +142,5 @@ class RateLimiter:
             now = time.time()
             self._prune(key, now).append(now)
             if len(self._hits) > 10000:      # bound memory under a flood of distinct keys
-                for k in [k for k, q in self._hits.items() if not q][:5000]:
-                    self._hits.pop(k, None)
+                for stale in [key for key, hits in self._hits.items() if not hits][:5000]:
+                    self._hits.pop(stale, None)

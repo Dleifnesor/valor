@@ -50,16 +50,17 @@ class ConsoleIn(BaseModel):
 
 
 def _prune() -> None:
+    """Forget console sessions nobody connected to in time."""
     now = time.time()
-    for k in [k for k, p in PENDING.items() if now - p.created > CONNECT_WITHIN]:
-        PENDING.pop(k, None)
+    for sid in [sid for sid, pending in PENDING.items() if now - pending.created > CONNECT_WITHIN]:
+        PENDING.pop(sid, None)
 
 
 @router.post("/api/ranges/{name}/vms/{host}/console")
 def open_console(name: str, host: str, body: ConsoleIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
     cfg = request.app.state.cfg
     pve = PVE(cfg)
-    vm = next((v for v in range_vms(pve, name) if v.host == host and f"valor-range-{name}" in v.tags), None)
+    vm = next((vm for vm in range_vms(pve, name) if vm.host == host and f"valor-range-{name}" in vm.tags), None)
     if vm is None:
         raise ApiError(404, "no_vm", f"Range {name} has no VM {host}.")
     if pve.vm_status(vm.vmid).get("status") != "running":
@@ -78,6 +79,8 @@ def open_console(name: str, host: str, body: ConsoleIn, request: Request, s: Ses
 
 @router.websocket("/api/console/{sid}")
 async def relay(websocket: WebSocket, sid: str):
+    """Check the browser (same origin, same VALOR session that asked for the console, in time), connect to
+    Proxmox's console websocket with VALOR's token, then copy data both ways until one side closes."""
     origin = websocket.headers.get("origin", "")
     if origin and origin.split("://", 1)[-1] != websocket.headers.get("host", ""):
         await websocket.close(code=4403)               # cross-site websocket hijacking guard
@@ -87,19 +90,19 @@ async def relay(websocket: WebSocket, sid: str):
         s = _load(websocket, conn)
     finally:
         conn.close()
-    p = PENDING.pop(sid, None)
-    if (s is None or s.stage != "full" or ROLES[s.user["role"]] < ROLES["operator"] or p is None
-            or p.owner != s.id_hash or time.time() - p.created > CONNECT_WITHIN):
+    pending = PENDING.pop(sid, None)                  # one use only
+    if (s is None or s.stage != "full" or ROLES[s.user["role"]] < ROLES["operator"] or pending is None
+            or pending.owner != s.id_hash or time.time() - pending.created > CONNECT_WITHIN):
         await websocket.close(code=4401)
         return
     from websockets.asyncio.client import connect
 
     pve = PVE(websocket.app.state.cfg)
-    url, headers, ctx = pve.console_websocket(p.vmid, p.port, p.ticket)
+    url, headers, ssl_context = pve.console_websocket(pending.vmid, pending.port, pending.ticket)
     upstream = None
     for attempt in range(2):                           # Proxmox's proxy can need a moment to start listening
         try:
-            upstream = await connect(url, additional_headers=headers, ssl=ctx, subprotocols=["binary"],
+            upstream = await connect(url, additional_headers=headers, ssl=ssl_context, subprotocols=["binary"],
                                      max_size=None, open_timeout=15, ping_interval=None)
             break
         except Exception:
@@ -110,8 +113,8 @@ async def relay(websocket: WebSocket, sid: str):
     wanted = websocket.scope.get("subprotocols") or []
     await websocket.accept(subprotocol="binary" if "binary" in wanted else None)
     started = time.time()
-    if p.kind == "serial":
-        await upstream.send(f"{p.pve_user}:{p.ticket}\n".encode())
+    if pending.kind == "serial":                       # Proxmox's terminal proxy wants "user:ticket" first
+        await upstream.send(f"{pending.pve_user}:{pending.ticket}\n".encode())
 
     async def browser_to_pve():
         while True:
@@ -135,8 +138,8 @@ async def relay(websocket: WebSocket, sid: str):
     except (WebSocketDisconnect, ValorError):
         pass
     finally:
-        for t in tasks:
-            t.cancel()
+        for task in tasks:
+            task.cancel()
         await upstream.close()
         try:
             await websocket.close()
@@ -144,7 +147,7 @@ async def relay(websocket: WebSocket, sid: str):
             pass
         conn = db.connect(websocket.app.state.wcfg.db)
         try:
-            db.audit(conn, "console.close", "ok", username=p.username, target=f"{p.range}/{p.host}",
-                     detail={"kind": p.kind, "seconds": round(time.time() - started)})
+            db.audit(conn, "console.close", "ok", username=pending.username, target=f"{pending.range}/{pending.host}",
+                     detail={"kind": pending.kind, "seconds": round(time.time() - started)})
         finally:
             conn.close()
