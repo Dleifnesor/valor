@@ -22,9 +22,9 @@ def kickstart(host: str, address: str, prefix: int, gateway: str, nameservers: l
     """device: the NIC's MAC address (VALOR sets it when creating the VM), or 'link' for the first connected NIC.
     repos: extra online repositories (name -> base URL), e.g. AppStream for packages the minimal ISO lacks; the
     router's temporary build egress is open while the host installs."""
-    repo_lines = "".join(f"repo --name={n} --baseurl={u}\n" for n, u in (repos or {}).items())
-    mask = str(ipaddress.IPv4Network(f"0.0.0.0/{prefix}").netmask)
-    ns = ",".join(nameservers)
+    repo_lines = "".join(f"repo --name={name} --baseurl={url}\n" for name, url in (repos or {}).items())
+    netmask = str(ipaddress.IPv4Network(f"0.0.0.0/{prefix}").netmask)
+    dns = ",".join(nameservers)
     key = ssh_key.strip().replace('"', "")
     return f"""# VALOR kickstart for {host} (generated; no secrets)
 text
@@ -32,7 +32,7 @@ cdrom
 {repo_lines}lang en_US.UTF-8
 keyboard us
 timezone UTC --utc
-network --device={device} --bootproto=static --ip={address} --netmask={mask} --gateway={gateway} --nameserver={ns} --hostname={host} --activate --onboot=yes
+network --device={device} --bootproto=static --ip={address} --netmask={netmask} --gateway={gateway} --nameserver={dns} --hostname={host} --activate --onboot=yes
 rootpw --lock
 user --name={user} --groups=wheel --lock
 sshkey --username={user} "{key}"
