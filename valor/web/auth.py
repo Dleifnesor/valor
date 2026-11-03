@@ -190,7 +190,7 @@ def enroll_confirm(body: CodeIn, request: Request, response: Response, s: Sessio
                      (box.seal(secret, f"totp:{s.user['id']}"), step, time.time(), s.user["id"]))
         conn.execute("DELETE FROM recovery_codes WHERE user_id = ?", (s.user["id"],))
         conn.executemany("INSERT INTO recovery_codes(user_id, code_hash) VALUES (?, ?)",
-                         [(s.user["id"], hash_token(c)) for c in codes])
+                         [(s.user["id"], hash_token(code)) for code in codes])
     db.audit(conn, "mfa.enroll", "ok", username=s.username, ip=s.ip)
     out = _complete(request, response, s, "enrollment")
     out["recovery_codes"] = codes
@@ -243,6 +243,6 @@ def regenerate_codes(body: ReauthIn, request: Request, s: Session = Depends(requ
     with db.transaction(s.conn):
         s.conn.execute("DELETE FROM recovery_codes WHERE user_id = ?", (s.user["id"],))
         s.conn.executemany("INSERT INTO recovery_codes(user_id, code_hash) VALUES (?, ?)",
-                           [(s.user["id"], hash_token(c)) for c in codes])
+                           [(s.user["id"], hash_token(code)) for code in codes])
     s.audit("mfa.recovery_codes")
     return {"recovery_codes": codes}

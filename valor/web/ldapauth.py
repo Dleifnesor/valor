@@ -109,8 +109,9 @@ def authenticate(cfg: dict, username: str, password: str, server=None) -> LdapRe
         user_conn.unbind()
 
         def attr(name):
-            v = entry[name].value if name in entry.entry_attributes else None
-            return v if isinstance(v, str) else (v[0] if isinstance(v, list) and v else "")
+            """A user attribute as one string (directories may return a list or nothing)."""
+            value = entry[name].value if name in entry.entry_attributes else None
+            return value if isinstance(value, str) else (value[0] if isinstance(value, list) and value else "")
 
         member_of = entry["memberOf"].values if "memberOf" in entry.entry_attributes else []
         role = _role_for(svc, cfg, dn, list(member_of))

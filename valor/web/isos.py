@@ -52,10 +52,11 @@ def _remember(s: Session, entry: dict) -> None:
 
 
 def _progress(log: list[str]) -> float | None:
+    """The newest percentage in a Proxmox download task's log, if any."""
     for line in reversed(log):
-        m = re.search(r"(\d+(?:\.\d+)?)%", line)
-        if m:
-            return min(100.0, float(m.group(1)))
+        percent = re.search(r"(\d+(?:\.\d+)?)%", line)
+        if percent:
+            return min(100.0, float(percent.group(1)))
     return None
 
 
@@ -89,8 +90,9 @@ def catalog(request: Request, s: Session = Depends(require("viewer"))) -> dict:
 def download(body: DownloadIn, request: Request, s: Session = Depends(require("operator"))) -> dict:
     cfg = _cfg(request)
     if body.catalog:
-        r = isos.resolve(cfg, body.catalog)
-        url, filename, checksum, algorithm, verified = r["url"], r["filename"], r["checksum"], r["algorithm"], r["verified"]
+        entry = isos.resolve(cfg, body.catalog)
+        url, filename, checksum = entry["url"], entry["filename"], entry["checksum"]
+        algorithm, verified = entry["algorithm"], entry["verified"]
     else:
         if not body.url or not body.filename:
             raise ApiError(400, "invalid", "Give a catalog entry, or a URL and a file name.")
@@ -109,15 +111,15 @@ def download(body: DownloadIn, request: Request, s: Session = Depends(require("o
 def tasks(request: Request, s: Session = Depends(require("viewer"))) -> dict:
     pve = PVE(_cfg(request))
     out = []
-    for t in _tasks(s)[:10]:
+    for remembered in _tasks(s)[:10]:
         try:
-            st = pve.task(t["upid"])
+            task = pve.task(remembered["upid"])
         except ValorError:
             continue
-        done = st.get("status") == "stopped"
-        out.append({**t, "running": not done, "ok": done and st.get("exitstatus") == "OK",
-                    "exitstatus": st.get("exitstatus"), "progress": 100.0 if done else _progress(st["log"]),
-                    "last": (st["log"] or [""])[-1][:200]})
+        done = task.get("status") == "stopped"
+        out.append({**remembered, "running": not done, "ok": done and task.get("exitstatus") == "OK",
+                    "exitstatus": task.get("exitstatus"), "progress": 100.0 if done else _progress(task["log"]),
+                    "last": (task["log"] or [""])[-1][:200]})
     return {"tasks": out}
 
 
@@ -142,17 +144,17 @@ async def upload(request: Request, filename: str = Query(max_length=200),
     if size and shutil.disk_usage(tmpdir).free < size + 2 * 2**30:
         raise ApiError(507, "no_space", "Not enough free space in the VALOR VM for this upload.")
     h256 = hashlib.sha256()                  # Proxmox gets the SHA-256; the checksum may use another algorithm
-    hx = hashlib.new(algorithm) if checksum and algorithm != "sha256" else None
+    other_hash = hashlib.new(algorithm) if checksum and algorithm != "sha256" else None
     fd, path = tempfile.mkstemp(dir=tmpdir, suffix=".iso")
     try:
         with os.fdopen(fd, "wb") as fh:
             async for chunk in request.stream():
                 fh.write(chunk)
                 h256.update(chunk)
-                if hx is not None:
-                    hx.update(chunk)
+                if other_hash is not None:
+                    other_hash.update(chunk)
         if checksum:
-            got = (hx or h256).hexdigest()
+            got = (other_hash or h256).hexdigest()
             if got.lower() != checksum.lower():
                 raise ApiError(400, "checksum_mismatch", "The uploaded file does not match the checksum you gave.")
         pve = PVE(cfg)

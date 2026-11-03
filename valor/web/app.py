@@ -76,8 +76,8 @@ def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_
                     and not raw_ok):
                 return JSONResponse({"error": "content_type", "message": "Send JSON."}, 415)
         response = await call_next(request)
-        for k, v in SECURITY_HEADERS.items():
-            response.headers.setdefault(k, v)
+        for header, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -89,9 +89,11 @@ def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request: Request, exc: RequestValidationError):
-        errs = [{"location": ".".join(str(x) for x in e.get("loc", [])[1:]), "message": e.get("msg", "")}
-                for e in exc.errors()]
-        return JSONResponse({"error": "invalid_request", "message": "The request is not valid.", "details": errs}, 422)
+        # loc[0] is "body" / "query": the rest names the field, as the UI shows it
+        problems = [{"location": ".".join(str(part) for part in error.get("loc", [])[1:]),
+                     "message": error.get("msg", "")} for error in exc.errors()]
+        return JSONResponse({"error": "invalid_request", "message": "The request is not valid.", "details": problems},
+                            422)
 
     @app.exception_handler(LockBusy)
     async def busy(request: Request, exc: LockBusy):
@@ -106,8 +108,8 @@ def create_app(cfg: Config | None = None, wcfg: WebConfig | None = None, static_
         log.exception("unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse({"error": "internal_error", "message": "Something went wrong on the server."}, 500)
 
-    for r in API_ROUTERS:
-        app.include_router(r)
+    for api_router in API_ROUTERS:
+        app.include_router(api_router)
 
     # In the VALOR VM nginx serves the built UI; this fallback is for development only.
     if static_dir and Path(static_dir, "index.html").is_file():

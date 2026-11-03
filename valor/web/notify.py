@@ -51,31 +51,33 @@ def _send_email(c: dict, title: str, body: str) -> None:
 def send(channel: dict, level: str, title: str, body: str, link: str = "") -> None:
     """channel: decrypted channel settings. Raises on failure."""
     text = f"{title}\n{body}".strip() + (f"\n{link}" if link else "")
-    kind, c = channel["type"], channel["config"]
+    kind, config = channel["type"], channel["config"]
     if kind == "email":
-        _send_email(c, title, text)
-    elif kind == "discord":
-        _send_webhook(c["url"], {"content": text[:1900], "allowed_mentions": {"parse": []}})
+        _send_email(config, title, text)
+    elif kind == "discord":                 # allowed_mentions: a range name can't ping @everyone
+        _send_webhook(config["url"], {"content": text[:1900], "allowed_mentions": {"parse": []}})
     elif kind == "slack":
-        _send_webhook(c["url"], {"text": text[:3000]})
+        _send_webhook(config["url"], {"text": text[:3000]})
     elif kind == "teams":   # Teams "Workflows" webhook: an Adaptive Card message
         card = {"type": "AdaptiveCard", "version": "1.4", "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "body": [{"type": "TextBlock", "text": title, "weight": "Bolder", "wrap": True},
                          {"type": "TextBlock", "text": (body or "")[:2000], "wrap": True}]}
-        _send_webhook(c["url"], {"type": "message", "attachments": [
+        _send_webhook(config["url"], {"type": "message", "attachments": [
             {"contentType": "application/vnd.microsoft.card.adaptive", "content": card}]})
     else:
         raise ValueError(f"unknown channel type {kind}")
 
 
 def channels_plain(stored: list, box: Box) -> list[dict]:
+    """The stored channels with their secrets decrypted (a deep copy: the stored settings stay sealed)."""
     out = []
-    for ch in stored or []:
-        ch = json.loads(json.dumps(ch))
-        for f in SECRET_FIELDS.get(ch["type"], ()):
-            if ch["config"].get(f):
-                ch["config"][f] = box.open_text(ch["config"][f], f"notify:{ch['id']}:{f}")
-        out.append(ch)
+    for stored_channel in stored or []:
+        channel = json.loads(json.dumps(stored_channel))
+        for field in SECRET_FIELDS.get(channel["type"], ()):
+            if channel["config"].get(field):
+                channel["config"][field] = box.open_text(channel["config"][field],
+                                                         f"notify:{channel['id']}:{field}")
+        out.append(channel)
     return out
 
 
@@ -83,15 +85,15 @@ def _fan_out(db_path: str, box: Box, level: str, event: str, title: str, body: s
     conn = db.connect(db_path)
     try:
         errors = []
-        for ch in channels_plain(db.get_setting(conn, "notification_channels", []), box):
-            if not ch.get("enabled", True):
+        for channel in channels_plain(db.get_setting(conn, "notification_channels", []), box):
+            if not channel.get("enabled", True):
                 continue
-            if ch.get("events", "problems") == "problems" and level not in PROBLEM_LEVELS:
+            if channel.get("events", "problems") == "problems" and level not in PROBLEM_LEVELS:
                 continue
             try:
-                send(ch, level, title, body, link)
+                send(channel, level, title, body, link)
             except Exception as e:
-                errors.append(f"{ch.get('name', ch['type'])}: {e.__class__.__name__}: {e}")
+                errors.append(f"{channel.get('name', channel['type'])}: {e.__class__.__name__}: {e}")
         if errors:
             db.audit(conn, "notify.deliver", "error", target=event, detail="; ".join(errors))
         return errors
