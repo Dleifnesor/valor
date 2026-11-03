@@ -45,31 +45,33 @@ def payload() -> bytes:
         return info
 
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for d in PAYLOAD_DIRS:
-            tar.add(SOURCE / d, arcname=d, filter=skip)
+        for folder in PAYLOAD_DIRS:
+            tar.add(SOURCE / folder, arcname=folder, filter=skip)
         tar.add(SOURCE / "web" / "dist", arcname="web/dist", filter=skip)
-        for f in PAYLOAD_FILES:
-            if (SOURCE / f).is_file():
-                tar.add(SOURCE / f, arcname=f, filter=skip)
-        ver = f"{VERSION}\n".encode()
-        ti = tarfile.TarInfo("VERSION")
-        ti.size = len(ver)
-        tar.addfile(ti, io.BytesIO(ver))
+        for name in PAYLOAD_FILES:
+            if (SOURCE / name).is_file():
+                tar.add(SOURCE / name, arcname=name, filter=skip)
+        version = f"{VERSION}\n".encode()
+        version_file = tarfile.TarInfo("VERSION")
+        version_file.size = len(version)
+        tar.addfile(version_file, io.BytesIO(version))
     return buf.getvalue()
 
 
-def _toml(v) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return str(v)
-    if isinstance(v, (list, tuple)):
-        return "[" + ", ".join(_toml(x) for x in v) + "]"
-    return json.dumps(str(v))
+def _toml(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return json.dumps(str(value))          # a JSON string is a valid TOML basic string
 
 
 def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: str | None, vm_ip: str) -> str:
-    lo, hi = settings.vmid_ranges
+    """/etc/valor/config.toml for the VALOR VM: what the engine may use on this cluster (read by valor/config.py and
+    valor/web/config.py)."""
+    first_vmid, last_vmid = settings.vmid_ranges
     url = f"https://{vm_ip}"
     sections = {
         "proxmox": {"api_host": api_host, "api_port": 8006,
@@ -77,7 +79,8 @@ def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_
                     "token_file": "/etc/valor/token.json", "node": facts.node},
         "resources": {"pool": settings.pool_ranges, "template_pool": settings.pool_templates, "storage": settings.range_storage,
                       "segment_bridge": bridge, "uplink_bridge": settings.vm_bridge, "uplink_vlan": settings.vm_vlan,
-                      "vmid_min": lo, "vmid_max": hi, "vlan_min": settings.vlan_min, "vlan_max": settings.vlan_max,
+                      "vmid_min": first_vmid, "vmid_max": last_vmid,
+                      "vlan_min": settings.vlan_min, "vlan_max": settings.vlan_max,
                       "max_memory_fraction": 0.7, "reserved_networks": settings.reserved_networks,
                       "iso_storage": settings.iso_storage, "iso_storages": settings.iso_storages},
         "paths": {"content_dir": "/opt/valor/share", "data_dir": "/var/lib/valor/data",
@@ -93,14 +96,14 @@ def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_
              "# Re-run the installer (./install.sh --upgrade) instead of editing by hand.", ""]
     for name, values in sections.items():
         lines.append(f"[{name}]")
-        lines += [f"{k} = {_toml(v)}" for k, v in values.items()]
+        lines += [f"{key} = {_toml(value)}" for key, value in values.items()]
         lines.append("")
     return "\n".join(lines)
 
 
 def appliance_env(settings: Answers, facts: Facts, mode: str, api_host: str) -> str:
     """Settings for setup.sh (values were validated by the installer: CIDRs, IPs, DNS labels)."""
-    ssh_from = sorted({n["ip"] for n in facts.nodes if n.get("ip")} | {facts.node_ip})
+    ssh_from = sorted({node["ip"] for node in facts.nodes if node.get("ip")} | {facts.node_ip})    # break-glass SSH
     env = {
         "MODE": mode,
         "VALOR_VERSION": VERSION,
@@ -113,10 +116,11 @@ def appliance_env(settings: Answers, facts: Facts, mode: str, api_host: str) -> 
         "PVE_HOST": api_host,
         "PVE_IP": facts.node_ip,
     }
-    return "".join(f'{k}="{v}"\n' for k, v in env.items())
+    return "".join(f'{key}="{value}"\n' for key, value in env.items())
 
 
 def new_password() -> str:
+    """The first admin's one-time password: 4 groups of 6 letters/digits (changed at the first sign-in)."""
     alphabet = string.ascii_letters + string.digits
     return "-".join("".join(secrets.choice(alphabet) for _ in range(6)) for _ in range(4))
 
@@ -126,11 +130,13 @@ def _qm(*args: str) -> str:
 
 
 def create(settings: Answers, facts: Facts, rec: Record, template: int) -> int:
+    """Clone the Ubuntu template into the VALOR VM (a full clone: it must not depend on a template) and set its
+    size, network, cloud-init user and break-glass SSH key. An existing VALOR VM (a resumed install) is kept."""
     vmid = settings.vmid_vm
     exists = run(["qm", "status", str(vmid)], check=False).returncode == 0
     if exists:
-        cfg = _qm("config", str(vmid))
-        if "valor-appliance" not in cfg:
+        config = _qm("config", str(vmid))
+        if "valor-appliance" not in config:
             raise SystemExit(f"VM {vmid} exists and is not a VALOR VM; choose another vmid_start")
         ui.ok(f"VALOR VM {vmid} exists (resuming)")
         rec.set("vm", {"vmid": vmid, "name": settings.vm_hostname})
@@ -141,13 +147,14 @@ def create(settings: Answers, facts: Facts, rec: Record, template: int) -> int:
     rec.set("vm", {"vmid": vmid, "name": settings.vm_hostname})
     key = rec_key(settings)
     net = f"virtio,bridge={settings.vm_bridge}" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else "")
-    ipcfg = "ip=dhcp" if settings.vm_ip == "dhcp" else f"ip={settings.vm_ip},gw={settings.vm_gateway}"
-    desc = (f"VALOR {VERSION} appliance (instance '{settings.id}'): engine + web UI. Created by the VALOR installer on "
-            f"{time.strftime('%Y-%m-%d')}. Manage with ./install.sh --status | --upgrade | --uninstall.")
-    run(["qm", "set", str(vmid), "--cores", str(settings.vm_cores), "--memory", str(settings.vm_memory), "--cpu", cpu_type(facts),
-         "--net0", net, "--ipconfig0", ipcfg, "--ciuser", "valoradmin", "--sshkeys", str(key) + ".pub",
-         "--onboot", "1", "--startup", "order=1", "--tags", f"valor-appliance;valor-{settings.id}",
-         "--description", desc, "--agent", "enabled=1,fstrim_cloned_disks=1",
+    ip_config = "ip=dhcp" if settings.vm_ip == "dhcp" else f"ip={settings.vm_ip},gw={settings.vm_gateway}"
+    description = (f"VALOR {VERSION} appliance (instance '{settings.id}'): engine + web UI. Created by the VALOR "
+                   f"installer on {time.strftime('%Y-%m-%d')}. Manage with ./install.sh --status | --upgrade | --uninstall.")
+    run(["qm", "set", str(vmid), "--cores", str(settings.vm_cores), "--memory", str(settings.vm_memory),
+         "--cpu", cpu_type(facts), "--net0", net, "--ipconfig0", ip_config, "--ciuser", "valoradmin",
+         "--sshkeys", str(key) + ".pub", "--onboot", "1", "--startup", "order=1",
+         "--tags", f"valor-appliance;valor-{settings.id}",
+         "--description", description, "--agent", "enabled=1,fstrim_cloned_disks=1",
          *(["--nameserver", " ".join(settings.vm_dns)] if settings.vm_ip != "dhcp" and settings.vm_dns else []),
          *(["--searchdomain", settings.vm_domain] if settings.vm_domain else [])])
     run(["qm", "disk", "resize", str(vmid), "scsi0", f"{settings.vm_disk}G"])
@@ -162,8 +169,8 @@ def rec_key(settings: Answers) -> Path:
     if not key.exists():
         RECORD_DIR.mkdir(parents=True, exist_ok=True)
         tmp = Path("/root") / f".valor-{settings.id}-key"
-        for p in (tmp, Path(str(tmp) + ".pub")):
-            p.unlink(missing_ok=True)
+        for leftover in (tmp, Path(str(tmp) + ".pub")):
+            leftover.unlink(missing_ok=True)
         run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"valor-{settings.id}-breakglass", "-f", str(tmp)])
         key.write_bytes(tmp.read_bytes())
         Path(str(key) + ".pub").write_bytes(Path(str(tmp) + ".pub").read_bytes())
@@ -173,6 +180,7 @@ def rec_key(settings: Answers) -> Path:
 
 
 def boot(facts: Facts, vmid: int) -> str:
+    """Start the VM if needed and wait until it is usable (guest agent, cloud-init done, an IPv4 address)."""
     if "running" not in _qm("status", str(vmid)):
         run(["qm", "start", str(vmid)])
     ui.info("waiting for the VM to boot and its guest agent to answer")
@@ -201,6 +209,7 @@ def provision(settings: Answers, facts: Facts, vmid: int, mode: str, files: dict
         guest.write_file(node, vmid, f"{STAGE}/{name}", content)
     guest.check(node, vmid, f"set -e; mkdir -p {STAGE}/src; tar -xzf {STAGE}/payload.tar.gz -C {STAGE}/src")
     ui.info("running the appliance setup inside the VM (packages, TLS, firewall, services) - a few minutes")
+    # setup.sh runs for minutes: start it in the background and follow its log (its "[time] step" lines)
     pid = guest.start_script(node, vmid, f"exec bash {STAGE}/src/appliance/setup.sh {mode} > /var/log/valor-setup.log 2>&1")
     shown, end = 0, time.time() + 2400
     while time.time() < end:
@@ -214,11 +223,11 @@ def provision(settings: Answers, facts: Facts, vmid: int, mode: str, files: dict
             if line.startswith("[") or line.startswith("ERROR") or line.startswith("WARN"):
                 ui.info(ui.dim(line))
         shown = len(lines)
-        st = guest.status(node, vmid, pid)
-        if st.get("exited"):
-            if int(st.get("exitcode", 1)) != 0:
+        status = guest.status(node, vmid, pid)
+        if status.get("exited"):
+            if int(status.get("exitcode", 1)) != 0:
                 tail = "\n".join(lines[-25:])
-                raise SystemExit(f"appliance setup failed (exit {st.get('exitcode')}). Last lines of "
+                raise SystemExit(f"appliance setup failed (exit {status.get('exitcode')}). Last lines of "
                                  f"/var/log/valor-setup.log in the VM:\n{tail}")
             ui.ok("appliance setup finished")
             return
@@ -255,10 +264,11 @@ def ca_pem(facts: Facts, vmid: int) -> str:
 
 
 def health(ip: str, ca: str | None) -> bool:
-    ctx = ssl.create_default_context(cadata=ca) if ca else ssl.create_default_context()
+    """Does the web UI answer over HTTPS with a certificate that verifies (against VALOR's own CA when given)?"""
+    context = ssl.create_default_context(cadata=ca) if ca else ssl.create_default_context()
     try:
-        with urllib.request.urlopen(f"https://{ip}/api/health", context=ctx, timeout=15) as r:
-            return json.load(r).get("ok") is True
+        with urllib.request.urlopen(f"https://{ip}/api/health", context=context, timeout=15) as response:
+            return json.load(response).get("ok") is True
     except Exception as e:
         ui.debug(f"health check: {e}")
         return False
@@ -267,16 +277,16 @@ def health(ip: str, ca: str | None) -> bool:
 def fingerprint(pem: str) -> str:
     der = ssl.PEM_cert_to_DER_cert(pem)
     import hashlib
-    h = hashlib.sha256(der).hexdigest().upper()
-    return ":".join(h[i:i + 2] for i in range(0, len(h), 2))
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))      # AB:CD:EF... as browsers show it
 
 
 def destroy(vmid: int) -> None:
     try:
-        cfg = _qm("config", str(vmid))
+        config = _qm("config", str(vmid))
     except CommandError:
         return
-    if "valor-appliance" not in cfg:
+    if "valor-appliance" not in config:            # never delete a VM the installer didn't make
         ui.warn(f"VM {vmid} is not a VALOR VM; leaving it")
         return
     run(["qm", "stop", str(vmid), "--skiplock", "1"], check=False)
@@ -286,6 +296,7 @@ def destroy(vmid: int) -> None:
 
 def pool_vms(pool: str) -> list[dict]:
     try:
-        return [m for m in (pvesh("get", f"/pools/{pool}") or {}).get("members", []) if m.get("type") == "qemu"]
+        members = (pvesh("get", f"/pools/{pool}") or {}).get("members", [])
+        return [member for member in members if member.get("type") == "qemu"]
     except CommandError:
         return []

@@ -27,6 +27,7 @@ TOKEN = "appliance"
 
 
 def roles(facts: Facts) -> dict[str, list[str]]:
+    """VALOR's roles with their privileges, limited to the privileges this Proxmox version knows."""
     agent = AGENT_PRIVS_9 if "VM.GuestAgent.Unrestricted" in facts.privileges else AGENT_PRIVS_8
     want = {
         "ValorEngine": ENGINE_PRIVS + agent,
@@ -41,32 +42,34 @@ def roles(facts: Facts) -> dict[str, list[str]]:
     }
     if facts.privileges:
         for name, privs in want.items():
-            missing = [p for p in privs if p not in facts.privileges]
+            missing = [priv for priv in privs if priv not in facts.privileges]
             if missing:
                 ui.warn(f"role {name}: this Proxmox VE does not know {missing}; leaving them out")
-            want[name] = [p for p in privs if p in facts.privileges]
+            want[name] = [priv for priv in privs if priv in facts.privileges]
     return want
 
 
 def acls(settings: Answers, facts: Facts, bridge: str) -> list[tuple[str, str]]:
+    """(path, role) for every permission the user and its token get - the complete list of what VALOR may do."""
     paths = [(f"/pool/{settings.pool_ranges}", "ValorEngine"),
              (f"/pool/{settings.pool_templates}", "ValorTemplateUser"),
              (f"/storage/{settings.range_storage}", "ValorStorage"),
              (f"/sdn/zones/localnetwork/{bridge}", "PVESDNUser"),
              (f"/nodes/{facts.node}", "ValorNodeAudit")]
     uplink = f"/sdn/zones/localnetwork/{settings.vm_bridge}"
-    if uplink not in [p for p, _ in paths]:
+    if uplink not in [path for path, _ in paths]:
         paths.append((uplink, "PVESDNUser"))
     if settings.iso_storage:
         paths.append((f"/storage/{settings.iso_storage}", "ValorISO"))
         paths.append((f"/nodes/{facts.node}", "ValorDownload"))
-    for sid in settings.iso_storages:
-        if sid != settings.iso_storage and sid != settings.range_storage:
-            paths.append((f"/storage/{sid}", "ValorISOReader"))
+    for storage_id in settings.iso_storages:
+        if storage_id != settings.iso_storage and storage_id != settings.range_storage:
+            paths.append((f"/storage/{storage_id}", "ValorISOReader"))
     return paths
 
 
 def plan(settings: Answers, facts: Facts, bridge: str) -> list[str]:
+    """What ensure() would do, for --dry-run."""
     out = []
     for name, privs in roles(facts).items():
         have = facts.roles.get(name)
@@ -103,6 +106,7 @@ def ensure_roles(facts: Facts, rec: Record) -> None:
 
 
 def grant(settings: Answers, facts: Facts, rec: Record, bridge: str, token_id: str) -> None:
+    """Grant every ACL to the user and to its token (a privilege-separated token needs both)."""
     granted = []
     for path, role in acls(settings, facts, bridge):
         pvesh("set", "/access/acl", path=path, roles=role, users=settings.user, propagate=1)
@@ -117,7 +121,8 @@ def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
     ensure_roles(facts, rec)
 
     if settings.user not in facts.users:
-        pvesh("create", "/access/users", userid=settings.user, comment=f"VALOR {settings.id}: engine API user (token only, no password)")
+        pvesh("create", "/access/users", userid=settings.user,
+              comment=f"VALOR {settings.id}: engine API user (token only, no password)")
         rec.set("user_created", True)
         ui.ok(f"user {settings.user}")
     elif not facts.users[settings.user].startswith("VALOR"):
@@ -127,19 +132,22 @@ def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
         rec.objects.setdefault("user_created", False)
 
     pools_created = rec.objects.get("pools_created", [])
-    for pool, what in ((settings.pool_ranges, "ranges"), (settings.pool_templates, "OS templates"), (settings.pool_system, "the VALOR VM")):
+    pools = ((settings.pool_ranges, "ranges"), (settings.pool_templates, "OS templates"),
+             (settings.pool_system, "the VALOR VM"))
+    for pool, what in pools:
         if pool not in facts.pools:
             pvesh("create", "/pools", poolid=pool, comment=f"VALOR {settings.id}: {what}")
             pools_created.append(pool)
             ui.ok(f"pool {pool}")
     rec.set("pools_created", sorted(set(pools_created)))
 
-    tokens = {t["tokenid"] for t in (pvesh("get", f"/access/users/{settings.user}/token") or [])}
+    # A fresh token every run: Proxmox shows a token's secret only when it is created.
+    tokens = {token["tokenid"] for token in (pvesh("get", f"/access/users/{settings.user}/token") or [])}
     if TOKEN in tokens:
         pvesh("delete", f"/access/users/{settings.user}/token/{TOKEN}")
-    res = pvesh("create", f"/access/users/{settings.user}/token/{TOKEN}", _quiet_secret=True, privsep=1,
-                comment=f"VALOR {settings.id} engine in the VALOR VM")
-    token_id, secret = res["full-tokenid"], res["value"]
+    created = pvesh("create", f"/access/users/{settings.user}/token/{TOKEN}", _quiet_secret=True, privsep=1,
+                    comment=f"VALOR {settings.id} engine in the VALOR VM")
+    token_id, secret = created["full-tokenid"], created["value"]
     rec.set("token", token_id)
     ui.ok(f"API token {token_id} (privilege-separated; secret goes only into the VALOR VM)")
 
@@ -149,23 +157,25 @@ def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
 
 def token_cannot_touch(node: str, vmid: int, token: dict) -> bool:
     """True when the token gets HTTP 403 for the given VM (checked against the local API)."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE           # loopback only
-    req = urllib.request.Request(f"https://127.0.0.1:8006/api2/json/nodes/{node}/qemu/{vmid}/config",
-                                 headers={"Authorization": f"PVEAPIToken={token['token_id']}={token['secret']}"})
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE           # loopback only
+    request = urllib.request.Request(f"https://127.0.0.1:8006/api2/json/nodes/{node}/qemu/{vmid}/config",
+                                     headers={"Authorization": f"PVEAPIToken={token['token_id']}={token['secret']}"})
     try:
-        with urllib.request.urlopen(req, context=ctx, timeout=15):
+        with urllib.request.urlopen(request, context=context, timeout=15):
             return False
     except urllib.error.HTTPError as e:
         return e.code == 403
 
 
 def remove(rec: Record, purge_user: bool = True) -> None:
-    o = rec.objects
-    user = o.get("token", "!").split("!")[0]
-    token = o.get("token")
-    for path, role in o.get("acls", []):
+    """Uninstall: revoke the ACLs, delete the token, the user (if VALOR made it) and VALOR's roles no other ACL
+    uses. Every step tolerates "already gone", so a half-finished uninstall can run again."""
+    objects = rec.objects
+    user = objects.get("token", "!").split("!")[0]
+    token = objects.get("token")
+    for path, role in objects.get("acls", []):
         for kind, who in (("tokens", token), ("users", user)):
             if who:
                 try:
@@ -177,13 +187,13 @@ def remove(rec: Record, purge_user: bool = True) -> None:
             pvesh("delete", f"/access/users/{user}/token/{token.split('!')[1]}")
         except CommandError:
             pass
-    if o.get("user_created") and purge_user:
+    if objects.get("user_created") and purge_user:
         try:
             pvesh("delete", f"/access/users/{user}")
         except CommandError:
             pass
     acl_roles = {acl["roleid"] for acl in (pvesh("get", "/access/acl") or [])}
-    for role in o.get("roles_created", []):
+    for role in objects.get("roles_created", []):
         if role not in acl_roles:
             try:
                 pvesh("delete", f"/access/roles/{role}")
@@ -195,11 +205,12 @@ def api_endpoint(facts: Facts) -> tuple[str, str | None]:
     """How the VALOR VM reaches and verifies the Proxmox API: (host, CA PEM to trust or None for system CAs)."""
     import socket
     ca_file = "/etc/pve/pve-root-ca.pem"
+    # First the cluster's own CA by IP (the usual case), then a public CA by the node's name (custom certificate).
     for host, cafile, name in ((facts.node_ip, ca_file, facts.node_ip), (facts.node_ip, None, socket.getfqdn())):
-        ctx = ssl.create_default_context(cafile=cafile) if cafile else ssl.create_default_context()
+        context = ssl.create_default_context(cafile=cafile) if cafile else ssl.create_default_context()
         try:
             with socket.create_connection((host, 8006), timeout=10) as sock:
-                with ctx.wrap_socket(sock, server_hostname=name):
+                with context.wrap_socket(sock, server_hostname=name):
                     pass
             return name, (open(cafile).read() if cafile else None)
         except (ssl.SSLError, OSError):
