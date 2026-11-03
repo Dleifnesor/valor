@@ -58,7 +58,7 @@ function blocks(lines: string[], fence?: Fence): ReactNode[] {
         else items[items.length - 1] += " " + lines[i].trim();   // a wrapped item
       }
       const List = ordered ? "ol" : "ul";
-      out.push(<List key={key}>{items.map((t, n) => <li key={n}>{inline(t)}</li>)}</List>);
+      out.push(<List key={key}>{items.map((item, n) => <li key={n}>{inline(item)}</li>)}</List>);
     } else {
       const para = [line.trim()];
       for (i++; i < lines.length && lines[i].trim() && !startsBlock(lines, i); i++) para.push(lines[i].trim());
@@ -69,27 +69,27 @@ function blocks(lines: string[], fence?: Fence): ReactNode[] {
 }
 
 function startsBlock(lines: string[], i: number) {
-  const l = lines[i];
-  return l.startsWith("```") || l.startsWith(">") || /^#{1,6}\s/.test(l) || LIST_ITEM.test(l) || l.trim().startsWith("<!--")
-    || /^(-{3,}|\*{3,}|_{3,})\s*$/.test(l) || (l.trim().startsWith("|") && TABLE_RULE.test(lines[i + 1] ?? ""));
+  const line = lines[i];
+  return line.startsWith("```") || line.startsWith(">") || /^#{1,6}\s/.test(line) || LIST_ITEM.test(line) || line.trim().startsWith("<!--")
+    || /^(-{3,}|\*{3,}|_{3,})\s*$/.test(line) || (line.trim().startsWith("|") && TABLE_RULE.test(lines[i + 1] ?? ""));
 }
 
 /** The cells of a table row; `\|` is a literal bar inside a cell. */
 function cells(row: string) {
   const parts = row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/);
-  return parts.map((c) => c.trim().replace(/\\\|/g, "|"));
+  return parts.map((cell) => cell.trim().replace(/\\\|/g, "|"));
 }
 
 function Table({ head, rows }: { head: string[]; rows: string[][] }) {
   // a header of empty cells ("| | |") is a key/value table: no header row, the keys in bold
-  const keyValue = head.every((h) => !h);
+  const keyValue = head.every((heading) => !heading);
   return (
     <div className="table-wrap">
       <table className={keyValue ? "md-kv" : undefined}>
-        {!keyValue && <thead><tr>{head.map((h, n) => <th key={n}>{inline(h)}</th>)}</tr></thead>}
+        {!keyValue && <thead><tr>{head.map((heading, n) => <th key={n}>{inline(heading)}</th>)}</tr></thead>}
         <tbody>
-          {rows.map((r, n) => (
-            <tr key={n}>{head.map((_, c) => <td key={c}>{inline(r[c] ?? "")}</td>)}</tr>
+          {rows.map((row, n) => (
+            <tr key={n}>{head.map((_, col) => <td key={col}>{inline(row[col] ?? "")}</td>)}</tr>
           ))}
         </tbody>
       </table>
@@ -103,17 +103,17 @@ const INLINE = /`([^`]+)`|\*\*(.+?)\*\*|(?<![\w*])\*(?!\s)(.+?)\*(?![\w*])|(?<!\
 function inline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
-  for (const m of text.matchAll(INLINE)) {
-    if (m.index > last) out.push(text.slice(last, m.index));
+  for (const match of text.matchAll(INLINE)) {
+    if (match.index > last) out.push(text.slice(last, match.index));
     const key = out.length;
-    if (m[1] !== undefined) out.push(<code key={key}>{m[1]}</code>);
-    else if (m[2] !== undefined) out.push(<strong key={key}>{inline(m[2])}</strong>);
-    else if (m[3] !== undefined || m[4] !== undefined) out.push(<em key={key}>{inline(m[3] ?? m[4])}</em>);
-    else if (m[7] !== undefined) out.push(m[7] === "✅"     // as the UI's own marks: emoji fonts are not everywhere
+    if (match[1] !== undefined) out.push(<code key={key}>{match[1]}</code>);
+    else if (match[2] !== undefined) out.push(<strong key={key}>{inline(match[2])}</strong>);
+    else if (match[3] !== undefined || match[4] !== undefined) out.push(<em key={key}>{inline(match[3] ?? match[4])}</em>);
+    else if (match[7] !== undefined) out.push(match[7] === "✅"     // as the UI's own marks: emoji fonts are not everywhere
       ? <span key={key} className="md-pass" title="pass">✓</span> : <span key={key} className="md-fail" title="fail">✗</span>);
-    else if (/^https?:\/\//.test(m[6])) out.push(<a key={key} href={m[6]} target="_blank" rel="noreferrer">{inline(m[5])}</a>);
-    else out.push(m[0]);                                   // only web links: no javascript: or other schemes
-    last = m.index + m[0].length;
+    else if (/^https?:\/\//.test(match[6])) out.push(<a key={key} href={match[6]} target="_blank" rel="noreferrer">{inline(match[5])}</a>);
+    else out.push(match[0]);                                   // only web links: no javascript: or other schemes
+    last = match.index + match[0].length;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;

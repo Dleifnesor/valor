@@ -6,9 +6,9 @@ export function useRoute(): string[] {
   const parse = () => (window.location.hash.replace(/^#\/?/, "") || "dashboard").split("/").map(decodeURIComponent);
   const [route, setRoute] = useState<string[]>(parse);
   useEffect(() => {
-    const on = () => setRoute(parse());
-    window.addEventListener("hashchange", on);
-    return () => window.removeEventListener("hashchange", on);
+    const onChange = () => setRoute(parse());
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
   }, []);
   return route;
 }
@@ -29,7 +29,7 @@ export function rangesChanged() {
 
 export function useStored(key: string, initial: boolean): [boolean, (v: boolean) => void] {
   const [value, setValue] = useState(() => {
-    try { const v = localStorage.getItem(key); return v === null ? initial : v === "1"; } catch { return initial; }
+    try { const stored = localStorage.getItem(key); return stored === null ? initial : stored === "1"; } catch { return initial; }
   });
   const set = (v: boolean) => {
     setValue(v);
@@ -56,9 +56,9 @@ export function useApi<T = any>(path: string | null, intervalMs?: number): Loade
     if (!path) return;
     const mine = ++seq.current;
     get<T>(path)
-      .then((d) => {
+      .then((body) => {
         if (mine === seq.current) {
-          setData(d);
+          setData(body);
           setError(null);
         }
       })
@@ -71,8 +71,8 @@ export function useApi<T = any>(path: string | null, intervalMs?: number): Loade
     setData(null);
     load();
     if (!intervalMs) return;
-    const t = window.setInterval(() => document.visibilityState === "visible" && load(), intervalMs);
-    return () => window.clearInterval(t);
+    const timer = window.setInterval(() => document.visibilityState === "visible" && load(), intervalMs);
+    return () => window.clearInterval(timer);
   }, [load, intervalMs, path]);
 
   return { data, error, loading, reload: load };
@@ -80,18 +80,18 @@ export function useApi<T = any>(path: string | null, intervalMs?: number): Loade
 
 export function when(ts: number | string | null | undefined): string {
   if (ts === null || ts === undefined || ts === "") return "–";
-  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
-  if (isNaN(d.getTime())) return String(ts);
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const date = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
+  if (isNaN(date.getTime())) return String(ts);
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 export function ago(ts: number | string | null | undefined): string {
   if (ts === null || ts === undefined || ts === "") return "–";
-  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
-  const s = Math.round((Date.now() - d.getTime()) / 1000);
-  if (isNaN(s)) return String(ts);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  const date = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  if (isNaN(seconds)) return String(ts);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
   return when(ts);
 }

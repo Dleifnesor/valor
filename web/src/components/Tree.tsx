@@ -10,7 +10,7 @@ import { openConsoleWindow, rangeMenu, vmMenu } from "./RangeActions";
 
 export type Selection = "root" | `range:${string}` | `vm:${string}/${string}`;
 
-const rangeState = (r: RangeRow) => !r.vms ? "" : r.running === r.vms ? "ok" : r.running ? "warn" : "off";
+const rangeState = (range: RangeRow) => !range.vms ? "" : range.running === range.vms ? "ok" : range.running ? "warn" : "off";
 
 export function ResourceTree({ ranges, instance, selected, canOperate }: {
   ranges: RangeRow[] | null; instance: string; selected: Selection | null; canOperate: boolean;
@@ -19,7 +19,7 @@ export function ResourceTree({ ranges, instance, selected, canOperate }: {
     try { return JSON.parse(localStorage.getItem("valor-tree-closed") ?? "[]"); } catch { return []; }
   });
   const toggle = (key: string) => {
-    const next = closed.includes(key) ? closed.filter((k) => k !== key) : [...closed, key];
+    const next = closed.includes(key) ? closed.filter((other) => other !== key) : [...closed, key];
     setClosed(next);
     try { localStorage.setItem("valor-tree-closed", JSON.stringify(next)); } catch { /* not kept */ }
   };
@@ -40,20 +40,20 @@ export function ResourceTree({ ranges, instance, selected, canOperate }: {
             newTab("dashboard"),
           ],
         }} />
-      {rootOpen && ranges?.map((r) => {
-        const open = !closed.includes(`range:${r.name}`);
-        const machines = r.machines ?? [];
+      {rootOpen && ranges?.map((range) => {
+        const open = !closed.includes(`range:${range.name}`);
+        const machines = range.machines ?? [];
         return (
-          <div key={r.name} role="group">
-            <Row depth={1} icon="ranges" label={r.name} state={rangeState(r)} selected={selected === `range:${r.name}`}
-              href={r.has_spec ? `ranges/${r.name}` : undefined} title={r.has_spec ? r.description : "This range has VMs but no spec"}
-              open={machines.length ? open : undefined} onToggle={() => toggle(`range:${r.name}`)}
-              menu={r.has_spec ? rangeMenu(r, canOperate) : undefined} />
-            {open && machines.map((m) => (
-              <Row key={m.vmid} depth={2} icon="vm" label={`${m.vmid} (${m.host})`} state={m.status === "running" ? "ok" : "off"}
-                selected={selected === `vm:${r.name}/${m.host}`} href={r.has_spec ? `ranges/${r.name}/vm/${m.host}` : undefined}
-                title={`${m.host}: ${m.status}`} menu={r.has_spec ? vmMenu(r.name, m.host, m, canOperate) : undefined}
-                onOpen={r.has_spec && canOperate ? () => openConsoleWindow(r.name, m.host) : undefined} />
+          <div key={range.name} role="group">
+            <Row depth={1} icon="ranges" label={range.name} state={rangeState(range)} selected={selected === `range:${range.name}`}
+              href={range.has_spec ? `ranges/${range.name}` : undefined} title={range.has_spec ? range.description : "This range has VMs but no spec"}
+              open={machines.length ? open : undefined} onToggle={() => toggle(`range:${range.name}`)}
+              menu={range.has_spec ? rangeMenu(range, canOperate) : undefined} />
+            {open && machines.map((machine) => (
+              <Row key={machine.vmid} depth={2} icon="vm" label={`${machine.vmid} (${machine.host})`} state={machine.status === "running" ? "ok" : "off"}
+                selected={selected === `vm:${range.name}/${machine.host}`} href={range.has_spec ? `ranges/${range.name}/vm/${machine.host}` : undefined}
+                title={`${machine.host}: ${machine.status}`} menu={range.has_spec ? vmMenu(range.name, machine.host, machine, canOperate) : undefined}
+                onOpen={range.has_spec && canOperate ? () => openConsoleWindow(range.name, machine.host) : undefined} />
             ))}
           </div>
         );

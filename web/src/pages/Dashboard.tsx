@@ -4,6 +4,9 @@ import { Card, ErrorBox, Icon, Loading, StateBadge } from "../components/ui";
 import { showMenu } from "../components/ContextMenu";
 import { rangeMenu } from "../components/RangeActions";
 
+// Datacenter -> Summary: VALOR's health checks, the range node's resources, every range with its build and
+// verification state, and the cluster settings VALOR builds with.
+
 interface Status {
   version: string;
   instance: string;
@@ -32,10 +35,10 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
   const { data, error, loading } = useApi<Status>("/api/status", 30000);
   if (loading && !data) return <Loading label="Checking the cluster…" />;
   if (!data) return <ErrorBox error={error} />;
-  const c = data.cluster;
-  const problems = data.checks.filter((x) => x.status === "problem");
-  const vms = (ranges ?? []).reduce((a, r) => a + r.vms, 0);
-  const running = (ranges ?? []).reduce((a, r) => a + r.running, 0);
+  const cluster = data.cluster;
+  const problems = data.checks.filter((check) => check.status === "problem");
+  const vms = (ranges ?? []).reduce((sum, range) => sum + range.vms, 0);
+  const running = (ranges ?? []).reduce((sum, range) => sum + range.running, 0);
   return (
     <>
       <div className="summary-row">
@@ -44,7 +47,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
             <span className={`health-mark ${problems.length ? "bad" : "ok"}`}><Icon name={problems.length ? "info" : "check"} size={30} /></span>
             <div>
               <b>{problems.length ? `${problems.length} of ${data.checks.length} checks need attention` : `All ${data.checks.length} checks pass`}</b>
-              {problems.length > 0 && <div className="error-text small">{problems.map((p) => p.name).join(", ")}</div>}
+              {problems.length > 0 && <div className="error-text small">{problems.map((check) => check.name).join(", ")}</div>}
               <div className="muted small">
                 Jobs: {data.jobs.running ? `${data.jobs.running} running` : "idle"}{data.jobs.queued ? `, ${data.jobs.queued} queued` : ""}
               </div>
@@ -53,17 +56,17 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
         </Card>
         <Card title="Guests">
           <dl className="kv">
-            <dt>Ranges</dt><dd>{ranges?.length ?? "–"} ({(ranges ?? []).filter((r) => r.vms).length} built)</dd>
+            <dt>Ranges</dt><dd>{ranges?.length ?? "–"} ({(ranges ?? []).filter((range) => range.vms).length} built)</dd>
             <dt>Running VMs</dt><dd><StateBadge state={running ? "ok" : "unknown"} label={String(running)} /></dd>
             <dt>Stopped VMs</dt><dd><StateBadge state="unknown" label={String(vms - running)} /></dd>
           </dl>
         </Card>
         <Card title="Resources">
-          {c ? (
+          {cluster ? (
             <dl className="kv">
-              <dt>Range node</dt><dd>{c.node} · {c.cpu_threads} CPU threads</dd>
-              <dt>Memory</dt><dd>{gib(c.memory_free_mib)} free of {gib(c.memory_total_mib)}</dd>
-              <dt>Storage</dt><dd>{c.storage.available_gib.toFixed(0)} GiB free on {c.storage.id}</dd>
+              <dt>Range node</dt><dd>{cluster.node} · {cluster.cpu_threads} CPU threads</dd>
+              <dt>Memory</dt><dd>{gib(cluster.memory_free_mib)} free of {gib(cluster.memory_total_mib)}</dd>
+              <dt>Storage</dt><dd>{cluster.storage.available_gib.toFixed(0)} GiB free on {cluster.storage.id}</dd>
             </dl>
           ) : <div className="muted">The cluster did not answer.</div>}
         </Card>
@@ -78,24 +81,24 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
             <table>
               <thead><tr><th>Name</th><th>Description</th><th>Layout</th><th>VMs</th><th>Last build</th><th>Verification</th></tr></thead>
               <tbody>
-                {ranges.map((r) => (
-                  <tr key={r.name} className={r.has_spec ? "clickable" : ""} onClick={() => r.has_spec && go(`ranges/${r.name}`)}
-                    onContextMenu={(e) => r.has_spec && showMenu(e, rangeMenu(r, canOperate))}>
+                {ranges.map((range) => (
+                  <tr key={range.name} className={range.has_spec ? "clickable" : ""} onClick={() => range.has_spec && go(`ranges/${range.name}`)}
+                    onContextMenu={(e) => range.has_spec && showMenu(e, rangeMenu(range, canOperate))}>
                     <td className="nowrap">
-                      <b>{r.name}</b>
-                      {!r.has_spec && <span className="badge warn" style={{ marginLeft: 8 }}>no spec</span>}
-                      {r.version && r.deployed_version && r.version !== r.deployed_version && (
+                      <b>{range.name}</b>
+                      {!range.has_spec && <span className="badge warn" style={{ marginLeft: 8 }}>no spec</span>}
+                      {range.version && range.deployed_version && range.version !== range.deployed_version && (
                         <span className="badge info" style={{ marginLeft: 8 }} title="The spec changed since the last build">changed</span>
                       )}
                     </td>
-                    <td className="fill"><span className="clip">{r.error ?? r.description}</span></td>
-                    <td className="nowrap">{r.segments ?? "–"} segments · {r.hosts ?? "–"} hosts</td>
-                    <td className="nowrap">{r.vms ? <StateBadge state={r.running === r.vms ? "ok" : r.running ? "warn" : "unknown"}
-                      label={`${r.running}/${r.vms} running`} /> : <span className="muted">not built</span>}</td>
-                    <td className="nowrap">{r.last_apply ? <><StateBadge state={r.last_apply.ok ? "ok" : "failed"}
-                      label={r.last_apply.ok ? "succeeded" : "failed"} /> <span className="muted small">· {ago(r.last_apply.started)}</span></> : "–"}</td>
-                    <td className="nowrap">{r.last_verify ? <StateBadge state={r.last_verify.ok ? "ok" : "failed"}
-                      label={`${r.last_verify.ok ? "passed" : "failed"} · ${r.last_verify.summary?.tests_passed}/${r.last_verify.summary?.tests_total} tests`} /> : "–"}</td>
+                    <td className="fill"><span className="clip">{range.error ?? range.description}</span></td>
+                    <td className="nowrap">{range.segments ?? "–"} segments · {range.hosts ?? "–"} hosts</td>
+                    <td className="nowrap">{range.vms ? <StateBadge state={range.running === range.vms ? "ok" : range.running ? "warn" : "unknown"}
+                      label={`${range.running}/${range.vms} running`} /> : <span className="muted">not built</span>}</td>
+                    <td className="nowrap">{range.last_apply ? <><StateBadge state={range.last_apply.ok ? "ok" : "failed"}
+                      label={range.last_apply.ok ? "succeeded" : "failed"} /> <span className="muted small">· {ago(range.last_apply.started)}</span></> : "–"}</td>
+                    <td className="nowrap">{range.last_verify ? <StateBadge state={range.last_verify.ok ? "ok" : "failed"}
+                      label={`${range.last_verify.ok ? "passed" : "failed"} · ${range.last_verify.summary?.tests_passed}/${range.last_verify.summary?.tests_total} tests`} /> : "–"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -108,30 +111,30 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
         <Card title="Health checks" bodyClass="">
           <table>
             <tbody>
-              {data.checks.map((x) => (
-                <tr key={x.name}>
-                  <td className="nowrap"><StateBadge state={x.status === "ok" ? "ok" : x.status === "problem" ? "failed" : "unknown"} label={x.name} /></td>
+              {data.checks.map((check) => (
+                <tr key={check.name}>
+                  <td className="nowrap"><StateBadge state={check.status === "ok" ? "ok" : check.status === "problem" ? "failed" : "unknown"} label={check.name} /></td>
                   <td className="fill">
-                    {x.detail}
-                    {x.hint && <div className="muted small">{x.hint}</div>}
+                    {check.detail}
+                    {check.hint && <div className="muted small">{check.hint}</div>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </Card>
-        {c && (
+        {cluster && (
           <Card title="What VALOR uses on the cluster">
             <dl className="kv">
-              <dt>Segment bridge</dt><dd className="mono">{c.segment_bridge.name} (VLANs {c.segment_bridge.usable_vlans})</dd>
-              <dt>Uplink bridge</dt><dd className="mono">{c.uplink_bridge.name}</dd>
-              <dt>Reserved networks</dt><dd className="mono">{c.reserved_networks.join(", ") || "–"}</dd>
-              <dt>Default OS</dt><dd>{c.default_os}</dd>
+              <dt>Segment bridge</dt><dd className="mono">{cluster.segment_bridge.name} (VLANs {cluster.segment_bridge.usable_vlans})</dd>
+              <dt>Uplink bridge</dt><dd className="mono">{cluster.uplink_bridge.name}</dd>
+              <dt>Reserved networks</dt><dd className="mono">{cluster.reserved_networks.join(", ") || "–"}</dd>
+              <dt>Default OS</dt><dd>{cluster.default_os}</dd>
               <dt>Templates</dt>
               <dd>
                 <div className="row" style={{ gap: 4, columnGap: 12 }}>
-                  {Object.entries(c.templates).map(([os, t]) => (
-                    <StateBadge key={os} state={t.present ? "ok" : "unknown"} label={`${os}${t.present ? "" : " (not built)"}`} />
+                  {Object.entries(cluster.templates).map(([os, template]) => (
+                    <StateBadge key={os} state={template.present ? "ok" : "unknown"} label={`${os}${template.present ? "" : " (not built)"}`} />
                   ))}
                 </div>
               </dd>

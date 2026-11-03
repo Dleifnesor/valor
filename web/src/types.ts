@@ -1,3 +1,6 @@
+// The API's shapes that several pages share: users and the session, the topology the maps draw, plans, jobs and
+// the range list. Types used by one page only live in that page.
+
 export type Role = "admin" | "operator" | "viewer";
 
 export interface User {

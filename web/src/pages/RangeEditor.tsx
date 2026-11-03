@@ -5,6 +5,9 @@ import { go, useApi } from "../hooks";
 import { Card, ErrorBox, Loading } from "../components/ui";
 import { TopologyMap } from "../components/Topology";
 
+// The spec editor for a new range or an existing one: YAML on the left, VALOR's validation and the catalog (OSes,
+// roles, baselines) on the right. Saving only stores the spec; building it goes through Plan.
+
 const EXAMPLE = `apiVersion: valor/v1
 name: demo
 description: Two segments - a web server in a DMZ that may reach a database in a LAN.
@@ -130,16 +133,16 @@ export function RangeEditor({ name, canEdit }: { name?: string; canEdit: boolean
               {!check.ok && (
                 <div className="alert error">
                   <ul style={{ margin: 0 }}>
-                    {check.errors.map((e, i) => (
+                    {check.errors.map((error, i) => (
                       <li key={i}>
-                        {e.location ? <b>{e.location}: </b> : null}{e.message}{e.hint ? ` - ${e.hint}` : ""}
-                        {Array.isArray(e.details) && <ul>{e.details.map((d: any, j: number) => <li key={j}>{d.location}: {d.message}</li>)}</ul>}
+                        {error.location ? <b>{error.location}: </b> : null}{error.message}{error.hint ? ` - ${error.hint}` : ""}
+                        {Array.isArray(error.details) && <ul>{error.details.map((detail: any, j: number) => <li key={j}>{detail.location}: {detail.message}</li>)}</ul>}
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
-              {check.warnings?.map((w, i) => <div key={i} className="alert warn">{w.message}</div>)}
+              {check.warnings?.map((warning, i) => <div key={i} className="alert warn">{warning.message}</div>)}
             </div>
           </Card>
         )}
@@ -153,11 +156,11 @@ export function RangeEditor({ name, canEdit }: { name?: string; canEdit: boolean
           <Card title="What you can use">
             <dl className="kv">
               <dt>Operating systems</dt>
-              <dd>{catalog.data.os.map((o) => `${o.name}${o.template ? "" : " (template not built)"}`).join(", ")} - default {catalog.data.default_os}</dd>
+              <dd>{catalog.data.os.map((os) => `${os.name}${os.template ? "" : " (template not built)"}`).join(", ")} - default {catalog.data.default_os}</dd>
               <dt>Roles</dt>
-              <dd>{catalog.data.roles.map((r) => <div key={r.name}><b>{r.name}</b> <span className="muted">{r.description}</span>
-                {Object.keys(r.params || {}).length > 0 && <span className="muted small"> · params: {Object.keys(r.params).join(", ")}</span>}</div>)}</dd>
-              <dt>Baselines</dt><dd>{catalog.data.baselines.map((b) => `${b.name} (${b.controls} controls)`).join(", ")}, or none</dd>
+              <dd>{catalog.data.roles.map((role) => <div key={role.name}><b>{role.name}</b> <span className="muted">{role.description}</span>
+                {Object.keys(role.params || {}).length > 0 && <span className="muted small"> · params: {Object.keys(role.params).join(", ")}</span>}</div>)}</dd>
+              <dt>Baselines</dt><dd>{catalog.data.baselines.map((baseline) => `${baseline.name} (${baseline.controls} controls)`).join(", ")}, or none</dd>
               <dt>VLANs</dt><dd>{catalog.data.limits.vlan_min}-{catalog.data.limits.vlan_max}</dd>
               <dt>Avoid networks</dt><dd className="mono">{catalog.data.limits.reserved_networks.join(", ") || "–"}</dd>
             </dl>

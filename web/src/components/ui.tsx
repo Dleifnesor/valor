@@ -1,6 +1,9 @@
 import { Component, ReactNode, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 
+// Small building blocks every page uses: icons and the logo, modals, error boxes and spinners, cards, state badges,
+// the object panel (View) with its section menu, and buttons with drop-down menus.
+
 export type IconName =
   | "dashboard" | "ranges" | "jobs" | "users" | "audit" | "settings" | "bell" | "logout" | "menu" | "plus"
   | "refresh" | "shield" | "account" | "theme" | "disc" | "copy" | "chat" | "chats" | "server" | "vm" | "play"
@@ -103,8 +106,8 @@ export function ErrorBox({ error }: { error: ApiError | Error | string | null | 
       {data?.hint && <div className="small">{data.hint}</div>}
       {details.length > 0 && (
         <ul>
-          {details.slice(0, 12).map((d, i) => (
-            <li key={i}>{typeof d === "string" ? d : `${d.location ? d.location + ": " : ""}${d.message ?? JSON.stringify(d)}`}</li>
+          {details.slice(0, 12).map((detail, i) => (
+            <li key={i}>{typeof detail === "string" ? detail : `${detail.location ? detail.location + ": " : ""}${detail.message ?? JSON.stringify(detail)}`}</li>
           ))}
         </ul>
       )}
@@ -167,10 +170,10 @@ export function View({ title, tools, menu, active, children, fill }: {
       <div className={`view-main${menu ? " with-menu" : ""}`}>
         {menu && (
           <nav className="view-menu" aria-label="Sections">
-            {menu.map((m) => (
-              <a key={m.id} href={`#/${m.href}`} className={`${m.id === active ? "active" : ""}${m.sub ? " sub" : ""}`}
-                aria-current={m.id === active ? "page" : undefined}>
-                <Icon name={m.icon} size={16} /> {m.label}
+            {menu.map((entry) => (
+              <a key={entry.id} href={`#/${entry.href}`} className={`${entry.id === active ? "active" : ""}${entry.sub ? " sub" : ""}`}
+                aria-current={entry.id === active ? "page" : undefined}>
+                <Icon name={entry.icon} size={16} /> {entry.label}
               </a>
             ))}
           </nav>
@@ -186,15 +189,15 @@ export interface MenuAction { label: string; icon?: IconName; onClick: () => voi
 export type MenuItems = (MenuAction | "-" | false)[];
 
 /** The entries of a menu: a DropButton's or a right-click menu's. */
-export function MenuList({ items, onPick }: { items: MenuItems; onPick: (a: MenuAction) => void }) {
+export function MenuList({ items, onPick }: { items: MenuItems; onPick: (action: MenuAction) => void }) {
   const shown: (MenuAction | "-")[] = [];
   for (const i of items) if (i && (i !== "-" || (shown.length && shown[shown.length - 1] !== "-"))) shown.push(i);
   if (shown[shown.length - 1] === "-") shown.pop();
   return (
     <>
-      {shown.map((i, n) => i === "-" ? <hr key={n} className="menu-sep" /> : (
-        <button key={n} role="menuitem" className={`menu-item${i.danger ? " danger" : ""}`} disabled={i.disabled} onClick={() => onPick(i)}>
-          {i.icon && <Icon name={i.icon} size={15} />} {i.label}
+      {shown.map((item, n) => item === "-" ? <hr key={n} className="menu-sep" /> : (
+        <button key={n} role="menuitem" className={`menu-item${item.danger ? " danger" : ""}`} disabled={item.disabled} onClick={() => onPick(item)}>
+          {item.icon && <Icon name={item.icon} size={15} />} {item.label}
         </button>
       ))}
     </>
@@ -227,7 +230,7 @@ export function DropButton({ label, icon, items, disabled }: { label: string; ic
       </button>
       {open && (
         <div className="popover menu" role="menu">
-          <MenuList items={items} onPick={(i) => { setOpen(false); i.onClick(); }} />
+          <MenuList items={items} onPick={(item) => { setOpen(false); item.onClick(); }} />
         </div>
       )}
     </div>

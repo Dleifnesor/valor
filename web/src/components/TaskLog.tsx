@@ -6,7 +6,7 @@ import { Menu, newTab, showMenu } from "./ContextMenu";
 
 // The panel along the bottom of every page, as in Proxmox: the latest jobs (Tasks) and VALOR's notifications.
 
-export const jobTarget = (t: Record<string, any>) => t.range ?? String(t.spec ?? "").replace(/\.yaml$/, "");
+export const jobTarget = (target: Record<string, any>) => target.range ?? String(target.spec ?? "").replace(/\.yaml$/, "");
 /** Who started a job: web:<user>, assistant:<user>:<chat> (rebuild after an automatic fix), rerun:<origin>. */
 export const who = (origin: string): string => origin.startsWith("rerun:") ? `${who(origin.slice(6))}, run again by VALOR`
   : origin.startsWith("assistant:") ? `the assistant (for ${origin.split(":")[1]})` : origin.replace(/^web:/, "");
@@ -17,19 +17,19 @@ const KIND: Record<string, string> = {
   wg_rotate: "New WireGuard keys",
 };
 
-export const jobTitle = (j: JobSummary) =>
-  `${KIND[j.kind] ?? j.kind}${j.target.verify ? " + verify" : ""}${j.target.action ? ` (${j.target.action})` : ""}`;
+export const jobTitle = (job: JobSummary) =>
+  `${KIND[job.kind] ?? job.kind}${job.target.verify ? " + verify" : ""}${job.target.action ? ` (${job.target.action})` : ""}`;
 
-function taskMenu(j: JobSummary): Menu {
-  const range = jobTarget(j.target);
+function taskMenu(job: JobSummary): Menu {
+  const range = jobTarget(job.target);
   return {
-    title: `${jobTitle(j)}${range ? ` · ${range}` : ""}`,
+    title: `${jobTitle(job)}${range ? ` · ${range}` : ""}`,
     items: [
-      { label: "Open task", icon: "jobs", onClick: () => openTask(j.id) },
+      { label: "Open task", icon: "jobs", onClick: () => openTask(job.id) },
       !!range && { label: `Open range '${range}'`, icon: "ranges", onClick: () => go(`ranges/${range}`) },
-      newTab(`jobs/${j.id}`),
+      newTab(`jobs/${job.id}`),
       "-",
-      { label: "Copy task ID", icon: "copy", onClick: () => navigator.clipboard?.writeText(j.id) },
+      { label: "Copy task ID", icon: "copy", onClick: () => navigator.clipboard?.writeText(job.id) },
     ],
   };
 }
@@ -43,17 +43,17 @@ export function TaskTable({ jobs }: { jobs: JobSummary[] }) {
         <tr><th>Start time</th><th>End time</th><th>Range</th><th>User</th><th>Description</th><th>Status</th></tr>
       </thead>
       <tbody>
-        {jobs.map((j) => (
-          <tr key={j.id} className={`clickable${j.state === "running" ? " running" : ""}${j.state === "failed" ? " failed" : ""}`}
-            onClick={() => openTask(j.id)} onContextMenu={(e) => showMenu(e, taskMenu(j))}>
-            <td className="nowrap">{when(j.created)}</td>
-            <td className="nowrap">{j.finished ? when(j.finished) : ""}</td>
-            <td>{jobTarget(j.target)}</td>
-            <td>{j.origin ? who(j.origin) : ""}</td>
-            <td className="fill"><span className="clip">{jobTitle(j)}</span></td>
+        {jobs.map((job) => (
+          <tr key={job.id} className={`clickable${job.state === "running" ? " running" : ""}${job.state === "failed" ? " failed" : ""}`}
+            onClick={() => openTask(job.id)} onContextMenu={(e) => showMenu(e, taskMenu(job))}>
+            <td className="nowrap">{when(job.created)}</td>
+            <td className="nowrap">{job.finished ? when(job.finished) : ""}</td>
+            <td>{jobTarget(job.target)}</td>
+            <td>{job.origin ? who(job.origin) : ""}</td>
+            <td className="fill"><span className="clip">{jobTitle(job)}</span></td>
             <td className="nowrap">
-              {j.state === "succeeded" ? "OK" : j.state === "failed" ? <span className="error-text">{j.error ? `failed: ${j.error}` : "failed"}</span>
-                : <StateBadge state={j.state} />}
+              {job.state === "succeeded" ? "OK" : job.state === "failed" ? <span className="error-text">{job.error ? `failed: ${job.error}` : "failed"}</span>
+                : <StateBadge state={job.state} />}
             </td>
           </tr>
         ))}
@@ -96,12 +96,12 @@ export function TaskLog({ open, onOpen, tab, onTab }: {
             <table>
               <thead><tr><th>Time</th><th>Message</th><th>Details</th><th /></tr></thead>
               <tbody>
-                {notes.data.items.map((n) => (
-                  <tr key={n.id} className={n.read ? "" : "unread"}>
-                    <td className="nowrap">{ago(n.ts)}</td>
-                    <td className="nowrap"><StateBadge state={LEVEL[n.level]} label={n.title} /></td>
-                    <td className="fill"><span className="clip" title={n.body}>{n.body}</span></td>
-                    <td className="nowrap">{n.link && n.link.includes("#/") && <a href={n.link.slice(n.link.indexOf("#/"))}>Open</a>}</td>
+                {notes.data.items.map((note) => (
+                  <tr key={note.id} className={note.read ? "" : "unread"}>
+                    <td className="nowrap">{ago(note.ts)}</td>
+                    <td className="nowrap"><StateBadge state={LEVEL[note.level]} label={note.title} /></td>
+                    <td className="fill"><span className="clip" title={note.body}>{note.body}</span></td>
+                    <td className="nowrap">{note.link && note.link.includes("#/") && <a href={note.link.slice(note.link.indexOf("#/"))}>Open</a>}</td>
                   </tr>
                 ))}
               </tbody>

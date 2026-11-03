@@ -21,6 +21,10 @@ import { Blueprints } from "./pages/Blueprints";
 import { Builder } from "./pages/Builder";
 import { Chats } from "./pages/Chats";
 
+// The app's root: who is signed in decides what shows - the sign-in steps, a console window of its own (opened
+// from the tree), or the main shell laid out like Proxmox VE. Pages are picked from the URL's hash (#/ranges/web,
+// #/jobs/<id>, ...), see useRoute in hooks.ts.
+
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [checked, setChecked] = useState(false);
@@ -28,9 +32,9 @@ export default function App() {
 
   const refreshMe = useCallback(() => {
     get<Me>("/api/auth/me")
-      .then((m) => {
-        setCsrf(m.csrf);
-        setMe(m);
+      .then((session) => {
+        setCsrf(session.csrf);
+        setMe(session);
       })
       .catch(() => setMe(null))
       .finally(() => setChecked(true));
@@ -46,9 +50,9 @@ export default function App() {
     return (
       <SignIn
         me={me}
-        onSignedIn={(m) => {
-          setCsrf(m.csrf);
-          setMe(m);
+        onSignedIn={(session) => {
+          setCsrf(session.csrf);
+          setMe(session);
         }}
       />
     );
@@ -65,7 +69,7 @@ const NARROW = "(max-width: 860px)";
 
 // The layout of Proxmox VE's web UI: a header, the resource tree on the left, the selected object's panel on the
 // right and the task list along the bottom.
-function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
+function Shell({ me, setMe }: { me: Me; setMe: (session: Me | null) => void }) {
   const route = useRoute();
   const ranges = useApi<{ ranges: RangeRow[]; cluster_error: string | null }>("/api/ranges", 10000);
   const [treeOpen, setTreeOpen] = useState(false);                                // phones: the slide-in tree
@@ -82,9 +86,9 @@ function Shell({ me, setMe }: { me: Me; setMe: (m: Me | null) => void }) {
     return () => window.removeEventListener("valor-ranges", ranges.reload);
   }, [ranges.reload]);
   useEffect(() => {
-    const on = (e: Event) => setTask((e as CustomEvent<string>).detail);
-    window.addEventListener("valor-task", on);
-    return () => window.removeEventListener("valor-task", on);
+    const onTask = (e: Event) => setTask((e as CustomEvent<string>).detail);
+    window.addEventListener("valor-task", onTask);
+    return () => window.removeEventListener("valor-task", onTask);
   }, []);
   useEffect(() => {
     if (!treeOpen) return;
@@ -187,7 +191,7 @@ function Datacenter({ me, route, ranges }: { me: Me; route: string[]; ranges: Ra
     menu.push(
       { id: "users", label: "Users", icon: "users", href: "users" },
       { id: "audit", label: "Audit log", icon: "audit", href: "audit" },
-      ...SETTINGS_TABS.map((t) => ({ ...t, href: `settings/${t.id}` })),
+      ...SETTINGS_TABS.map((tab) => ({ ...tab, href: `settings/${tab.id}` })),
     );
   }
   const [p0, p1] = route;
@@ -200,7 +204,7 @@ function Datacenter({ me, route, ranges }: { me: Me; route: string[]; ranges: Ra
   else if (p0 === "users" && isAdmin) { active = "users"; page = <Users me={me} />; }
   else if (p0 === "audit" && isAdmin) { active = "audit"; page = <Audit />; }
   else if (p0 === "settings" && isAdmin) {
-    active = SETTINGS_TABS.some((t) => t.id === p1) ? p1 : "notifications";
+    active = SETTINGS_TABS.some((tab) => tab.id === p1) ? p1 : "notifications";
     page = <Settings tab={active as SettingsTab} />;
   } else page = <Dashboard ranges={ranges} canOperate={canOperate} />;
   return <View title={`Datacenter (${me.instance || "VALOR"})`} menu={menu} active={active}>{page}</View>;
@@ -208,29 +212,29 @@ function Datacenter({ me, route, ranges }: { me: Me; route: string[]; ranges: Ra
 
 /** Search in the header: ranges and VMs by name, VMID or description. */
 function Search({ ranges }: { ranges: RangeRow[] }) {
-  const [q, setQ] = useState("");
+  const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [pick, setPick] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const on = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("mousedown", on);
-    return () => document.removeEventListener("mousedown", on);
+    const onOutsideClick = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
   }, [open]);
-  const needle = q.trim().toLowerCase();
-  const items = ranges.filter((r) => r.has_spec).flatMap((r) => [
-    { type: "Range", name: r.name, about: r.description ?? "", href: `ranges/${r.name}` },
-    ...(r.machines ?? []).map((m) => ({ type: "VM", name: `${m.vmid} (${m.host})`, about: `range ${r.name} · ${m.status}`,
-      href: `ranges/${r.name}/vm/${m.host}` })),
+  const needle = query.trim().toLowerCase();
+  const items = ranges.filter((range) => range.has_spec).flatMap((range) => [
+    { type: "Range", name: range.name, about: range.description ?? "", href: `ranges/${range.name}` },
+    ...(range.machines ?? []).map((machine) => ({ type: "VM", name: `${machine.vmid} (${machine.host})`, about: `range ${range.name} · ${machine.status}`,
+      href: `ranges/${range.name}/vm/${machine.host}` })),
   ]);
-  const hits = needle ? items.filter((i) => `${i.name} ${i.about}`.toLowerCase().includes(needle)).slice(0, 12) : [];
-  const choose = (href: string) => { go(href); setQ(""); setOpen(false); };
+  const hits = needle ? items.filter((item) => `${item.name} ${item.about}`.toLowerCase().includes(needle)).slice(0, 12) : [];
+  const choose = (href: string) => { go(href); setQuery(""); setOpen(false); };
   return (
     <div className="search" ref={ref}>
       <Icon name="search" size={15} />
-      <input name="search" type="search" placeholder="Search" value={q} aria-label="Search ranges and VMs" autoComplete="off"
-        onChange={(e) => { setQ(e.target.value); setOpen(true); setPick(0); }} onFocus={() => setOpen(true)}
+      <input name="search" type="search" placeholder="Search" value={query} aria-label="Search ranges and VMs" autoComplete="off"
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setPick(0); }} onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") { e.preventDefault(); setPick(Math.min(pick + 1, hits.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setPick(Math.max(pick - 1, 0)); }
@@ -243,10 +247,10 @@ function Search({ ranges }: { ranges: RangeRow[] }) {
             <table>
               <thead><tr><th>Type</th><th>Name</th><th>Description</th></tr></thead>
               <tbody>
-                {hits.map((h, i) => (
-                  <tr key={h.href} className={`clickable${i === pick ? " selected" : ""}`} role="option" aria-selected={i === pick}
-                    onMouseDown={(e) => { e.preventDefault(); choose(h.href); }}>
-                    <td>{h.type}</td><td className="nowrap"><b>{h.name}</b></td><td className="fill"><span className="clip">{h.about}</span></td>
+                {hits.map((hit, i) => (
+                  <tr key={hit.href} className={`clickable${i === pick ? " selected" : ""}`} role="option" aria-selected={i === pick}
+                    onMouseDown={(e) => { e.preventDefault(); choose(hit.href); }}>
+                    <td>{hit.type}</td><td className="nowrap"><b>{hit.name}</b></td><td className="fill"><span className="clip">{hit.about}</span></td>
                   </tr>
                 ))}
               </tbody>

@@ -25,15 +25,15 @@ interface JobDetailData extends JobSummary {
   result?: Record<string, any>;
 }
 
-function eventLine(e: JobDetailData["recent_events"][number]): [string, string] {
-  switch (e.event) {
-    case "step_start": return ["…", `${e.step}${e.host ? ` [${e.host}]` : ""}`];
-    case "step_done": return ["✓", `${e.step}${e.host ? ` [${e.host}]` : ""}${e.seconds !== undefined ? ` (${e.seconds} s)` : ""}`];
-    case "step_failed": return ["✗", `${e.step}${e.host ? ` [${e.host}]` : ""}: ${e.error ?? ""} ${e.message ?? ""}`];
-    case "spec": return ["•", `spec ${(e as any).range} version ${(e as any).version}`];
-    case "test": return [e.passed ? "✓" : "✗", `test: ${e.name}`];
-    case "baseline": return ["•", `baseline ${e.host}: ${e.passed}/${e.total} controls pass`];
-    default: return ["•", `${e.event} ${JSON.stringify({ ...e, t: undefined, event: undefined })}`];
+function eventLine(entry: JobDetailData["recent_events"][number]): [string, string] {
+  switch (entry.event) {
+    case "step_start": return ["…", `${entry.step}${entry.host ? ` [${entry.host}]` : ""}`];
+    case "step_done": return ["✓", `${entry.step}${entry.host ? ` [${entry.host}]` : ""}${entry.seconds !== undefined ? ` (${entry.seconds} s)` : ""}`];
+    case "step_failed": return ["✗", `${entry.step}${entry.host ? ` [${entry.host}]` : ""}: ${entry.error ?? ""} ${entry.message ?? ""}`];
+    case "spec": return ["•", `spec ${(entry as any).range} version ${(entry as any).version}`];
+    case "test": return [entry.passed ? "✓" : "✗", `test: ${entry.name}`];
+    case "baseline": return ["•", `baseline ${entry.host}: ${entry.passed}/${entry.total} controls pass`];
+    default: return ["•", `${entry.event} ${JSON.stringify({ ...entry, t: undefined, event: undefined })}`];
   }
 }
 
@@ -47,7 +47,7 @@ function visible(events: JobDetailData["recent_events"]) {
 export function JobDetail({ id }: { id: string }) {
   const { data, error } = useApi<JobDetailData>(`/api/jobs/${id}?tail=400`, 2500);
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />;
-  const r = data.result;
+  const result = data.result;
   const name = jobTarget(data.target);
   return (
     <>
@@ -58,32 +58,32 @@ export function JobDetail({ id }: { id: string }) {
         <span className="grow" />
         {name && <a className="btn" href={`#/ranges/${name}`}>Open range</a>}
       </div>
-      {r && !r.ok && (
+      {result && !result.ok && (
         <div className="alert error">
-          <b>{r.error}</b>: {r.message}
-          {r.step && <div className="small">Step: {r.step}{r.host ? ` on ${r.host}` : ""}</div>}
-          {r.details && <pre className="mono small job-details">{String(r.details).slice(-2000)}</pre>}
-          {r.hint && <div className="small">Hint: {r.hint}</div>}
+          <b>{result.error}</b>: {result.message}
+          {result.step && <div className="small">Step: {result.step}{result.host ? ` on ${result.host}` : ""}</div>}
+          {result.details && <pre className="mono small job-details">{String(result.details).slice(-2000)}</pre>}
+          {result.hint && <div className="small">Hint: {result.hint}</div>}
         </div>
       )}
       {data.kind === "apply" && data.state === "failed" && name && <FixWithAssistant id={id} range={name} />}
-      {r && r.ok && (
+      {result && result.ok && (
         <div className="alert ok">
-          Finished{r.seconds ? ` in ${r.seconds} s` : ""}.
-          {r.verify && ` Verification ${r.verify.ok ? "passed" : "failed"}: tests ${r.verify.summary.tests_passed}/${r.verify.summary.tests_total}, baseline ${r.verify.summary.baseline_passed}/${r.verify.summary.baseline_total}.`}
-          {r.summary && !r.verify && ` Tests ${r.summary.tests_passed}/${r.summary.tests_total}, baseline ${r.summary.baseline_passed}/${r.summary.baseline_total}.`}
-          {r.changed === false && " No changes were needed."}
+          Finished{result.seconds ? ` in ${result.seconds} s` : ""}.
+          {result.verify && ` Verification ${result.verify.ok ? "passed" : "failed"}: tests ${result.verify.summary.tests_passed}/${result.verify.summary.tests_total}, baseline ${result.verify.summary.baseline_passed}/${result.verify.summary.baseline_total}.`}
+          {result.summary && !result.verify && ` Tests ${result.summary.tests_passed}/${result.summary.tests_total}, baseline ${result.summary.baseline_passed}/${result.summary.baseline_total}.`}
+          {result.changed === false && " No changes were needed."}
         </div>
       )}
       <Card title={data.state === "running" ? `Running: ${data.progress.current ?? "starting"}` : "Events"}>
         {!data.recent_events.length ? <div className="muted">Waiting for the worker…</div> : (
           <div className="events">
-            {visible(data.recent_events).map((e, i) => {
-              const [mark, text] = eventLine(e);
+            {visible(data.recent_events).map((entry, i) => {
+              const [mark, text] = eventLine(entry);
               const cls = mark === "✓" ? "var(--ok)" : mark === "✗" ? "var(--bad)" : "var(--muted)";
               return (
                 <div key={i} className="ev">
-                  <span className="muted">{e.t}</span>
+                  <span className="muted">{entry.t}</span>
                   <span style={{ color: cls }}>{mark}</span>
                   <span>{text}</span>
                 </div>
@@ -114,9 +114,9 @@ function FixWithAssistant({ id, range }: { id: string; range: string }) {
         {chats.length ? "The assistant is working on this failure in the range's chat - it looks inside the VMs, "
           + "fixes the cause and (if set so) rebuilds the range." : "The assistant can find the cause and fix it."}
       </span>
-      {chats.map((c) => (
-        <button key={c.id} className="btn small primary" onClick={() => open(c.id)}>
-          Open the chat{chats.length > 1 ? ` (${c.owner})` : ""}
+      {chats.map((chat) => (
+        <button key={chat.id} className="btn small primary" onClick={() => open(chat.id)}>
+          Open the chat{chats.length > 1 ? ` (${chat.owner})` : ""}
         </button>
       ))}
       {!chats.length && <button className="btn small primary" disabled={busy} onClick={ask}>Ask the assistant to fix it</button>}

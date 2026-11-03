@@ -3,9 +3,12 @@ import { ApiError, post, setCsrf } from "../api";
 import { Me } from "../types";
 import { ErrorBox, Logo } from "../components/ui";
 
+// Signing in, one step at a time: password, then the authenticator code - or, the first time, setting up the
+// authenticator and saving the recovery codes - and a new password when the account must change it.
+
 type Step = "password" | "mfa" | "enroll" | "codes" | "change";
 
-export function SignIn({ me, onSignedIn }: { me: Me | null; onSignedIn: (m: Me) => void }) {
+export function SignIn({ me, onSignedIn }: { me: Me | null; onSignedIn: (session: Me) => void }) {
   const initial: Step = me?.stage === "mfa" ? "mfa" : me?.stage === "enroll" ? "enroll"
     : me?.user.must_change_password ? "change" : "password";
   const [step, setStep] = useState<Step>(initial);
@@ -25,16 +28,16 @@ export function SignIn({ me, onSignedIn }: { me: Me | null; onSignedIn: (m: Me) 
     }
   };
 
-  const finish = (m: Me) => {
-    setCsrf(m.csrf);
-    if (m.recovery_codes?.length) {
-      setPending(m);
+  const finish = (session: Me) => {
+    setCsrf(session.csrf);
+    if (session.recovery_codes?.length) {
+      setPending(session);
       setStep("codes");
-    } else if (m.user.must_change_password) {
-      setPending(m);
+    } else if (session.user.must_change_password) {
+      setPending(session);
       setStep("change");
     } else {
-      onSignedIn(m);
+      onSignedIn(session);
     }
   };
 
@@ -68,16 +71,16 @@ export function SignIn({ me, onSignedIn }: { me: Me | null; onSignedIn: (m: Me) 
 
 type Run = (fn: () => Promise<void>) => Promise<void>;
 
-function PasswordStep({ busy, run, next }: { busy: boolean; run: Run; next: (s: Step) => void }) {
+function PasswordStep({ busy, run, next }: { busy: boolean; run: Run; next: (step: Step) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const submit = (e: FormEvent) => {
     e.preventDefault();
     run(async () => {
-      const r = await post<{ stage: "mfa" | "enroll"; csrf: string }>("/api/auth/login", { username, password });
-      setCsrf(r.csrf);
+      const result = await post<{ stage: "mfa" | "enroll"; csrf: string }>("/api/auth/login", { username, password });
+      setCsrf(result.csrf);
       setPassword("");
-      next(r.stage);
+      next(result.stage);
     });
   };
   return (
@@ -95,7 +98,7 @@ function PasswordStep({ busy, run, next }: { busy: boolean; run: Run; next: (s: 
   );
 }
 
-function CodeStep({ busy, run, done, back }: { busy: boolean; run: Run; done: (m: Me) => void; back: () => void }) {
+function CodeStep({ busy, run, done, back }: { busy: boolean; run: Run; done: (session: Me) => void; back: () => void }) {
   const [code, setCode] = useState("");
   const [recovery, setRecovery] = useState(false);
   const submit = (e: FormEvent) => {
@@ -124,7 +127,7 @@ function CodeStep({ busy, run, done, back }: { busy: boolean; run: Run; done: (m
   );
 }
 
-function EnrollStep({ busy, run, done }: { busy: boolean; run: Run; done: (m: Me) => void }) {
+function EnrollStep({ busy, run, done }: { busy: boolean; run: Run; done: (session: Me) => void }) {
   const [data, setData] = useState<{ secret: string; qr_svg: string; issuer: string } | null>(null);
   const [code, setCode] = useState("");
   const [err, setErr] = useState<ApiError | null>(null);
@@ -168,11 +171,11 @@ function CodesStep({ codes, done }: { codes: string[]; done: () => void }) {
   const [saved, setSaved] = useState(false);
   const download = () => {
     const blob = new Blob([`VALOR recovery codes (each works once)\n\n${codes.join("\n")}\n`], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "valor-recovery-codes.txt";
-    a.click();
-    URL.revokeObjectURL(a.href);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "valor-recovery-codes.txt";
+    link.click();
+    URL.revokeObjectURL(link.href);
   };
   return (
     <div className="stack">
@@ -180,7 +183,7 @@ function CodesStep({ codes, done }: { codes: string[]; done: () => void }) {
       <div className="muted">
         If you lose your phone, each of these codes lets you sign in once. They are shown only now.
       </div>
-      <div className="codes">{codes.map((c) => <span key={c}>{c}</span>)}</div>
+      <div className="codes">{codes.map((code) => <span key={code}>{code}</span>)}</div>
       <div className="row">
         <button type="button" className="btn" onClick={download}>Download</button>
         <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(codes.join("\n"))}>Copy</button>
@@ -192,7 +195,7 @@ function CodesStep({ codes, done }: { codes: string[]; done: () => void }) {
   );
 }
 
-function ChangeStep({ busy, run, done }: { busy: boolean; run: Run; done: (m: Me) => void }) {
+function ChangeStep({ busy, run, done }: { busy: boolean; run: Run; done: (session: Me) => void }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");

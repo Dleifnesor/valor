@@ -47,9 +47,9 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
     setSending(true); setErr(null);
     try {
       if (!chat) {
-        const c = await post<Chat>("/api/chats", { kind: "builder", ...(pick ? { provider: pick } : {}) });
-        await post(`/api/chats/${c.id}/messages`, { message: text.trim(), mode: "build" });
-        go(`builder/${c.id}`);
+        const created = await post<Chat>("/api/chats", { kind: "builder", ...(pick ? { provider: pick } : {}) });
+        await post(`/api/chats/${created.id}/messages`, { message: text.trim(), mode: "build" });
+        go(`builder/${created.id}`);
       } else {
         await ctl.send(text.trim(), "build");
       }
@@ -73,7 +73,7 @@ export function Builder({ isAdmin, chatId }: { isAdmin: boolean; chatId: number 
   const empty = (
     <div className="stack">
       <div className="muted">Say what you need. The builder asks what it needs to know, writes a spec, and VALOR checks it against this cluster.</div>
-      {EXAMPLES.map((x) => <button key={x} className="btn example" disabled={sending} onClick={() => send(x)}>{x}</button>)}
+      {EXAMPLES.map((example) => <button key={example} className="btn example" disabled={sending} onClick={() => send(example)}>{example}</button>)}
     </div>
   );
 

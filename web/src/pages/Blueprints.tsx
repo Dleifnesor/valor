@@ -66,24 +66,24 @@ export function Blueprints({ canOperate }: { canOperate: boolean }) {
             <table>
               <thead><tr><th>Blueprint</th><th>Contents</th><th>Copies</th><th>Updated</th><th></th></tr></thead>
               <tbody>
-                {data.blueprints.map((b) => (
-                  <tr key={b.id}>
+                {data.blueprints.map((blueprint) => (
+                  <tr key={blueprint.id}>
                     <td>
-                      <button className="link mono" onClick={() => setViewing(b.id)}>{b.id}</button>
-                      <div className="muted small">{b.valid ? b.description : `invalid: ${b.error}`}</div>
+                      <button className="link mono" onClick={() => setViewing(blueprint.id)}>{blueprint.id}</button>
+                      <div className="muted small">{blueprint.valid ? blueprint.description : `invalid: ${blueprint.error}`}</div>
                     </td>
                     <td className="small">
-                      {b.valid && <>{b.hosts} hosts · {b.segments} segments · {b.os?.join(", ")}
-                        {b.wireguard && <span className="badge ok" style={{ marginLeft: 6 }}>WireGuard</span>}</>}
+                      {blueprint.valid && <>{blueprint.hosts} hosts · {blueprint.segments} segments · {blueprint.os?.join(", ")}
+                        {blueprint.wireguard && <span className="badge ok" style={{ marginLeft: 6 }}>WireGuard</span>}</>}
                     </td>
                     <td className="small">
-                      {b.copies?.length ? b.copies.map((c) => (
-                        <button key={c} className="link mono" style={{ marginRight: 6 }} onClick={() => go(`ranges/${c}`)}>{c}</button>
+                      {blueprint.copies?.length ? blueprint.copies.map((copy) => (
+                        <button key={copy} className="link mono" style={{ marginRight: 6 }} onClick={() => go(`ranges/${copy}`)}>{copy}</button>
                       )) : <span className="muted">none</span>}
                     </td>
-                    <td className="small">{when(b.updated)}</td>
+                    <td className="small">{when(blueprint.updated)}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                      {canOperate && b.valid && <button className="btn small primary" onClick={() => setDeploying(b)}>Deploy copies…</button>}
+                      {canOperate && blueprint.valid && <button className="btn small primary" onClick={() => setDeploying(blueprint)}>Deploy copies…</button>}
                     </td>
                   </tr>
                 ))}
@@ -140,7 +140,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           <label>Range
             <select name="range" value={range} onChange={(e) => setRange(e.target.value)}>
               <option value="">Choose a range…</option>
-              {ranges.data?.ranges.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+              {ranges.data?.ranges.map((range) => <option key={range.name} value={range.name}>{range.name}</option>)}
             </select>
           </label>
         ) : (
@@ -201,10 +201,10 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
     if (mode === "numbered") {
       return Array.from({ length: Math.max(0, Math.min(count, 50)) }, (_, i) => ({ name: `${prefix}-${String(i + 1).padStart(2, "0")}`, student: null }));
     }
-    return students.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
-      .map((s) => ({ name: `${prefix}-${s}`, student: s }));
+    return students.split(/[\s,]+/).map((student) => student.trim().toLowerCase()).filter(Boolean)
+      .map((student) => ({ name: `${prefix}-${student}`, student }));
   }, [mode, prefix, count, students]);
-  const invalid = copies.filter((c) => !NAME_RE.test(c.name));
+  const invalid = copies.filter((copy) => !NAME_RE.test(copy.name));
 
   const doPreview = async () => {
     setBusy(true);
@@ -236,12 +236,12 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
       <Modal title={`Deployed ${result.ranges.length} ranges`} onClose={onClose} footer={<button className="btn primary" onClick={onClose}>Done</button>}>
         <div className="muted">{build ? "Builds are queued and run one after another." : "The specs are saved; plan and build each range when you are ready."}</div>
         <ul>
-          {result.ranges.map((r) => {
-            const j = result.jobs.find((x) => x.range === r);
+          {result.ranges.map((range) => {
+            const job = result.jobs.find((entry) => entry.range === range);
             return (
-              <li key={r}>
-                <button className="link mono" onClick={() => go(`ranges/${r}`)}>{r}</button>
-                {j && <> · <button className="link" onClick={() => go(`jobs/${j.job}`)}>build job</button></>}
+              <li key={range}>
+                <button className="link mono" onClick={() => go(`ranges/${range}`)}>{range}</button>
+                {job && <> · <button className="link" onClick={() => go(`jobs/${job.job}`)}>build job</button></>}
               </li>
             );
           })}
@@ -283,8 +283,8 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
         </label>
       </div>
       <div className="small muted" style={{ marginTop: 6 }}>
-        Ranges: {copies.map((c) => c.name).join(", ") || "—"}
-        {invalid.length > 0 && <span className="error-text"> · too long or invalid: {invalid.map((c) => c.name).join(", ")} (2-15 characters)</span>}
+        Ranges: {copies.map((copy) => copy.name).join(", ") || "—"}
+        {invalid.length > 0 && <span className="error-text"> · too long or invalid: {invalid.map((copy) => copy.name).join(", ")} (2-15 characters)</span>}
       </div>
       <ErrorBox error={err} />
       {preview && (
@@ -296,17 +296,17 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
             <table>
               <thead><tr><th>Range</th><th>Networks</th><th>Plan</th></tr></thead>
               <tbody>
-                {preview.copies.map((c) => (
-                  <tr key={c.name}>
-                    <td className="mono">{c.name}{c.student && <div className="muted small">for {c.student}</div>}</td>
+                {preview.copies.map((copy) => (
+                  <tr key={copy.name}>
+                    <td className="mono">{copy.name}{copy.student && <div className="muted small">for {copy.student}</div>}</td>
                     <td className="small mono">
-                      {Object.entries(c.allocation).map(([seg, a]) => (
-                        <div key={seg}>{seg}: {a.cidr ?? a.network}{a.vlan ? ` · VLAN ${a.vlan}` : ""}{a.peers ? ` · peers ${a.peers.join(", ")}` : ""}</div>
+                      {Object.entries(copy.allocation).map(([segment, allocation]) => (
+                        <div key={segment}>{segment}: {allocation.cidr ?? allocation.network}{allocation.vlan ? ` · VLAN ${allocation.vlan}` : ""}{allocation.peers ? ` · peers ${allocation.peers.join(", ")}` : ""}</div>
                       ))}
                     </td>
                     <td className="small">
-                      {c.ok ? (c.plan_summary ? Object.entries(c.plan_summary).map(([k, v]) => `${v} ${k}`).join(", ") : "—")
-                        : c.errors.map((e, i) => <div key={i} className="error-text">{e.message}</div>)}
+                      {copy.ok ? (copy.plan_summary ? Object.entries(copy.plan_summary).map(([change, count]) => `${count} ${change}`).join(", ") : "—")
+                        : copy.errors.map((error, i) => <div key={i} className="error-text">{error.message}</div>)}
                     </td>
                   </tr>
                 ))}
