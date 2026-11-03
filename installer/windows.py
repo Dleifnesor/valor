@@ -160,8 +160,8 @@ Stop-Transcript
 """
 
 
-def _iso_volid(a: Answers, facts: Facts, filename: str) -> str:
-    for storage in a.iso_storages or [a.iso_storage]:
+def _iso_volid(settings: Answers, facts: Facts, filename: str) -> str:
+    for storage in settings.iso_storages or [settings.iso_storage]:
         for it in pvesh("get", f"/nodes/{facts.node}/storage/{storage}/content", content="iso") or []:
             if it["volid"].split("/", 1)[-1] == filename:
                 return it["volid"]
@@ -172,20 +172,20 @@ def _iso_path(facts: Facts, volid: str) -> str:
     return run(["pvesm", "path", volid]).stdout.strip()
 
 
-def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos: dict, cpu: str) -> int:
+def build(settings: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos: dict, cpu: str) -> int:
     """isos: ISO catalog (templates/isos.toml). Returns the template VMID."""
     if not shutil.which("genisoimage"):
         raise SystemExit("genisoimage is missing (Proxmox VE installs it with qemu-server for cloud-init): "
                          "apt install genisoimage")
     iso_entry = isos[entry["iso"]]
-    win_volid = _iso_volid(a, facts, iso_entry["filename"])
-    virtio_volid = _iso_volid(a, facts, isos[entry.get("virtio_iso", "virtio-win")]["filename"])
+    win_volid = _iso_volid(settings, facts, iso_entry["filename"])
+    virtio_volid = _iso_volid(settings, facts, isos[entry.get("virtio_iso", "virtio-win")]["filename"])
     edition = pick(editions_from_iso(_iso_path(facts, win_volid)), entry["edition"])
     ui.ok(f"edition: {edition['name']} (image {edition['index']})")
     password = _password()
-    st = facts.storage(a.range_storage)
+    st = facts.storage(settings.range_storage)
     local = facts.storage("local") if facts.storage("local") and "iso" in facts.storage("local").content else None
-    answer_store = local or facts.storage(a.iso_storage)
+    answer_store = local or facts.storage(settings.iso_storage)
     answer_name = f"valor-unattend-{secrets.token_hex(6)}.iso"
     answer_dir = Path(answer_store.path) / "template" / "iso"
     answer_dir.mkdir(parents=True, exist_ok=True)
@@ -198,16 +198,16 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos
     answer_volid = f"{answer_store.id}:iso/{answer_name}"
     disk_fmt = ",format=qcow2" if st.file_based else ""
     name = "tpl-" + os_name.replace(".", "")
-    desc = (f"VALOR {a.id} template for {os_name}: {edition['name']} from {iso_entry['filename']}. Built "
+    desc = (f"VALOR {settings.id} template for {os_name}: {edition['name']} from {iso_entry['filename']}. Built "
             f"{time.strftime('%Y-%m-%d %H:%M %Z')} (unattended, sysprepped). Managed by the VALOR installer; do not edit.")
     try:
-        vmid = _create(a, facts, lambda vmid: ["qm", "create", str(vmid), "--name", name, "--pool", a.pool_templates, "--ostype", "win11",
+        vmid = _create(settings, facts, lambda vmid: ["qm", "create", str(vmid), "--name", name, "--pool", settings.pool_templates, "--ostype", "win11",
              "--machine", "q35", "--bios", "ovmf", "--efidisk0", f"{st.id}:1,efitype=4m,pre-enrolled-keys=1{disk_fmt}",
              "--tpmstate0", f"{st.id}:1,version=v2.0", "--cpu", cpu, "--cores", "2", "--memory", "4096",
              "--sata0", f"{st.id}:{DISK_GIB},discard=on,ssd=1{disk_fmt}",
              "--sata1", f"{win_volid},media=cdrom", "--sata2", f"{virtio_volid},media=cdrom",
              "--sata3", f"{answer_volid},media=cdrom", "--boot", "order=sata1;sata0",
-             "--net0", f"e1000e,bridge={a.vm_bridge},link_down=1" + (f",tag={a.vm_vlan}" if a.vm_vlan else ""),
+             "--net0", f"e1000e,bridge={settings.vm_bridge},link_down=1" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else ""),
              "--agent", "enabled=1", "--vga", "std", "--tablet", "1", "--localtime", "0",
              "--tags", f"valor-template;os-{os_name.replace('.', '-')}", "--description", desc])
         ui.info(f"created Windows template VM {vmid} ({name}) on {st.id}")
@@ -232,7 +232,7 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos
         else:
             raise SystemExit(f"Windows template VM {vmid} did not finish within 3 hours; check its console")
         run(["qm", "set", str(vmid), "--delete", "sata1,sata2,sata3", "--boot", "order=sata0",
-             "--net0", f"e1000e,bridge={a.vm_bridge}" + (f",tag={a.vm_vlan}" if a.vm_vlan else "")])
+             "--net0", f"e1000e,bridge={settings.vm_bridge}" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else "")])
         run(["qm", "template", str(vmid)])
     finally:
         (answer_dir / answer_name).unlink(missing_ok=True)

@@ -44,9 +44,9 @@ def cpu_type(facts: Facts, entry: dict | None = None) -> str:
     return "x86-64-v2-AES" if facts.has_aes else "x86-64-v2"
 
 
-def existing(facts: Facts, a: Answers, os_name: str) -> dict | None:
+def existing(facts: Facts, settings: Answers, os_name: str) -> dict | None:
     found = [t for t in facts.valor_templates
-             if t.get("node") == facts.node and t.get("pool") == a.pool_templates
+             if t.get("node") == facts.node and t.get("pool") == settings.pool_templates
              and os_tag(os_name) in re.split(r"[;, ]", t.get("tags") or "")]
     return max(found, key=lambda t: int(t["vmid"])) if found else None
 
@@ -97,8 +97,8 @@ def _verify(entry: dict, image: Path, sums: Path, work: Path) -> None:
     ui.ok(f"{entry.get('checksum_type', 'sha256')} checksum matches")
 
 
-def _free_vmid(a: Answers, facts: Facts, skip: set[int] = frozenset()) -> int:
-    lo, hi = a.vmid_templates
+def _free_vmid(settings: Answers, facts: Facts, skip: set[int] = frozenset()) -> int:
+    lo, hi = settings.vmid_templates
     used = facts.used_vmids | set(int(x["vmid"]) for x in pvesh("get", "/cluster/resources", type="vm")) | skip
     for v in range(lo, hi + 1):
         if v not in used:
@@ -106,12 +106,12 @@ def _free_vmid(a: Answers, facts: Facts, skip: set[int] = frozenset()) -> int:
     raise SystemExit(f"no free VMID left for templates in {lo}-{hi}")
 
 
-def _create(a: Answers, facts: Facts, command) -> int:
+def _create(settings: Answers, facts: Facts, command) -> int:
     """Create a template VM on a free VMID. `qm create` claims the id atomically; if another installer run took the
     same id a moment earlier, take the next one."""
     skip: set[int] = set()
     for _ in range(10):
-        vmid = _free_vmid(a, facts, skip)
+        vmid = _free_vmid(settings, facts, skip)
         res = run(command(vmid), check=False)
         if res.returncode == 0:
             return vmid
@@ -121,9 +121,9 @@ def _create(a: Answers, facts: Facts, command) -> int:
     raise SystemExit("could not claim a free template VMID (another installer run keeps taking them)")
 
 
-def ensure_snippets(a: Answers, facts: Facts, rec: Record) -> str:
+def ensure_snippets(settings: Answers, facts: Facts, rec: Record) -> str:
     """Make sure the snippet storage allows snippets; put the template vendor-data there. Returns its volume id."""
-    st = facts.storage(a.snippets_storage)
+    st = facts.storage(settings.snippets_storage)
     if "snippets" not in st.content:
         content = ",".join(sorted(st.content | {"snippets"}))
         pvesh("set", f"/storage/{st.id}", content=content)
@@ -136,9 +136,9 @@ def ensure_snippets(a: Answers, facts: Facts, rec: Record) -> str:
     return f"{st.id}:snippets/{VENDOR_SNIPPET}"
 
 
-def build(a: Answers, facts: Facts, rec: Record, os_name: str, snippet: str) -> int:
+def build(settings: Answers, facts: Facts, rec: Record, os_name: str, snippet: str) -> int:
     entry = catalog()[os_name]
-    st = facts.storage(a.snippets_storage)
+    st = facts.storage(settings.snippets_storage)
     scratch = Path(st.path) / "valor-tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=scratch) as tmp:
@@ -161,19 +161,19 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, snippet: str) -> 
         fmt = json.loads(run(["qemu-img", "info", "--output=json", str(image)]).stdout)["format"]
         if fmt not in ("qcow2", "raw"):
             raise SystemExit(f"unexpected image format {fmt}")
-        rs = facts.storage(a.range_storage)
+        rs = facts.storage(settings.range_storage)
         disk = f"{rs.id}:0,import-from={image},discard=on,ssd=1,iothread=1" + (",format=qcow2" if rs.file_based else "")
-        net = f"virtio,bridge={a.vm_bridge}" + (f",tag={a.vm_vlan}" if a.vm_vlan else "")
-        ipcfg = "ip=dhcp" if a.vm_ip == "dhcp" else f"ip={a.vm_ip},gw={a.vm_gateway}"   # the VALOR VM's address is free now
-        desc = (f"VALOR {a.id} template for {os_name}: {entry.get('description', '')}. Built "
+        net = f"virtio,bridge={settings.vm_bridge}" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else "")
+        ipcfg = "ip=dhcp" if settings.vm_ip == "dhcp" else f"ip={settings.vm_ip},gw={settings.vm_gateway}"   # the VALOR VM's address is free now
+        desc = (f"VALOR {settings.id} template for {os_name}: {entry.get('description', '')}. Built "
                 f"{time.strftime('%Y-%m-%d %H:%M %Z')} from {entry['image_url']} (verified). Managed by the VALOR "
                 "installer; do not edit.")
         name = "tpl-" + os_name.replace(".", "")
-        vmid = _create(a, facts, lambda vmid: ["qm", "create", str(vmid), "--name", name, "--pool", a.pool_templates, "--ostype", "l26",
+        vmid = _create(settings, facts, lambda vmid: ["qm", "create", str(vmid), "--name", name, "--pool", settings.pool_templates, "--ostype", "l26",
              "--memory", "2048", "--cores", "2", "--cpu", cpu_type(facts, entry), "--scsihw", "virtio-scsi-single",
              "--scsi0", disk, "--ide2", f"{rs.id}:cloudinit", "--boot", "order=scsi0", "--serial0", "socket",
              "--vga", "serial0", "--agent", "enabled=1,fstrim_cloned_disks=1", "--net0", net, "--ipconfig0", ipcfg,
-             *(["--nameserver", " ".join(a.vm_dns)] if a.vm_ip != "dhcp" and a.vm_dns else []),
+             *(["--nameserver", " ".join(settings.vm_dns)] if settings.vm_ip != "dhcp" and settings.vm_dns else []),
              "--ciuser", "valor", "--ciupgrade", "0", "--cicustom", f"vendor={snippet}",
              "--tags", f"valor-template;{os_tag(os_name)}", "--description", desc])
         ui.info(f"created template VM {vmid} ({name}) on {rs.id}")
@@ -199,7 +199,7 @@ def iso_catalog() -> dict:
         return tomllib.load(fh)
 
 
-def ensure(a: Answers, facts: Facts, rec: Record, wanted: list[str], rebuild: bool = False) -> dict[str, int]:
+def ensure(settings: Answers, facts: Facts, rec: Record, wanted: list[str], rebuild: bool = False) -> dict[str, int]:
     """rebuild: build a fresh template even if one exists (new point release, current updates, fixed preparation)
     and then retire the old ones. Ranges always clone the newest template of an OS."""
     from . import windows
@@ -207,28 +207,28 @@ def ensure(a: Answers, facts: Facts, rec: Record, wanted: list[str], rebuild: bo
     snippet = None
     cat = catalog()
     for os_name in wanted:
-        have = existing(facts, a, os_name)
+        have = existing(facts, settings, os_name)
         if have and not rebuild:
             out[os_name] = int(have["vmid"])
             ui.ok(f"{os_name}: reusing template {have['vmid']}")
             continue
         entry = cat[os_name]
         if entry.get("family") == "windows":
-            out[os_name] = windows.build(a, facts, rec, os_name, entry, iso_catalog(), cpu_type(facts, entry))
+            out[os_name] = windows.build(settings, facts, rec, os_name, entry, iso_catalog(), cpu_type(facts, entry))
         else:
             if snippet is None:
-                snippet = ensure_snippets(a, facts, rec)
-            out[os_name] = build(a, facts, rec, os_name, snippet)
+                snippet = ensure_snippets(settings, facts, rec)
+            out[os_name] = build(settings, facts, rec, os_name, snippet)
         if rebuild:
-            for old in _same_os(facts, a, os_name):
+            for old in _same_os(facts, settings, os_name):
                 if int(old["vmid"]) != out[os_name]:
                     retire(rec, int(old["vmid"]), os_name)
     return out
 
 
-def _same_os(facts: Facts, a: Answers, os_name: str) -> list[dict]:
+def _same_os(facts: Facts, settings: Answers, os_name: str) -> list[dict]:
     return [t for t in facts.valor_templates
-            if t.get("node") == facts.node and t.get("pool") == a.pool_templates
+            if t.get("node") == facts.node and t.get("pool") == settings.pool_templates
             and os_tag(os_name) in re.split(r"[;, ]", t.get("tags") or "")]
 
 

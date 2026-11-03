@@ -68,25 +68,25 @@ def _toml(v) -> str:
     return json.dumps(str(v))
 
 
-def config_toml(a: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: str | None, vm_ip: str) -> str:
-    lo, hi = a.vmid_ranges
+def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: str | None, vm_ip: str) -> str:
+    lo, hi = settings.vmid_ranges
     url = f"https://{vm_ip}"
     sections = {
         "proxmox": {"api_host": api_host, "api_port": 8006,
                     "verify_ssl": "/etc/valor/pve-ca.pem" if ca_pem else True,
                     "token_file": "/etc/valor/token.json", "node": facts.node},
-        "resources": {"pool": a.pool_ranges, "template_pool": a.pool_templates, "storage": a.range_storage,
-                      "segment_bridge": bridge, "uplink_bridge": a.vm_bridge, "uplink_vlan": a.vm_vlan,
-                      "vmid_min": lo, "vmid_max": hi, "vlan_min": a.vlan_min, "vlan_max": a.vlan_max,
-                      "max_memory_fraction": 0.7, "reserved_networks": a.reserved_networks,
-                      "iso_storage": a.iso_storage, "iso_storages": a.iso_storages},
+        "resources": {"pool": settings.pool_ranges, "template_pool": settings.pool_templates, "storage": settings.range_storage,
+                      "segment_bridge": bridge, "uplink_bridge": settings.vm_bridge, "uplink_vlan": settings.vm_vlan,
+                      "vmid_min": lo, "vmid_max": hi, "vlan_min": settings.vlan_min, "vlan_max": settings.vlan_max,
+                      "max_memory_fraction": 0.7, "reserved_networks": settings.reserved_networks,
+                      "iso_storage": settings.iso_storage, "iso_storages": settings.iso_storages},
         "paths": {"content_dir": "/opt/valor/share", "data_dir": "/var/lib/valor/data",
                   "state_dir": "/var/lib/valor/state", "ssh_public_key": "/etc/valor/ssh/id_ed25519.pub"},
-        "guest": {"default_os": "ubuntu-24.04", "nameservers": a.nameservers, "internet_probe": a.internet_probe,
+        "guest": {"default_os": "ubuntu-24.04", "nameservers": settings.nameservers, "internet_probe": settings.internet_probe,
                   "guest_user": "valor"},
         "web": {"db": "/var/lib/valor/web.sqlite3", "secret_key_file": "/etc/valor/secret.key",
-                "instance_name": a.instance_name, "tls_cert": "/etc/valor/tls/server.crt",
-                "appliance_vmid": a.vmid_vm, "public_url": url},
+                "instance_name": settings.instance_name, "tls_cert": "/etc/valor/tls/server.crt",
+                "appliance_vmid": settings.vmid_vm, "public_url": url},
     }
     lines = [f"# VALOR {VERSION} configuration, written by the installer on {facts.node} "
              f"({time.strftime('%Y-%m-%d %H:%M %Z')}).",
@@ -98,18 +98,18 @@ def config_toml(a: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: st
     return "\n".join(lines)
 
 
-def appliance_env(a: Answers, facts: Facts, mode: str, api_host: str) -> str:
+def appliance_env(settings: Answers, facts: Facts, mode: str, api_host: str) -> str:
     """Settings for setup.sh (values were validated by the installer: CIDRs, IPs, DNS labels)."""
     ssh_from = sorted({n["ip"] for n in facts.nodes if n.get("ip")} | {facts.node_ip})
     env = {
         "MODE": mode,
         "VALOR_VERSION": VERSION,
-        "ALLOWED_NETWORKS": " ".join(a.allowed_networks),
+        "ALLOWED_NETWORKS": " ".join(settings.allowed_networks),
         "SSH_FROM": " ".join(ssh_from),
-        "TLS_MODE": a.tls,
-        "VM_HOSTNAME": a.vm_hostname,
-        "VM_DOMAIN": a.vm_domain,
-        "ADMIN_USER": a.admin_user,
+        "TLS_MODE": settings.tls,
+        "VM_HOSTNAME": settings.vm_hostname,
+        "VM_DOMAIN": settings.vm_domain,
+        "ADMIN_USER": settings.admin_user,
         "PVE_HOST": api_host,
         "PVE_IP": facts.node_ip,
     }
@@ -125,46 +125,46 @@ def _qm(*args: str) -> str:
     return run(["qm", *args]).stdout
 
 
-def create(a: Answers, facts: Facts, rec: Record, template: int) -> int:
-    vmid = a.vmid_vm
+def create(settings: Answers, facts: Facts, rec: Record, template: int) -> int:
+    vmid = settings.vmid_vm
     exists = run(["qm", "status", str(vmid)], check=False).returncode == 0
     if exists:
         cfg = _qm("config", str(vmid))
         if "valor-appliance" not in cfg:
             raise SystemExit(f"VM {vmid} exists and is not a VALOR VM; choose another vmid_start")
         ui.ok(f"VALOR VM {vmid} exists (resuming)")
-        rec.set("vm", {"vmid": vmid, "name": a.vm_hostname})
+        rec.set("vm", {"vmid": vmid, "name": settings.vm_hostname})
         return vmid
-    ui.info(f"cloning template {template} into VM {vmid} on {a.vm_storage}")
-    run(["qm", "clone", str(template), str(vmid), "--name", a.vm_hostname, "--full", "1", "--storage", a.vm_storage,
-         "--pool", a.pool_system])
-    rec.set("vm", {"vmid": vmid, "name": a.vm_hostname})
-    key = rec_key(a)
-    net = f"virtio,bridge={a.vm_bridge}" + (f",tag={a.vm_vlan}" if a.vm_vlan else "")
-    ipcfg = "ip=dhcp" if a.vm_ip == "dhcp" else f"ip={a.vm_ip},gw={a.vm_gateway}"
-    desc = (f"VALOR {VERSION} appliance (instance '{a.id}'): engine + web UI. Created by the VALOR installer on "
+    ui.info(f"cloning template {template} into VM {vmid} on {settings.vm_storage}")
+    run(["qm", "clone", str(template), str(vmid), "--name", settings.vm_hostname, "--full", "1", "--storage", settings.vm_storage,
+         "--pool", settings.pool_system])
+    rec.set("vm", {"vmid": vmid, "name": settings.vm_hostname})
+    key = rec_key(settings)
+    net = f"virtio,bridge={settings.vm_bridge}" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else "")
+    ipcfg = "ip=dhcp" if settings.vm_ip == "dhcp" else f"ip={settings.vm_ip},gw={settings.vm_gateway}"
+    desc = (f"VALOR {VERSION} appliance (instance '{settings.id}'): engine + web UI. Created by the VALOR installer on "
             f"{time.strftime('%Y-%m-%d')}. Manage with ./install.sh --status | --upgrade | --uninstall.")
-    run(["qm", "set", str(vmid), "--cores", str(a.vm_cores), "--memory", str(a.vm_memory), "--cpu", cpu_type(facts),
+    run(["qm", "set", str(vmid), "--cores", str(settings.vm_cores), "--memory", str(settings.vm_memory), "--cpu", cpu_type(facts),
          "--net0", net, "--ipconfig0", ipcfg, "--ciuser", "valoradmin", "--sshkeys", str(key) + ".pub",
-         "--onboot", "1", "--startup", "order=1", "--tags", f"valor-appliance;valor-{a.id}",
+         "--onboot", "1", "--startup", "order=1", "--tags", f"valor-appliance;valor-{settings.id}",
          "--description", desc, "--agent", "enabled=1,fstrim_cloned_disks=1",
-         *(["--nameserver", " ".join(a.vm_dns)] if a.vm_ip != "dhcp" and a.vm_dns else []),
-         *(["--searchdomain", a.vm_domain] if a.vm_domain else [])])
-    run(["qm", "disk", "resize", str(vmid), "scsi0", f"{a.vm_disk}G"])
-    ui.ok(f"VALOR VM {vmid} created ({a.vm_cores} vCPU, {a.vm_memory} MiB, {a.vm_disk} GiB, {net})")
+         *(["--nameserver", " ".join(settings.vm_dns)] if settings.vm_ip != "dhcp" and settings.vm_dns else []),
+         *(["--searchdomain", settings.vm_domain] if settings.vm_domain else [])])
+    run(["qm", "disk", "resize", str(vmid), "scsi0", f"{settings.vm_disk}G"])
+    ui.ok(f"VALOR VM {vmid} created ({settings.vm_cores} vCPU, {settings.vm_memory} MiB, {settings.vm_disk} GiB, {net})")
     return vmid
 
 
-def rec_key(a: Answers) -> Path:
+def rec_key(settings: Answers) -> Path:
     """Break-glass SSH key for the VALOR VM, kept cluster-wide and root-only."""
     from . import RECORD_DIR
-    key = RECORD_DIR / f"{a.id}-ssh_ed25519"
+    key = RECORD_DIR / f"{settings.id}-ssh_ed25519"
     if not key.exists():
         RECORD_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = Path("/root") / f".valor-{a.id}-key"
+        tmp = Path("/root") / f".valor-{settings.id}-key"
         for p in (tmp, Path(str(tmp) + ".pub")):
             p.unlink(missing_ok=True)
-        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"valor-{a.id}-breakglass", "-f", str(tmp)])
+        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"valor-{settings.id}-breakglass", "-f", str(tmp)])
         key.write_bytes(tmp.read_bytes())
         Path(str(key) + ".pub").write_bytes(Path(str(tmp) + ".pub").read_bytes())
         tmp.unlink()
@@ -190,7 +190,7 @@ def boot(facts: Facts, vmid: int) -> str:
     return ip
 
 
-def provision(a: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, str | bytes]) -> None:
+def provision(settings: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, str | bytes]) -> None:
     """files: staging-relative name -> content (config, secrets). Runs setup.sh and streams its log."""
     node = facts.node
     data = payload()
