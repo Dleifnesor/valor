@@ -43,13 +43,14 @@ class PasswordReset(_In):
 
 
 def _get(s: Session, uid: int):
-    u = s.conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
-    if u is None:
+    user = s.conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    if user is None:
         raise ApiError(404, "not_found", "No such user.")
-    return u
+    return user
 
 
 def _other_admins(s: Session, uid: int) -> int:
+    """Active admins besides this account: there must always be at least one."""
     return s.conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND id != ?",
                           (uid,)).fetchone()[0]
 
@@ -60,7 +61,7 @@ def _temp_password() -> str:
 
 @router.get("")
 def list_users(s: Session = Depends(require("admin"))) -> list[dict]:
-    return [user_out(u) for u in s.conn.execute("SELECT * FROM users ORDER BY username COLLATE NOCASE")]
+    return [user_out(row) for row in s.conn.execute("SELECT * FROM users ORDER BY username COLLATE NOCASE")]
 
 
 @router.post("")
@@ -78,8 +79,8 @@ def create_user(body: UserIn, s: Session = Depends(require("admin"))) -> dict:
                    "created_at, updated_at) VALUES (?, ?, ?, ?, 'local', ?, 1, ?, ?)",
                    (body.username, body.display_name, body.email, body.role, hash_password(password), now, now))
     s.audit("user.create", target=body.username, detail={"role": body.role})
-    u = s.conn.execute("SELECT * FROM users WHERE username = ?", (body.username,)).fetchone()
-    out = user_out(u)
+    user = s.conn.execute("SELECT * FROM users WHERE username = ?", (body.username,)).fetchone()
+    out = user_out(user)
     if not body.password:
         out["temporary_password"] = password     # shown once to the admin who created the account
     return out
@@ -87,60 +88,60 @@ def create_user(body: UserIn, s: Session = Depends(require("admin"))) -> dict:
 
 @router.patch("/{uid}")
 def update_user(uid: int, body: UserPatch, s: Session = Depends(require("admin"))) -> dict:
-    u = _get(s, uid)
+    user = _get(s, uid)
     changes = body.model_dump(exclude_none=True)
-    demote = changes.get("role", u["role"]) != "admin" or changes.get("disabled") is True
-    if u["role"] == "admin" and demote and not _other_admins(s, uid):
+    demote = changes.get("role", user["role"]) != "admin" or changes.get("disabled") is True
+    if user["role"] == "admin" and demote and not _other_admins(s, uid):
         raise ApiError(400, "last_admin", "This is the last active admin. Make someone else an admin first.")
     if uid == s.user["id"] and changes.get("disabled"):
         raise ApiError(400, "self", "You can't disable your own account.")
-    if u["source"] == "ldap" and "role" in changes:
+    if user["source"] == "ldap" and "role" in changes:
         raise ApiError(400, "ldap_role", "Directory accounts get their role from their groups.")
     if not changes:
-        return user_out(u)
-    sets = ", ".join(f"{k} = ?" for k in changes)
+        return user_out(user)
+    sets = ", ".join(f"{column} = ?" for column in changes)       # column names come from the UserPatch model
     s.conn.execute(f"UPDATE users SET {sets}, updated_at = ? WHERE id = ?",
-                   (*[int(v) if isinstance(v, bool) else v for v in changes.values()], time.time(), uid))
-    if changes.get("disabled") or "role" in changes:
+                   (*[int(value) if isinstance(value, bool) else value for value in changes.values()], time.time(), uid))
+    if changes.get("disabled") or "role" in changes:            # their open sessions end now
         s.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
-    s.audit("user.update", target=u["username"], detail=changes)
+    s.audit("user.update", target=user["username"], detail=changes)
     return user_out(_get(s, uid))
 
 
 @router.post("/{uid}/unlock")
 def unlock_user(uid: int, s: Session = Depends(require("admin"))) -> dict:
-    u = _get(s, uid)
+    user = _get(s, uid)
     s.conn.execute("UPDATE users SET failed_logins = 0, locked_until = 0 WHERE id = ?", (uid,))
-    s.audit("user.unlock", target=u["username"])
+    s.audit("user.unlock", target=user["username"])
     return user_out(_get(s, uid))
 
 
 @router.post("/{uid}/reset-mfa")
 def reset_mfa(uid: int, s: Session = Depends(require("admin"))) -> dict:
-    u = _get(s, uid)
+    user = _get(s, uid)
     with db.transaction(s.conn):
         s.conn.execute("UPDATE users SET totp_secret = NULL, totp_last_step = 0, updated_at = ? WHERE id = ?",
                        (time.time(), uid))
         s.conn.execute("DELETE FROM recovery_codes WHERE user_id = ?", (uid,))
         s.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
-    s.audit("user.reset_mfa", target=u["username"])
+    s.audit("user.reset_mfa", target=user["username"])
     return user_out(_get(s, uid))
 
 
 @router.post("/{uid}/reset-password")
 def reset_password(uid: int, body: PasswordReset, s: Session = Depends(require("admin"))) -> dict:
-    u = _get(s, uid)
-    if u["source"] != "local":
+    user = _get(s, uid)
+    if user["source"] != "local":
         raise ApiError(400, "not_local", "Directory accounts change their password in the directory.")
     password = body.password or _temp_password()
-    problem = password_problem(password, u["username"])
+    problem = password_problem(password, user["username"])
     if problem:
         raise ApiError(400, "weak_password", problem)
     with db.transaction(s.conn):
         s.conn.execute("UPDATE users SET password_hash = ?, must_change_password = 1, failed_logins = 0, "
                        "locked_until = 0, updated_at = ? WHERE id = ?", (hash_password(password), time.time(), uid))
         s.conn.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
-    s.audit("user.reset_password", target=u["username"])
+    s.audit("user.reset_password", target=user["username"])
     out = user_out(_get(s, uid))
     if not body.password:
         out["temporary_password"] = password
@@ -149,11 +150,11 @@ def reset_password(uid: int, body: PasswordReset, s: Session = Depends(require("
 
 @router.delete("/{uid}")
 def delete_user(uid: int, s: Session = Depends(require("admin"))) -> dict:
-    u = _get(s, uid)
+    user = _get(s, uid)
     if uid == s.user["id"]:
         raise ApiError(400, "self", "You can't delete your own account.")
-    if u["role"] == "admin" and not _other_admins(s, uid):
+    if user["role"] == "admin" and not _other_admins(s, uid):
         raise ApiError(400, "last_admin", "This is the last active admin.")
     s.conn.execute("DELETE FROM users WHERE id = ?", (uid,))
-    s.audit("user.delete", target=u["username"])
+    s.audit("user.delete", target=user["username"])
     return {"ok": True}

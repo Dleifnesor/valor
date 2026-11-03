@@ -23,20 +23,20 @@ class RotateIn(BaseModel):
 
 
 def _wg(cfg, name: str):
+    """(the range's spec, its WireGuard settings or None)."""
     spec, _ = _load(cfg, _name(name))
-    wg = spec.access.wireguard if spec.access else None
-    return spec, wg
+    return spec, spec.access.wireguard if spec.access else None
 
 
 def _handshakes(cfg, name: str) -> dict[str, int] | None:
     """Latest handshake per public key, read from the router (None when the router can't be asked)."""
     try:
         pve = PVE(cfg)
-        vm = next((v for v in range_vms(pve, name) if v.host == ROUTER and v.status == "running"), None)
-        if vm is None:
+        router = next((vm for vm in range_vms(pve, name) if vm.host == ROUTER and vm.status == "running"), None)
+        if router is None:
             return None
-        res = pve.exec(vm.vmid, ["wg", "show", wireguard.IFACE, "dump"], timeout=20)
-        return wireguard.handshakes(res.out) if res.ok else None
+        result = pve.exec(router.vmid, ["wg", "show", wireguard.IFACE, "dump"], timeout=20)
+        return wireguard.handshakes(result.out) if result.ok else None
     except ValorError:
         return None
 
@@ -52,12 +52,13 @@ def status(name: str, request: Request, s: Session = Depends(require("viewer")))
     now = int(time.time())
     peers = []
     for peer in wg.peers:
-        p = (data or {}).get("peers", {}).get(peer)
-        hs = (seen or {}).get(p["public"]) if p else None
-        peers.append({"name": peer, "address": p["address"] if p else None, "ready": bool(p),
-                      "latest_handshake": hs or None, "connected": bool(hs) and now - hs < 180})
+        keys = (data or {}).get("peers", {}).get(peer)          # None until the router was configured
+        handshake = (seen or {}).get(keys["public"]) if keys else None
+        peers.append({"name": peer, "address": keys["address"] if keys else None, "ready": bool(keys),
+                      "latest_handshake": handshake or None,
+                      "connected": bool(handshake) and now - handshake < 180})    # WireGuard re-handshakes every 2 min
     return {"configured": True, "built": bool(data), "port": wg.port, "network": str(wg.network),
-            "reach": wg.reach or [x.name for x in spec.segments],
+            "reach": wg.reach or [segment.name for segment in spec.segments],
             "endpoint": wireguard.endpoint(spec, data) if data else None, "peers": peers,
             "router_reachable": seen is not None}
 
