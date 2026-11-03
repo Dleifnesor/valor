@@ -1,5 +1,10 @@
 """The tools a range chat's model may call, and how VALOR runs them: commands and files inside the range's VMs (QEMU
-guest agent), power and snapshots (VALOR jobs), the range's status and its spec."""
+guest agent), power and snapshots (VALOR jobs), the range's status and its spec.
+
+A call goes through three steps (driven by web/chats/turn.py): `validate` it (a problem goes back to the model),
+decide whether it only reads (readonly.py: then it runs at once, otherwise the person approves it first), and
+`execute` it. The model never touches the Proxmox API itself.
+"""
 
 from __future__ import annotations
 
@@ -69,7 +74,8 @@ MODE_TOOLS = {"question": READ_TOOLS, "code": tuple(TOOLS)}
 
 
 def tool_specs(mode: str) -> list[dict]:
-    return [{"name": n, **TOOLS[n]} for n in MODE_TOOLS.get(mode, ())]
+    """The tool definitions sent to the model in a chat mode (Question mode: read-only tools only)."""
+    return [{"name": name, **TOOLS[name]} for name in MODE_TOOLS.get(mode, ())]
 
 
 @dataclass
@@ -92,7 +98,7 @@ def validate(name: str, args: dict | None, ctx: Context) -> str | None:
     if args is None:
         return "the tool input was not valid JSON; send the call again"
     schema = TOOLS[name]["input_schema"]
-    missing = [k for k in schema.get("required", []) if not str(args.get(k) or "").strip()]
+    missing = [key for key in schema.get("required", []) if not str(args.get(key) or "").strip()]
     if missing:
         return f"missing {', '.join(missing)}"
     if "host" in schema["properties"] and "host" in args and args["host"] not in ctx.vms:
@@ -100,7 +106,7 @@ def validate(name: str, args: dict | None, ctx: Context) -> str | None:
     if name == "power":
         if args.get("action") not in lifecycle.POWER_ACTIONS:
             return f"action must be one of {', '.join(lifecycle.POWER_ACTIONS)}"
-        unknown = [h for h in args.get("hosts") or [] if h not in ctx.vms]
+        unknown = [host for host in args.get("hosts") or [] if host not in ctx.vms]
         if unknown:
             return f"unknown hosts: {', '.join(unknown)}"
     if name == "snapshot":
@@ -115,31 +121,37 @@ def validate(name: str, args: dict | None, ctx: Context) -> str | None:
 
 def summary(name: str, args: dict) -> str:
     """One line for the feed and the approval card."""
-    a = args or {}
+    args = args or {}
     if name == "run_command":
-        lines = str(a.get("command") or "").strip().splitlines()
+        lines = str(args.get("command") or "").strip().splitlines()
         more = f" … (+{len(lines) - 1} line{'' if len(lines) == 2 else 's'})" if len(lines) > 1 else ""
-        return f"{a.get('host')}: {lines[0][:200] if lines else ''}{more}"     # the card says when there is more
+        return f"{args.get('host')}: {lines[0][:200] if lines else ''}{more}"     # the card says when there is more
     if name in ("read_file", "write_file"):
-        return f"{a.get('host')}: {'read' if name == 'read_file' else 'write'} {a.get('path')}"
+        return f"{args.get('host')}: {'read' if name == 'read_file' else 'write'} {args.get('path')}"
     if name == "power":
-        return f"{a.get('action')} {', '.join(a.get('hosts') or []) or 'every VM'}"
+        return f"{args.get('action')} {', '.join(args.get('hosts') or []) or 'every VM'}"
     if name == "snapshot":
-        return f"snapshot {a.get('action')}{' ' + a['name'] if a.get('name') else ''}"
+        return f"snapshot {args.get('action')}{' ' + args['name'] if args.get('name') else ''}"
     if name == "update_spec":
-        return f"update the spec: {str(a.get('summary', ''))[:200]}"
+        return f"update the spec: {str(args.get('summary', ''))[:200]}"
     return name.replace("_", " ")
 
 
 def _clip(text: str) -> str:
+    """Output for the model: terminal colour codes removed, at most OUTPUT_LIMIT characters (the end is kept)."""
     text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text or "")
-    return text if len(text) <= OUTPUT_LIMIT else f"[... {len(text) - OUTPUT_LIMIT:,} earlier characters cut]\n" + text[-OUTPUT_LIMIT:]
+    if len(text) <= OUTPUT_LIMIT:
+        return text
+    return f"[... {len(text) - OUTPUT_LIMIT:,} earlier characters cut]\n" + text[-OUTPUT_LIMIT:]
 
 
 def execute(name: str, args: dict, ctx: Context) -> dict:
     """Run a validated (and, where needed, approved) call. Returns {content, error, output?, exit?, meta?}."""
+    run = _RUNNERS.get(name)
     try:
-        return _execute(name, args, ctx)
+        if run is None:
+            raise ValorError("unknown_tool", f"unknown tool '{name}'")
+        return run(args, ctx)
     except ValorError as e:
         return {"content": f"{e.message}" + (f" ({e.hint})" if e.hint else ""), "error": True}
 
@@ -151,72 +163,94 @@ def _vm(ctx: Context, host: str):
     return vm
 
 
-def _execute(name: str, args: dict, ctx: Context) -> dict:
-    if name == "run_command":
-        vm = _vm(ctx, args["host"])
-        timeout = max(5, min(MAX_TIMEOUT, int(args.get("timeout") or DEFAULT_TIMEOUT)))
-        t0 = time.time()
-        if ctx.families.get(args["host"]) == "windows":
-            res = ctx.pve.ps(vm.vmid, f"& {{\n{args['command']}\n}} 2>&1 | Out-String -Width 220", timeout=timeout)
-        else:
-            res = ctx.pve.script(vm.vmid, "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
-                                          "LC_ALL=C.UTF-8 PAGER=cat SYSTEMD_PAGER= TERM=dumb\n"
-                                          f"{{\n{args['command']}\n}} </dev/null\n", timeout=timeout)
-        out = res.out + (("\n[stderr]\n" + res.err) if res.err.strip() else "")
-        if res.timed_out:
-            return {"content": _clip(out) + f"\n[timed out after {timeout} s; the command may still be running]",
-                    "error": True, "output": _clip(out), "exit": None, "seconds": round(time.time() - t0, 1)}
-        clipped = _clip(out)
-        return {"content": f"exit code {res.exitcode}\n{clipped}", "error": res.exitcode != 0, "output": clipped,
-                "exit": res.exitcode, "seconds": round(time.time() - t0, 1)}
-    if name == "read_file":
-        vm = _vm(ctx, args["host"])
-        text = ctx.pve.file_read(vm.vmid, args["path"])
-        if text is None:
-            return {"content": f"{args['path']} could not be read (missing or not readable)", "error": True}
-        return {"content": _clip(text), "error": False, "output": _clip(text)}
-    if name == "write_file":
-        vm = _vm(ctx, args["host"])
-        ctx.pve.write_file(vm.vmid, args["path"], args["content"])
-        return {"content": f"wrote {len(args['content']):,} characters to {args['path']}", "error": False}
-    if name == "range_status":
-        return {"content": json.dumps(ctx.status(), indent=1, default=str), "error": False}
-    if name == "snapshot" and args["action"] == "list":
+# ---- One function per tool ----
+
+def _run_command(args: dict, ctx: Context) -> dict:
+    vm = _vm(ctx, args["host"])
+    timeout = max(5, min(MAX_TIMEOUT, int(args.get("timeout") or DEFAULT_TIMEOUT)))
+    started = time.time()
+    if ctx.families.get(args["host"]) == "windows":
+        result = ctx.pve.ps(vm.vmid, f"& {{\n{args['command']}\n}} 2>&1 | Out-String -Width 220", timeout=timeout)
+    else:
+        # A predictable environment: no pager or colours waiting for a terminal, and no stdin to wait on.
+        result = ctx.pve.script(vm.vmid, "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "
+                                         "LC_ALL=C.UTF-8 PAGER=cat SYSTEMD_PAGER= TERM=dumb\n"
+                                         f"{{\n{args['command']}\n}} </dev/null\n", timeout=timeout)
+    output = result.out + (("\n[stderr]\n" + result.err) if result.err.strip() else "")
+    seconds = round(time.time() - started, 1)
+    if result.timed_out:
+        return {"content": _clip(output) + f"\n[timed out after {timeout} s; the command may still be running]",
+                "error": True, "output": _clip(output), "exit": None, "seconds": seconds}
+    clipped = _clip(output)
+    return {"content": f"exit code {result.exitcode}\n{clipped}", "error": result.exitcode != 0, "output": clipped,
+            "exit": result.exitcode, "seconds": seconds}
+
+
+def _read_file(args: dict, ctx: Context) -> dict:
+    vm = _vm(ctx, args["host"])
+    text = ctx.pve.file_read(vm.vmid, args["path"])
+    if text is None:
+        return {"content": f"{args['path']} could not be read (missing or not readable)", "error": True}
+    return {"content": _clip(text), "error": False, "output": _clip(text)}
+
+
+def _write_file(args: dict, ctx: Context) -> dict:
+    vm = _vm(ctx, args["host"])
+    ctx.pve.write_file(vm.vmid, args["path"], args["content"])
+    return {"content": f"wrote {len(args['content']):,} characters to {args['path']}", "error": False}
+
+
+def _range_status(args: dict, ctx: Context) -> dict:
+    return {"content": json.dumps(ctx.status(), indent=1, default=str), "error": False}
+
+
+def _power(args: dict, ctx: Context) -> dict:
+    return _run_job(ctx, "power", {"range": ctx.range, "action": args["action"], "hosts": args.get("hosts") or None})
+
+
+def _snapshot(args: dict, ctx: Context) -> dict:
+    if args["action"] == "list":
         snaps = lifecycle.list_snapshots(ctx.pve, ctx.range)
-        return {"content": "\n".join(f"{s.get('name')}: {s.get('description', '')}" for s in snaps) or "no snapshots",
-                "error": False}
-    if name in ("power", "snapshot"):
-        if name == "power":
-            target = {"range": ctx.range, "action": args["action"], "hosts": args.get("hosts") or None}
-            kind = "power"
-        elif args["action"] == "create":
-            target, kind = {"range": ctx.range, "name": args["name"], "description": args.get("description", "")}, "snapshot"
-        else:
-            target, kind = {"range": ctx.range, "name": args["name"], "delete_newer": False}, "rollback"
-        job = ops.start(ctx.cfg, kind, target, f"chat:{ctx.username}", background=True)
-        st = wait_job(ctx.cfg, job["job"])
-        ok = st.get("state") == "succeeded"
-        res = st.get("result") or {}
-        detail = res.get("message") or res.get("error") or ""
-        return {"content": f"job {job['job']} {st.get('state')}" + (f": {detail}" if detail else ""),
-                "error": not ok, "meta": {"job": job["job"]}}
-    if name == "update_spec":
-        problems, diff, _ = ctx.check_spec(args["yaml"])
-        if problems:
-            return {"content": "VALOR could not use that spec:\n" + "\n".join(f"- {p}" for p in problems), "error": True}
-        saved = ctx.save_spec(args["yaml"])
-        counts = ", ".join(f"{v} {k}" for k, v in (saved.get("draft") or {}).items()) or "no VM changes"
-        return {"content": f"Saved as the range's draft ({counts}). It is built when the person approves VALOR's plan.",
-                "error": False, "meta": {"draft": saved.get("draft"), "diff": saved.get("diff", "")}}
-    raise ValorError("unknown_tool", f"unknown tool '{name}'")
+        lines = [f"{snap.get('name')}: {snap.get('description', '')}" for snap in snaps]
+        return {"content": "\n".join(lines) or "no snapshots", "error": False}
+    if args["action"] == "create":
+        return _run_job(ctx, "snapshot", {"range": ctx.range, "name": args["name"],
+                                          "description": args.get("description", "")})
+    return _run_job(ctx, "rollback", {"range": ctx.range, "name": args["name"], "delete_newer": False})
+
+
+def _run_job(ctx: Context, kind: str, target: dict) -> dict:
+    """Power and snapshot actions run as ordinary VALOR jobs (the engine lock, the task log); wait for the result."""
+    job = ops.start(ctx.cfg, kind, target, f"chat:{ctx.username}", background=True)
+    status = wait_job(ctx.cfg, job["job"])
+    result = status.get("result") or {}
+    detail = result.get("message") or result.get("error") or ""
+    return {"content": f"job {job['job']} {status.get('state')}" + (f": {detail}" if detail else ""),
+            "error": status.get("state") != "succeeded", "meta": {"job": job["job"]}}
+
+
+def _update_spec(args: dict, ctx: Context) -> dict:
+    """Validate the model's spec, then save it as the range's draft (built only after the person approves)."""
+    problems, diff, _ = ctx.check_spec(args["yaml"])
+    if problems:
+        return {"content": "VALOR could not use that spec:\n" + "\n".join(f"- {p}" for p in problems), "error": True}
+    saved = ctx.save_spec(args["yaml"])
+    counts = ", ".join(f"{count} {action}" for action, count in (saved.get("draft") or {}).items()) or "no VM changes"
+    return {"content": f"Saved as the range's draft ({counts}). It is built when the person approves VALOR's plan.",
+            "error": False, "meta": {"draft": saved.get("draft"), "diff": saved.get("diff", "")}}
+
+
+_RUNNERS = {"run_command": _run_command, "read_file": _read_file, "write_file": _write_file,
+            "range_status": _range_status, "power": _power, "snapshot": _snapshot, "update_spec": _update_spec}
 
 
 def wait_job(cfg, job_id: str, limit: int = JOB_WAIT) -> dict:
     end = time.time() + limit
-    st: dict = {}
+    status: dict = {}
     while time.time() < end:
-        st = jobs.status(cfg, job_id, tail=0)
-        if st.get("state") in ("succeeded", "failed"):
-            return st
+        status = jobs.status(cfg, job_id, tail=0)
+        if status.get("state") in ("succeeded", "failed"):
+            return status
         time.sleep(2)
-    return {**st, "state": st.get("state", "unknown"), "result": {"message": f"still {st.get('state')} after {limit} s"}}
+    return {**status, "state": status.get("state", "unknown"),
+            "result": {"message": f"still {status.get('state')} after {limit} s"}}
