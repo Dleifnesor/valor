@@ -1,4 +1,9 @@
-"""Teardown (FR-11): removes only VMs in the engine's pool tagged with the named range."""
+"""Teardown (FR-11): removes only VMs in the engine's pool tagged with the named range.
+
+Nothing else is ever deleted: range_vms only returns VMs in VALOR's pool with the `valor` tag, and each VM is
+checked for the range's own tag once more before it goes. The range's spec, journal and history stay, so the
+range can be built again; the web UI deletes those separately.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from .pve import PVE
 
 
 def destroy(pve: PVE, range_name: str, emit=lambda *a, **k: None) -> dict:
-    t0 = time.time()
+    started = time.time()
     vms = range_vms(pve, range_name, with_config=False)
     removed, done = [], []
     for vm in vms:
@@ -27,7 +32,7 @@ def destroy(pve: PVE, range_name: str, emit=lambda *a, **k: None) -> dict:
         emit("step_done", step="delete VM", host=vm.name)
     leftovers = _kickstart_cds(pve, range_name)
     return {"range": range_name, "removed": removed, "kickstart_cds_removed": leftovers,
-            "seconds": round(time.time() - t0, 1)}
+            "seconds": round(time.time() - started, 1)}
 
 
 def _kickstart_cds(pve: PVE, range_name: str) -> list[str]:
@@ -40,11 +45,11 @@ def _kickstart_cds(pve: PVE, range_name: str) -> list[str]:
         items = pve.storage_content(storage, "iso")
     except ValorError:
         return out
-    for it in items:
-        if it["volid"].split("/", 1)[-1].startswith(f"valor-ks-{range_name}-"):
+    for item in items:
+        if item["volid"].split("/", 1)[-1].startswith(f"valor-ks-{range_name}-"):
             try:
-                pve.delete_volume(storage, it["volid"])
-                out.append(it["volid"])
+                pve.delete_volume(storage, item["volid"])
+                out.append(item["volid"])
             except ValorError:
                 pass
     return out

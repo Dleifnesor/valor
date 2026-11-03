@@ -1,4 +1,10 @@
-"""Range lifecycle: power, snapshots and reset - always for the VMs of one range only."""
+"""Range lifecycle: power, snapshots and reset - always for the VMs of one range only.
+
+Every action works on the range as a whole (or a few of its hosts) and keeps an order that keeps the range usable:
+the router starts first and stops last, because the hosts need their gateway. Snapshots are disk-only (no RAM),
+taken on every VM under the same name; `valor-clean` is taken automatically after each verified build, so a range
+can always be reset to the state it had when it was last known good.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +22,7 @@ POWER_ACTIONS = ("start", "shutdown", "stop", "reboot")
 
 
 def _vms(pve: PVE, range_name: str, hosts: list[str] | None = None) -> list[VMState]:
+    """The range's VMs (only those VALOR stamped), or the named hosts among them."""
     vms = [vm for vm in range_vms(pve, range_name) if vm.host and f"valor-range-{range_name}" in vm.tags]
     if hosts:
         unknown = set(hosts) - {vm.host for vm in vms}
@@ -29,15 +36,15 @@ def _vms(pve: PVE, range_name: str, hosts: list[str] | None = None) -> list[VMSt
 
 def _ordered(vms: list[VMState], router_first: bool) -> list[VMState]:
     """The router comes up first (hosts need their gateway) and goes down last."""
-    rtr = [v for v in vms if v.host == ROUTER]
-    rest = [v for v in vms if v.host != ROUTER]
-    return rtr + rest if router_first else rest + rtr
+    router = [vm for vm in vms if vm.host == ROUTER]
+    hosts = [vm for vm in vms if vm.host != ROUTER]
+    return router + hosts if router_first else hosts + router
 
 
 def power(pve: PVE, range_name: str, action: str, hosts: list[str] | None = None, emit=lambda *a, **k: None) -> dict:
     if action not in POWER_ACTIONS:
         raise ValorError("invalid_action", f"power action must be one of {POWER_ACTIONS}")
-    t0 = time.time()
+    started = time.time()
     done = []
     for vm in _ordered(_vms(pve, range_name, hosts), router_first=action in ("start", "reboot")):
         status = pve.vm_status(vm.vmid).get("status")
@@ -57,23 +64,23 @@ def power(pve: PVE, range_name: str, action: str, hosts: list[str] | None = None
             pve.power(vm.vmid, action)
         emit("step_done", step=action, host=vm.host)
         done.append({"host": vm.host, "vmid": vm.vmid, "result": "done"})
-    return {"range": range_name, "action": action, "vms": done, "seconds": round(time.time() - t0, 1)}
+    return {"range": range_name, "action": action, "vms": done, "seconds": round(time.time() - started, 1)}
 
 
 def list_snapshots(pve: PVE, range_name: str) -> list[dict]:
     """One entry per snapshot name across the range's VMs, newest first."""
     by_name: dict[str, dict] = {}
     for vm in _vms(pve, range_name):
-        for s in pve.snapshots(vm.vmid):
-            e = by_name.setdefault(s["name"], {"name": s["name"], "description": s.get("description", ""),
-                                               "time": s.get("snaptime", 0), "hosts": []})
-            e["hosts"].append(vm.host)
-            e["time"] = max(e["time"], s.get("snaptime", 0))
+        for snap in pve.snapshots(vm.vmid):
+            entry = by_name.setdefault(snap["name"], {"name": snap["name"], "description": snap.get("description", ""),
+                                                      "time": snap.get("snaptime", 0), "hosts": []})
+            entry["hosts"].append(vm.host)
+            entry["time"] = max(entry["time"], snap.get("snaptime", 0))
     total = len(_vms(pve, range_name))
-    out = sorted(by_name.values(), key=lambda e: e["time"], reverse=True)
-    for e in out:
-        e["complete"] = len(e["hosts"]) == total
-        e["automatic"] = e["name"] == CLEAN
+    out = sorted(by_name.values(), key=lambda entry: entry["time"], reverse=True)
+    for entry in out:
+        entry["complete"] = len(entry["hosts"]) == total     # a VM added later has no older snapshots
+        entry["automatic"] = entry["name"] == CLEAN
     return out
 
 
@@ -81,10 +88,10 @@ def snapshot(pve: PVE, range_name: str, name: str, description: str = "", replac
              emit=lambda *a, **k: None) -> dict:
     if not SNAP_NAME.match(name):
         raise ValorError("invalid_snapshot_name", "snapshot names: 2-40 letters, digits, - or _, starting with a letter")
-    t0 = time.time()
+    started = time.time()
     vms = _vms(pve, range_name)
     for vm in vms:
-        have = {s["name"] for s in pve.snapshots(vm.vmid)}
+        have = {snap["name"] for snap in pve.snapshots(vm.vmid)}
         if name in have:
             if not replace:
                 raise ValorError("snapshot_exists", f"snapshot {name} already exists on {vm.host}")
@@ -95,53 +102,56 @@ def snapshot(pve: PVE, range_name: str, name: str, description: str = "", replac
         emit("step_start", step=f"snapshot {name}", host=vm.host)
         pve.snapshot(vm.vmid, name, description)
         emit("step_done", step=f"snapshot {name}", host=vm.host)
-    return {"range": range_name, "snapshot": name, "vms": [vm.host for vm in vms], "seconds": round(time.time() - t0, 1)}
+    return {"range": range_name, "snapshot": name, "vms": [vm.host for vm in vms],
+            "seconds": round(time.time() - started, 1)}
 
 
 def rollback(pve: PVE, range_name: str, name: str, delete_newer: bool = False, emit=lambda *a, **k: None) -> dict:
     """Roll every VM back to `name` and start it. Some storages (ZFS) can only roll back to the newest snapshot:
     with delete_newer, newer snapshots are deleted first; otherwise the reset stops with a clear error."""
-    t0 = time.time()
+    started = time.time()
     vms = _vms(pve, range_name)
-    plans = []
+    plans = []                          # (vm, its snapshots newer than the target, newest first)
     for vm in vms:
         snaps = pve.snapshots(vm.vmid)
-        target = next((s for s in snaps if s["name"] == name), None)
+        target = next((snap for snap in snaps if snap["name"] == name), None)
         if not target:
             raise ValorError("snapshot_missing", f"{vm.host} has no snapshot {name}")
-        newer = sorted((s for s in snaps if s.get("snaptime", 0) > target.get("snaptime", 0)),
-                       key=lambda s: s.get("snaptime", 0), reverse=True)
+        newer = sorted((snap for snap in snaps if snap.get("snaptime", 0) > target.get("snaptime", 0)),
+                       key=lambda snap: snap.get("snaptime", 0), reverse=True)
         plans.append((vm, newer))
-    blocked = {vm.host: [s["name"] for s in newer] for vm, newer in plans if newer}
+    blocked = {vm.host: [snap["name"] for snap in newer] for vm, newer in plans if newer}
     if blocked and not delete_newer:
         raise ValorError("newer_snapshots", f"newer snapshots exist: {blocked}",
                          hint="Storages like ZFS can only roll back to the newest snapshot. Delete the newer "
                               "snapshots, or reset with 'delete newer snapshots'.")
     for vm, newer in _ordered_pairs(plans):
-        for s in newer:
-            emit("step_start", step=f"delete newer snapshot {s['name']}", host=vm.host)
-            pve.delete_snapshot(vm.vmid, s["name"])
-            emit("step_done", step=f"delete newer snapshot {s['name']}", host=vm.host)
+        for snap in newer:
+            emit("step_start", step=f"delete newer snapshot {snap['name']}", host=vm.host)
+            pve.delete_snapshot(vm.vmid, snap["name"])
+            emit("step_done", step=f"delete newer snapshot {snap['name']}", host=vm.host)
         emit("step_start", step=f"roll back to {name}", host=vm.host)
         pve.rollback(vm.vmid, name, start=True)
         emit("step_done", step=f"roll back to {name}", host=vm.host)
-    return {"range": range_name, "snapshot": name, "vms": [vm.host for vm, _ in plans], "seconds": round(time.time() - t0, 1)}
+    return {"range": range_name, "snapshot": name, "vms": [vm.host for vm, _ in plans],
+            "seconds": round(time.time() - started, 1)}
 
 
 def _ordered_pairs(plans):
-    rtr = [p for p in plans if p[0].host == ROUTER]
-    return rtr + [p for p in plans if p[0].host != ROUTER]
+    """(vm, ...) pairs with the router's first: it rolls back and starts before the hosts."""
+    router = [pair for pair in plans if pair[0].host == ROUTER]
+    return router + [pair for pair in plans if pair[0].host != ROUTER]
 
 
 def delete_snapshot(pve: PVE, range_name: str, name: str, emit=lambda *a, **k: None) -> dict:
-    t0 = time.time()
+    started = time.time()
     hosts = []
     for vm in _vms(pve, range_name):
-        if any(s["name"] == name for s in pve.snapshots(vm.vmid)):
+        if any(snap["name"] == name for snap in pve.snapshots(vm.vmid)):
             emit("step_start", step=f"delete snapshot {name}", host=vm.host)
             pve.delete_snapshot(vm.vmid, name)
             emit("step_done", step=f"delete snapshot {name}", host=vm.host)
             hosts.append(vm.host)
     if not hosts:
         raise ValorError("snapshot_missing", f"no VM of {range_name} has a snapshot {name}")
-    return {"range": range_name, "snapshot": name, "vms": hosts, "seconds": round(time.time() - t0, 1)}
+    return {"range": range_name, "snapshot": name, "vms": hosts, "seconds": round(time.time() - started, 1)}
