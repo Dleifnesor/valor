@@ -111,6 +111,35 @@ def test_login_accounts_per_os(cfg, corp):
     assert a["CORP\\Administrator"]["hosts"] == ["dc1", "dc2", "pc1"] and a["CORP\\Administrator"]["domain"] == "corp.lab"
 
 
+def test_console_usernames_per_host(cfg, corp):
+    from valor.cluster import load_catalog
+    from valor.credentials import accounts, host_usernames
+    account_list = accounts(corp, load_catalog(cfg), "valor")
+    names = {host: [u["username"] for u in host_usernames(account_list, host)] for host in ("rtr", "web", "dc1", "pc1")}
+    assert names["rtr"] == ["valor"] and names["web"] == ["valor"]
+    assert names["dc1"] == ["CORP\\Administrator"]
+    assert names["pc1"] == ["CORP\\Administrator", ".\\Administrator"]     # a bare name signs in to the domain
+    assert host_usernames(account_list, "gone") == []
+
+
+def test_console_offers_the_vms_usernames(cfg, tmp_path):
+    from valor import credentials
+    from valor.config import Config
+    from valor.crypto import Box
+    from valor.web.consoles import _usernames
+    key = tmp_path / "secret.key"
+    Box.create_key_file(key)
+    kcfg = Config(**{**cfg.__dict__, "secret_key_file": str(key), "data_dir": str(tmp_path / "data")})
+    kcfg.ranges_dir.mkdir(parents=True)
+    (kcfg.ranges_dir / "corp.yaml").write_text(SPEC)
+    assert _usernames(kcfg, "corp", "web") == []                                  # no login before the first build
+    credentials.ensure(kcfg, "corp")
+    assert _usernames(kcfg, "corp", "web") == [{"username": "valor", "kind": "linux"}]
+    assert [u["username"] for u in _usernames(kcfg, "corp", "pc1")] == ["CORP\\Administrator", ".\\Administrator"]
+    (kcfg.ranges_dir / "corp.yaml").unlink()
+    assert _usernames(kcfg, "corp", "web") == []                                  # no spec: offer nothing
+
+
 def test_catalog_lists_windows_roles(cfg):
     from valor.web.ranges import role_list
     roles = {r["name"]: r for r in role_list(cfg)}
