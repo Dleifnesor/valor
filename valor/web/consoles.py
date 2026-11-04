@@ -16,11 +16,12 @@ from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import credentials
-from ..cluster import range_vms
+from ..cluster import load_catalog, range_vms
 from ..errors import ValorError
 from ..pve import PVE
 from . import db
 from .core import ROLES, ApiError, Session, _load, require
+from .ranges import _load as load_range_spec
 
 router = APIRouter(tags=["consoles"])
 CONNECT_WITHIN = 60          # seconds between creating a console session and opening its websocket
@@ -49,6 +50,18 @@ class ConsoleIn(BaseModel):
     kind: str = Field(default="vnc", pattern="^(vnc|serial)$")
 
 
+def _usernames(cfg, name: str, host: str) -> list[dict]:
+    """Who signs in on this VM with the range password (none when the range has no login yet or no spec)."""
+    login = credentials.load(cfg, name) if credentials.enabled(cfg) else None
+    if not login:
+        return []
+    try:
+        spec, _ = load_range_spec(cfg, name)
+        return credentials.host_usernames(credentials.accounts(spec, load_catalog(cfg), login["username"]), host)
+    except (ApiError, ValorError, OSError):
+        return []
+
+
 def _prune() -> None:
     """Forget console sessions nobody connected to in time."""
     now = time.time()
@@ -74,7 +87,8 @@ def open_console(name: str, host: str, body: ConsoleIn, request: Request, s: Ses
     return {"session": sid, "kind": body.kind, "host": host, "vmid": vm.vmid,
             # noVNC authenticates the VNC stream with Proxmox's one-time ticket (valid for this port only)
             "vnc_password": info["ticket"] if body.kind == "vnc" else None,
-            "login": bool(credentials.load(cfg, name)) if credentials.enabled(cfg) else False}
+            "login": bool(credentials.load(cfg, name)) if credentials.enabled(cfg) else False,
+            "usernames": _usernames(cfg, name, host)}
 
 
 @router.websocket("/api/console/{sid}")

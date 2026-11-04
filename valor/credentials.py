@@ -126,3 +126,18 @@ def accounts(spec, catalog: dict, guest_user: str) -> list[dict]:
         short_name = netbios.get(domain, domain.split(".")[0].upper())
         out.append({"username": f"{short_name}\\Administrator", "hosts": hosts, "kind": "domain", "domain": domain})
     return out
+
+
+def host_usernames(account_list: list[dict], host: str) -> list[dict]:
+    """The usernames to offer on one host's console (its Type username button), from accounts(). The domain
+    account comes first. On a domain member the local Administrator is written .\\Administrator: a bare name
+    signs in to the domain there."""
+    on_host = [account for account in account_list if host in account["hosts"]]
+    in_domain = any(account["kind"] == "domain" for account in on_host)
+    out = []
+    for account in sorted(on_host, key=lambda account: account["kind"] != "domain"):
+        username = account["username"]
+        if account["kind"] == "windows" and in_domain:
+            username = ".\\" + username
+        out.append({"username": username, "kind": account["kind"]})
+    return out
