@@ -1,18 +1,31 @@
-"""install.sh entry point: install, status, upgrade, uninstall, extra templates."""
+# *stands at the front of the install line* OwO installer/cli.py: install.sh's COMMAND LINE! ^w^
+# Install, status, upgrade, uninstall, and extra templates. Everything the installer creates goes into the install
+# record the moment it exists, so a run that stops halfway can be resumed, and upgrade/uninstall only touch what the
+# installer made *wags tail*
+"""install.sh entry point: install, status, upgrade, uninstall, extra templates.
 
+The installer runs as root on a Proxmox node. Everything it creates is written to an install record
+(record.py) the moment it exists, so a run that stops half way can be resumed, and upgrade / uninstall touch
+only what the installer made.
+"""
+
+# Lazy type hints UwU
 from __future__ import annotations
 
+# argparse (the command line), os (root check, file modes), sys, Path >w<
 import argparse
 import os
 import sys
 from pathlib import Path
 
+# The installer's modules and helpers OwO
 from . import MIN_PVE, VERSION, appliance, identity, network, templates, ui
 from .answers import Answers, defaults, edit, load_file, problems, resolve_bridge
 from .discover import Facts, collect
 from .record import Record
 from .sh import CommandError, pvesh, run
 
+# EPILOG: usage examples shown at the end of --help ^w^
 EPILOG = """
 examples:
   ./install.sh                                  interactive install with detected defaults
@@ -26,6 +39,8 @@ examples:
 """
 
 
+# preflight(): show what was found on this node and stop early if something's missing: Proxmox too old, no
+# internet (when needed), under 3 GiB free memory; warn about pending network changes UwU
 def preflight(facts: Facts, need_internet: bool = True) -> None:
     ui.step("Checking this node")
     rows = [("Proxmox VE", facts.pve_version), ("node", f"{facts.node} ({facts.node_ip})"),
@@ -47,147 +62,207 @@ def preflight(facts: Facts, need_internet: bool = True) -> None:
                 "not touch the network until they are applied or reverted")
 
 
-def show(a: Answers, facts: Facts, bridge: str, create_bridge: bool) -> None:
-    lo, hi = a.vmid_ranges
+# show(): the plan: instance, the VALOR VM, its network, who may reach the UI, the certificate, the first admin, the
+# ranges' storage/ids/VLANs, the segment bridge, the uplink, reserved networks, templates, and the ISO library >w<
+def show(settings: Answers, facts: Facts, bridge: str, create_bridge: bool) -> None:
+    lo, hi = settings.vmid_ranges
     ui.table([
-        ("instance", f"{a.id}  (pools {a.pool_ranges}, {a.pool_templates}, {a.pool_system}; user {a.user})"),
-        ("VALOR VM", f"VMID {a.vmid_vm}, {a.vm_cores} vCPU, {a.vm_memory} MiB, {a.vm_disk} GiB on {a.vm_storage}"),
-        ("  network", f"{a.vm_bridge}" + (f" VLAN {a.vm_vlan}" if a.vm_vlan else "")
-         + f", {'DHCP' if a.vm_ip == 'dhcp' else a.vm_ip + ' via ' + a.vm_gateway}, hostname {a.vm_hostname}"),
-        ("  web UI from", ", ".join(a.allowed_networks) + "  (HTTPS; nothing else is reachable)"),
-        ("  certificate", {"valor-ca": "VALOR's own CA", "own": f"your certificate {a.tls_cert}"}[a.tls]),
-        ("  first admin", a.admin_user + " (password saved root-only on this node; MFA set up at first sign-in)"),
-        ("ranges", f"disks on {a.range_storage}; VMIDs {lo}-{hi}; VLANs {a.vlan_min}-{a.vlan_max}"),
+        ("instance", f"{settings.id}  (pools {settings.pool_ranges}, {settings.pool_templates}, {settings.pool_system}; user {settings.user})"),
+        ("VALOR VM", f"VMID {settings.vmid_vm}, {settings.vm_cores} vCPU, {settings.vm_memory} MiB, {settings.vm_disk} GiB on {settings.vm_storage}"),
+        ("  network", f"{settings.vm_bridge}" + (f" VLAN {settings.vm_vlan}" if settings.vm_vlan else "")
+         + f", {'DHCP' if settings.vm_ip == 'dhcp' else settings.vm_ip + ' via ' + settings.vm_gateway}, hostname {settings.vm_hostname}"),
+        ("  web UI from", ", ".join(settings.allowed_networks) + "  (HTTPS; nothing else is reachable)"),
+        ("  certificate", {"valor-ca": "VALOR's own CA", "own": f"your certificate {settings.tls_cert}"}[settings.tls]),
+        ("  first admin", settings.admin_user + " (password saved root-only on this node; MFA set up at first sign-in)"),
+        ("ranges", f"disks on {settings.range_storage}; VMIDs {lo}-{hi}; VLANs {settings.vlan_min}-{settings.vlan_max}"),
         ("  segment bridge", f"{bridge}" + (" (new: VLAN-aware, no physical port, with rollback timer)" if create_bridge else " (existing)")),
-        ("  uplink", f"{a.vm_bridge} via the LAN's DHCP, NAT, private networks blocked"),
-        ("  reserved", ", ".join(a.reserved_networks)),
-        ("templates", ", ".join(a.templates) + f"  (snippets on {a.snippets_storage})"),
-        ("ISO library", f"downloads/uploads to {a.iso_storage or '-'}; reads {', '.join(a.iso_storages) or '-'}"),
+        ("  uplink", f"{settings.vm_bridge} via the LAN's DHCP, NAT, private networks blocked"),
+        ("  reserved", ", ".join(settings.reserved_networks)),
+        ("templates", ", ".join(settings.templates) + f"  (snippets on {settings.snippets_storage})"),
+        ("ISO library", f"downloads/uploads to {settings.iso_storage or '-'}; reads {', '.join(settings.iso_storages) or '-'}"),
     ])
 
 
+# install(): a new installation (or resuming one), as named phases OwO
 def install(args, facts: Facts) -> None:
+    """A new installation (or the resumption of one that stopped half way: every step checks what exists)."""
+    # Check the node, agree on the settings, and start (or continue) the record ^w^
     preflight(facts)
-    cat = templates.catalog()
-    given = load_file(args.answers) if args.answers else {}
-    if args.id:
-        given["id"] = args.id
-    a = defaults(facts, given)
-    if facts.record and not args.answers:
-        ui.info(f"found an earlier install record for '{a.id}' ({facts.record.get('version')}); resuming with its settings")
-    while True:
-        bridge, create_bridge = resolve_bridge(a, facts)
-        ui.step("Plan")
-        show(a, facts, bridge, create_bridge)
-        errs = problems(a, facts, cat)
-        for e in errs:
-            ui.fail(e)
-        if args.save_answers:
-            Path(args.save_answers).write_text(a.to_toml())
-            ui.ok(f"settings saved to {args.save_answers}")
-        if args.dry_run:
-            ui.step("Would do")
-            for line in identity.plan(a, facts, bridge):
-                ui.info(line)
-            if create_bridge:
-                ui.info(f"create bridge {bridge} on {facts.node} (backup + 5-minute rollback timer)")
-            for os_name in a.templates:
-                t = templates.existing(facts, a, os_name)
-                ui.info(f"reuse template {t['vmid']} ({os_name})" if t else f"build template {os_name}")
-            ui.info(f"create the VALOR VM {a.vmid_vm} and provision it over the guest agent")
-            raise SystemExit(1 if errs else 0)
-        if errs and (ui.ASSUME_YES or not sys.stdin.isatty()):
-            raise SystemExit("fix the settings above (answers file or flags) and run again")
-        choice = "edit" if errs else ui.choose("Install with these settings?", [
-            ("install", "go ahead"), ("edit", "change settings"), ("quit", "do nothing")], "install")
-        if choice == "quit":
-            raise SystemExit(0)
-        if choice == "edit":
-            a = edit(a, facts, cat)
-            continue
-        break
+    settings, bridge, create_bridge = _agree_on_settings(args, facts)
+    record = Record(settings.id, facts.record)
+    record.save(settings)
 
-    rec = Record(a.id, facts.record)
-    rec.save(a)
+    # Phase: the least-privilege Proxmox identity (returns the new token) UwU
     ui.step("Proxmox identity")
-    token = identity.ensure(a, facts, rec, bridge)
+    token = identity.ensure(settings, facts, record, bridge)
 
+    # Phase: the range network >w<
     ui.step("Range network")
-    if create_bridge:
-        backup = network.create_bridge(facts.node, bridge, f"VALOR {a.id}: range segments (VLAN-aware, no physical port)")
-        rec.set("bridge", {"name": bridge, "created": True, "backup": backup})
-    else:
-        rec.objects.setdefault("bridge", {"name": bridge, "created": False})
-        rec.save()
-        ui.ok(f"using bridge {bridge}")
+    _range_bridge(settings, facts, record, bridge, create_bridge)
 
+    # Phase: OS templates OwO
     ui.step("OS templates")
-    tpl = templates.ensure(a, facts, rec, a.templates)
+    built = templates.ensure(settings, facts, record, settings.templates)
 
+    # Phase: the VALOR VM: clone, boot, record its address ^w^
     ui.step("VALOR VM")
     api_host, pve_ca = identity.api_endpoint(facts)
-    vmid = appliance.create(a, facts, rec, tpl["ubuntu-24.04"])
+    vmid = appliance.create(settings, facts, record, built["ubuntu-24.04"])
     ip = appliance.boot(facts, vmid)
-    rec.set("vm", {"vmid": vmid, "name": a.vm_hostname, "ip": ip})
+    record.set("vm", {"vmid": vmid, "name": settings.vm_hostname, "ip": ip})
+    # Least privilege, checked for real: the engine's token must not be able to read VALOR's own VM.
     if not identity.token_cannot_touch(facts.node, vmid, token):
         raise SystemExit("safety check failed: the engine's token can read the VALOR VM. Not continuing.")
     ui.ok("the engine's token cannot touch the VALOR VM (HTTP 403)")
 
+    # Phase: provisioning, with a fresh one-time admin password UwU
     password = appliance.new_password()
+    files = _appliance_files(settings, facts, bridge, api_host, pve_ca, ip, token, password)
+    ui.step("Provisioning")
+    appliance.provision(settings, facts, vmid, "install", files)
+    record.mark("provisioned")
+
+    # Phase: checking: the UI answers over HTTPS with a valid certificate; write the first sign-in details and finish >w<
+    ui.step("Checking")
+    ca = appliance.ca_pem(facts, vmid) if settings.tls == "valor-ca" else None
+    if not appliance.health(ip, ca):
+        raise SystemExit(f"the web UI at https://{ip}/ does not answer; see /var/log/valor-setup.log in VM {vmid}")
+    ui.ok(f"https://{ip}/ answers with a valid certificate")
+    credentials = _write_credentials(settings, ip, password, ca)
+    record.set("credentials_file", str(credentials))
+    record.mark("installed")
+    _say_ready(settings, ip, credentials, ca)
+
+
+# _agree_on_settings(): detected defaults + answers file + flags, shown as a plan until the person installs (or
+# --dry-run stops). Returns (settings, range bridge, whether to create it) OwO
+def _agree_on_settings(args, facts: Facts):
+    """Detected defaults + answers file + flags, shown as a plan until the person installs (or --dry-run stops
+    here). Returns (settings, range bridge, whether to create it)."""
+    catalog = templates.catalog()
+    given = load_file(args.answers) if args.answers else {}
+    if args.id:
+        given["id"] = args.id
+    settings = defaults(facts, given)
+    if facts.record and not args.answers:
+        ui.info(f"found an earlier install record for '{settings.id}' ({facts.record.get('version')}); "
+                "resuming with its settings")
+    # Loop: show the plan and its problems; save the answers if asked; dry-run stops here; unattended runs with problems
+    # stop; otherwise install, edit, or quit ^w^
+    while True:
+        bridge, create_bridge = resolve_bridge(settings, facts)
+        ui.step("Plan")
+        show(settings, facts, bridge, create_bridge)
+        errors = problems(settings, facts, catalog)
+        for error in errors:
+            ui.fail(error)
+        if args.save_answers:
+            Path(args.save_answers).write_text(settings.to_toml())
+            ui.ok(f"settings saved to {args.save_answers}")
+        if args.dry_run:
+            _show_dry_run(settings, facts, bridge, create_bridge)
+            raise SystemExit(1 if errors else 0)
+        if errors and (ui.ASSUME_YES or not sys.stdin.isatty()):
+            raise SystemExit("fix the settings above (answers file or flags) and run again")
+        choice = "edit" if errors else ui.choose("Install with these settings?", [
+            ("install", "go ahead"), ("edit", "change settings"), ("quit", "do nothing")], "install")
+        if choice == "quit":
+            raise SystemExit(0)
+        if choice == "edit":
+            settings = edit(settings, facts, catalog)
+            continue
+        return settings, bridge, create_bridge
+
+
+# _show_dry_run(): what WOULD happen: identity changes, the bridge, templates built or reused, the VM UwU
+def _show_dry_run(settings, facts: Facts, bridge: str, create_bridge: bool) -> None:
+    ui.step("Would do")
+    for line in identity.plan(settings, facts, bridge):
+        ui.info(line)
+    if create_bridge:
+        ui.info(f"create bridge {bridge} on {facts.node} (backup + 5-minute rollback timer)")
+    for os_name in settings.templates:
+        template = templates.existing(facts, settings, os_name)
+        ui.info(f"reuse template {template['vmid']} ({os_name})" if template else f"build template {os_name}")
+    ui.info(f"create the VALOR VM {settings.vmid_vm} and provision it over the guest agent")
+
+
+# _range_bridge(): create the bridge (with its safety net) or record an existing one as NOT ours (uninstall leaves it) >w<
+def _range_bridge(settings, facts: Facts, record: Record, bridge: str, create_bridge: bool) -> None:
+    if create_bridge:
+        backup = network.create_bridge(facts.node, bridge,
+                                       f"VALOR {settings.id}: range segments (VLAN-aware, no physical port)")
+        record.set("bridge", {"name": bridge, "created": True, "backup": backup})
+    else:
+        # an existing bridge is recorded as not ours, so uninstall never removes it
+        record.objects.setdefault("bridge", {"name": bridge, "created": False})
+        record.save()
+        ui.ok(f"using bridge {bridge}")
+
+
+# _appliance_files(): what goes into the VM at the first install: config, settings, the token, the admin password,
+# the Proxmox CA, and your own TLS certificate if you brought one OwO
+def _appliance_files(settings, facts: Facts, bridge: str, api_host: str, pve_ca: str | None, ip: str, token: dict,
+                     password: str) -> dict[str, str | bytes]:
+    """What goes into the VALOR VM at the first install: its config, the engine's token, the first admin's
+    password, and the TLS certificate when the person brings their own."""
     files: dict[str, str | bytes] = {
-        "config.toml": appliance.config_toml(a, facts, bridge, api_host, pve_ca, ip),
-        "appliance.env": appliance.appliance_env(a, facts, "install", api_host),
+        "config.toml": appliance.config_toml(settings, facts, bridge, api_host, pve_ca, ip),
+        "appliance.env": appliance.appliance_env(settings, facts, "install", api_host),
         "token.json": identity.json_token(token),
         "admin.pw": password + "\n",
     }
     if pve_ca:
         files["pve-ca.pem"] = pve_ca
-    if a.tls == "own":
-        files["tls.crt"] = Path(a.tls_cert).read_bytes()
-        files["tls.key"] = Path(a.tls_key).read_bytes()
-    ui.step("Provisioning")
-    appliance.provision(a, facts, vmid, "install", files)
-    rec.mark("provisioned")
+    if settings.tls == "own":
+        files["tls.crt"] = Path(settings.tls_cert).read_bytes()
+        files["tls.key"] = Path(settings.tls_key).read_bytes()
+    return files
 
-    ui.step("Checking")
-    ca = appliance.ca_pem(facts, vmid) if a.tls == "valor-ca" else None
-    if not appliance.health(ip, ca):
-        raise SystemExit(f"the web UI at https://{ip}/ does not answer; see /var/log/valor-setup.log in VM {vmid}")
-    ui.ok(f"https://{ip}/ answers with a valid certificate")
-    creds = Path(f"/root/valor-{a.id}-credentials.txt")
-    fd = os.open(creds, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+
+# _write_credentials(): the first sign-in details, root-only (created 0600, never world-readable) ^w^
+def _write_credentials(settings, ip: str, password: str, ca: str | None) -> Path:
+    """The first sign-in details, readable by root only (created with mode 0600, never world-readable)."""
+    path = Path(f"/root/valor-{settings.id}-credentials.txt")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
-        fh.write(f"VALOR {VERSION} ({a.id}) - first sign-in\nURL: https://{ip}/\nUser: {a.admin_user}\n"
+        fh.write(f"VALOR {VERSION} ({settings.id}) - first sign-in\nURL: https://{ip}/\nUser: {settings.admin_user}\n"
                  f"Password: {password}\n(You set up two-factor authentication at the first sign-in.)\n")
         if ca:
             fh.write(f"CA certificate SHA-256: {appliance.fingerprint(ca)}\n")
-    rec.set("credentials_file", str(creds))
-    rec.mark("installed")
+    return path
+
+
+# _say_ready(): the "VALOR is ready" summary (with a tip to reserve the DHCP address) UwU
+def _say_ready(settings, ip: str, credentials: Path, ca: str | None) -> None:
     ui.say()
     ui.step(f"VALOR {VERSION} is ready")
-    rows = [("open", f"https://{ip}/"), ("sign in as", f"{a.admin_user} (password in {creds}, root-only)")]
+    rows = [("open", f"https://{ip}/"), ("sign in as", f"{settings.admin_user} (password in {credentials}, root-only)")]
     if ca:
         rows.append(("CA certificate", f"https://{ip}/ca.crt - SHA-256 {appliance.fingerprint(ca)[:47]}..."))
-    if a.vm_ip == "dhcp":
+    if settings.vm_ip == "dhcp":
         rows.append(("tip", f"reserve {ip} for the VALOR VM in your DHCP server so the address never changes"))
     ui.table(rows)
 
 
+# status(): show the recorded installation and check the web UI (with the system CAs, or VALOR's own CA) >w<
 def status(args, facts: Facts) -> None:
-    rec = facts.record
-    if not rec:
+    recorded = facts.record
+    if not recorded:
         raise SystemExit(f"no VALOR installation '{args.id or 'valor'}' on this cluster")
-    o = rec.get("objects", {})
-    vm = o.get("vm", {})
-    ui.step(f"VALOR '{rec['instance']}' {rec.get('version')} (installed {rec.get('created', '?')[:10]})")
-    ui.table([("VALOR VM", f"{vm.get('vmid')} at {vm.get('ip')}"), ("token", o.get("token", "-")),
-              ("bridge", f"{o.get('bridge', {}).get('name')}"), ("templates", ", ".join(f"{t['os']}={t['vmid']}" for t in o.get("templates", [])) or "reused"),
-              ("steps", ", ".join(k for k, v in rec.get("steps", {}).items() if v == "done"))])
+    objects = recorded.get("objects", {})
+    vm = objects.get("vm", {})
+    built = ", ".join(f"{template['os']}={template['vmid']}" for template in objects.get("templates", []))
+    ui.step(f"VALOR '{recorded['instance']}' {recorded.get('version')} (installed {recorded.get('created', '?')[:10]})")
+    ui.table([("VALOR VM", f"{vm.get('vmid')} at {vm.get('ip')}"), ("token", objects.get("token", "-")),
+              ("bridge", f"{objects.get('bridge', {}).get('name')}"), ("templates", built or "reused"),
+              ("steps", ", ".join(step for step, state in recorded.get("steps", {}).items() if state == "done"))])
     if vm.get("ip"):
         ok = appliance.health(vm["ip"], None) or appliance.health(vm["ip"], _ca_or_none(facts, vm))
         (ui.ok if ok else ui.fail)(f"web UI https://{vm['ip']}/ {'answers' if ok else 'does not answer'}")
 
 
+# _ca_or_none(): VALOR's CA, or None if it can't be read OwO
 def _ca_or_none(facts: Facts, vm: dict) -> str | None:
     try:
         return appliance.ca_pem(facts, vm["vmid"])
@@ -195,20 +270,25 @@ def _ca_or_none(facts: Facts, vm: dict) -> str | None:
         return None
 
 
+# upgrade(): push this version into the VALOR VM; data is kept ^w^
 def upgrade(args, facts: Facts) -> None:
-    rec = facts.record
-    if not rec or rec.get("steps", {}).get("installed") != "done":
+    """Push this version into the existing VALOR VM. Its data stays; running jobs finish first."""
+    recorded = facts.record
+    if not recorded or recorded.get("steps", {}).get("installed") != "done":
         raise SystemExit("no complete installation to upgrade; run ./install.sh")
     preflight(facts)
-    a = defaults(facts, rec["answers"])                 # settings added by newer versions get their default
-    bridge = rec["objects"]["bridge"]["name"]
-    vmid = rec["objects"]["vm"]["vmid"]
-    ui.step(f"Upgrading VALOR '{a.id}' from {rec.get('version')} to {VERSION}")
-    r = Record(a.id, rec)
-    r.save(a)
-    identity.ensure_roles(facts, r)                    # new versions may need new privileges
-    identity.grant(a, facts, r, bridge, rec["objects"]["token"])
+    # Settings from the record (newer settings get their defaults), plus the bridge and the VM UwU
+    settings = defaults(facts, recorded["answers"])        # settings added by newer versions get their default
+    bridge = recorded["objects"]["bridge"]["name"]
+    vmid = recorded["objects"]["vm"]["vmid"]
+    ui.step(f"Upgrading VALOR '{settings.id}' from {recorded.get('version')} to {VERSION}")
+    record = Record(settings.id, recorded)
+    record.save(settings)
+    # Roles and permissions may change between versions >w<
+    identity.ensure_roles(facts, record)                   # new versions may need new privileges
+    identity.grant(settings, facts, record, bridge, recorded["objects"]["token"])
     ip = appliance.boot(facts, vmid)
+    # Running or queued jobs: wait for them (the upgrade restarts the worker) OwO
     busy = appliance.busy_jobs(facts, vmid)
     if busy:
         ui.warn(f"VALOR is running or has queued {len(busy)} job(s) ({', '.join(busy)}). The upgrade restarts the "
@@ -216,94 +296,114 @@ def upgrade(args, facts: Facts) -> None:
         if not ui.confirm("Wait for them, then upgrade?", default=True):
             raise SystemExit(0)
         appliance.wait_jobs(facts, vmid)
+    # Fresh config and settings, provision in "upgrade" mode, then check the UI ^w^
     api_host, pve_ca = identity.api_endpoint(facts)
-    files: dict[str, str | bytes] = {"config.toml": appliance.config_toml(a, facts, bridge, api_host, pve_ca, ip),
-                                     "appliance.env": appliance.appliance_env(a, facts, "upgrade", api_host)}
+    files: dict[str, str | bytes] = {"config.toml": appliance.config_toml(settings, facts, bridge, api_host, pve_ca, ip),
+                                     "appliance.env": appliance.appliance_env(settings, facts, "upgrade", api_host)}
     if pve_ca:
         files["pve-ca.pem"] = pve_ca
-    appliance.provision(a, facts, vmid, "upgrade", files)
-    r.set("vm", {**rec["objects"]["vm"], "ip": ip})
-    ca = appliance.ca_pem(facts, vmid) if a.tls == "valor-ca" else None
+    appliance.provision(settings, facts, vmid, "upgrade", files)
+    record.set("vm", {**recorded["objects"]["vm"], "ip": ip})
+    ca = appliance.ca_pem(facts, vmid) if settings.tls == "valor-ca" else None
     if not appliance.health(ip, ca):
         raise SystemExit(f"after the upgrade https://{ip}/ does not answer; see /var/log/valor-setup.log in VM {vmid}")
     ui.ok(f"VALOR {VERSION} running at https://{ip}/")
 
 
+# uninstall(): remove what the installer made (range VMs only with --purge-ranges; templates, bridge and pools that
+# ranges still use stay) UwU
 def uninstall(args, facts: Facts) -> None:
-    rec_data = facts.record
-    if not rec_data:
+    """Remove what the installer created. Range VMs stay unless --purge-ranges; templates, the bridge and pools
+    that ranges still use stay too."""
+    recorded = facts.record
+    if not recorded:
         raise SystemExit(f"no VALOR installation '{args.id or 'valor'}' on this cluster")
-    rec = Record(rec_data["instance"], rec_data)
-    a = Answers(**rec_data.get("answers", {}))
-    ranges = appliance.pool_vms(a.pool_ranges)
-    ui.step(f"Removing VALOR '{a.id}'")
-    ui.info(f"VALOR VM {rec.objects.get('vm', {}).get('vmid')}, the API user/token/permissions and what the installer "
-            f"created. {len(ranges)} range VMs " + ("will be DELETED." if args.purge_ranges else "are kept."))
+    record = Record(recorded["instance"], recorded)
+    settings = Answers(**recorded.get("answers", {}))
+    ranges = appliance.pool_vms(settings.pool_ranges)
+    # Say what will go, and ask (default No) >w<
+    ui.step(f"Removing VALOR '{settings.id}'")
+    ui.info(f"VALOR VM {record.objects.get('vm', {}).get('vmid')}, the API user/token/permissions and what the "
+            f"installer created. {len(ranges)} range VMs " + ("will be DELETED." if args.purge_ranges else "are kept."))
     if not ui.confirm("Remove VALOR?", default=False):
         raise SystemExit(0)
-    if rec.objects.get("vm"):
-        appliance.destroy(rec.objects["vm"]["vmid"])
+    # The VM, the ranges (if purging), the templates (when no ranges are left), the identity, the pools, the bridge, the
+    # credentials file and finally the record itself OwO
+    if record.objects.get("vm"):
+        appliance.destroy(record.objects["vm"]["vmid"])
     if args.purge_ranges:
-        for m in ranges:
-            try:
-                run(["qm", "stop", str(m["vmid"]), "--skiplock", "1"], check=False)
-                run(["qm", "destroy", str(m["vmid"]), "--purge", "1"])
-                ui.ok(f"range VM {m['vmid']} ({m.get('name')}) removed")
-            except CommandError as e:
-                ui.warn(f"range VM {m['vmid']}: {e}")
+        _purge_ranges(ranges)
         ranges = []
     if not ranges:
-        templates.remove_built(rec)
-    identity.remove(rec)
-    for pool in rec.objects.get("pools_created", []):
+        templates.remove_built(record)
+    identity.remove(record)
+    for pool in record.objects.get("pools_created", []):
         try:
             pvesh("delete", f"/pools/{pool}")
         except CommandError:
             ui.warn(f"pool {pool} kept (not empty)")
-    b = rec.objects.get("bridge", {})
-    if b.get("created") and not ranges:
-        network.remove_bridge(facts.node, b["name"])
-    creds = rec.objects.get("credentials_file")
-    if creds:
-        Path(creds).unlink(missing_ok=True)
-    rec.delete()
+    bridge = record.objects.get("bridge", {})
+    if bridge.get("created") and not ranges:
+        network.remove_bridge(facts.node, bridge["name"])
+    credentials = record.objects.get("credentials_file")
+    if credentials:
+        Path(credentials).unlink(missing_ok=True)
+    record.delete()
     ui.ok("VALOR removed")
 
 
+# _purge_ranges(): stop and delete every range VM ^w^
+def _purge_ranges(ranges: list[dict]) -> None:
+    for vm in ranges:
+        try:
+            run(["qm", "stop", str(vm["vmid"]), "--skiplock", "1"], check=False)
+            run(["qm", "destroy", str(vm["vmid"]), "--purge", "1"])
+            ui.ok(f"range VM {vm['vmid']} ({vm.get('name')}) removed")
+        except CommandError as e:
+            ui.warn(f"range VM {vm['vmid']}: {e}")
+
+
+# add_template(): build (or rebuild) one more OS template for an existing installation UwU
 def add_template(args, facts: Facts) -> None:
     if not facts.record:
         raise SystemExit("install VALOR first")
-    a = Answers(**facts.record["answers"])
+    settings = Answers(**facts.record["answers"])
     if args.template not in templates.catalog():
         raise SystemExit(f"unknown OS {args.template}; known: {', '.join(templates.catalog())}")
-    rec = Record(a.id, facts.record)
+    record = Record(settings.id, facts.record)
     ui.step(f"Template {args.template}")
-    templates.ensure(a, facts, rec, [args.template], rebuild=args.rebuild)
+    templates.ensure(settings, facts, record, [args.template], rebuild=args.rebuild)
 
 
+# main(): parse the command line and run the right command >w<
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="install.sh", description=f"VALOR {VERSION} installer for Proxmox VE",
-                                 epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
-    mode = ap.add_mutually_exclusive_group()
+    parser = argparse.ArgumentParser(prog="install.sh", description=f"VALOR {VERSION} installer for Proxmox VE",
+                                     epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # Exactly one mode (or none = install) OwO
+    mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true")
     mode.add_argument("--upgrade", action="store_true")
     mode.add_argument("--uninstall", action="store_true")
     mode.add_argument("--template", metavar="OS")
-    ap.add_argument("--id", help="instance id (default: valor); prefixes every Proxmox object VALOR creates")
-    ap.add_argument("--answers", metavar="FILE", help="TOML answers file (see docs/INSTALL.md)")
-    ap.add_argument("--save-answers", metavar="FILE", help="write the final settings to FILE")
-    ap.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
-    ap.add_argument("--yes", action="store_true", help="accept defaults and confirmations (unattended)")
-    ap.add_argument("--purge-ranges", action="store_true", help="with --uninstall: also delete all range VMs")
-    ap.add_argument("--rebuild", action="store_true",
+    # Options: instance id, answers file, save answers, dry run, unattended, purge ranges, rebuild, version ^w^
+    parser.add_argument("--id", help="instance id (default: valor); prefixes every Proxmox object VALOR creates")
+    parser.add_argument("--answers", metavar="FILE", help="TOML answers file (see docs/INSTALL.md)")
+    parser.add_argument("--save-answers", metavar="FILE", help="write the final settings to FILE")
+    parser.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
+    parser.add_argument("--yes", action="store_true", help="accept defaults and confirmations (unattended)")
+    parser.add_argument("--purge-ranges", action="store_true", help="with --uninstall: also delete all range VMs")
+    parser.add_argument("--rebuild", action="store_true",
                     help="with --template: build a fresh template (current updates) and remove the old one")
-    ap.add_argument("--version", action="version", version=f"VALOR {VERSION}")
-    args = ap.parse_args(argv)
+    parser.add_argument("--version", action="version", version=f"VALOR {VERSION}")
+    args = parser.parse_args(argv)
+    # Must run as root UwU
     if os.geteuid() != 0:
         raise SystemExit("run the installer as root on a Proxmox VE node")
+    # --yes makes every question take its default; the instance id comes from --id, the answers file, or "valor" >w<
     ui.ASSUME_YES = args.yes
     instance = args.id or (load_file(args.answers).get("id") if args.answers else None) or "valor"
     ui.step(f"VALOR {VERSION} installer")
+    # Discover the node (skipping the internet check for status/uninstall) OwO
     facts = collect(instance, check_net=not (args.status or args.uninstall))
     try:
         if args.status:
@@ -316,6 +416,7 @@ def main(argv: list[str] | None = None) -> None:
             add_template(args, facts)
         else:
             install(args, facts)
+    # Command failures exit 2; Ctrl+C exits 130 with a "run again to resume" note ^w^ *salutes*
     except CommandError as e:
         ui.fail(str(e))
         raise SystemExit(2)

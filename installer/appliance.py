@@ -1,3 +1,8 @@
+# *builds VALOR's own little house* OwO installer/appliance.py: the VALOR VM itself! ^w^
+# Create it from the Ubuntu template, then PROVISION it over the guest agent: copy in a release payload (engine, web
+# service, built UI, roles, baselines, catalogs) plus this installation's settings, and run appliance/setup.sh inside.
+# Secrets (API token, the first admin's password) travel only over the agent channel and are wiped from the staging
+# area when setup finishes *wags tail*
 """The VALOR VM: create it from the Ubuntu template, then provision it over the guest agent.
 
 Provisioning copies a release payload (engine, web service, built UI, roles, baselines, catalog) and the
@@ -5,8 +10,10 @@ installation's settings into the VM and runs appliance/setup.sh there. Secrets (
 travel only over the agent channel and are deleted from the staging area when setup finishes.
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# io/tarfile (the payload), json, secrets/string (a one-time password), ssl/urllib (the health check), time, Path >w<
 import io
 import json
 import secrets
@@ -17,6 +24,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+# SOURCE/VERSION, the guest agent helpers, ui; answers, facts, the record, command helpers, and cpu_type OwO
 from . import SOURCE, VERSION, guest, ui
 from .answers import Answers
 from .discover import Facts
@@ -24,11 +32,14 @@ from .record import Record
 from .sh import CommandError, pvesh, run
 from .templates import cpu_type
 
+# STAGE: the staging folder inside the VM. PAYLOAD_DIRS/FILES: what goes into the VM (no tests, no dev tools) ^w^
 STAGE = "/var/lib/valor-install"
 PAYLOAD_DIRS = ["valor", "appliance", "roles", "baselines", "templates", "examples"]
 PAYLOAD_FILES = ["pyproject.toml", "README.md"]
 
 
+# payload(): a tar.gz of everything the VM needs (the web UI must be built), owned by root, without __pycache__, plus a
+# VERSION file UwU
 def payload() -> bytes:
     """tar.gz of everything the VM needs (no tests, no dev tooling, no node_modules)."""
     dist = SOURCE / "web" / "dist" / "index.html"
@@ -45,126 +56,145 @@ def payload() -> bytes:
         return info
 
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for d in PAYLOAD_DIRS:
-            tar.add(SOURCE / d, arcname=d, filter=skip)
+        for folder in PAYLOAD_DIRS:
+            tar.add(SOURCE / folder, arcname=folder, filter=skip)
         tar.add(SOURCE / "web" / "dist", arcname="web/dist", filter=skip)
-        for f in PAYLOAD_FILES:
-            if (SOURCE / f).is_file():
-                tar.add(SOURCE / f, arcname=f, filter=skip)
-        ver = f"{VERSION}\n".encode()
-        ti = tarfile.TarInfo("VERSION")
-        ti.size = len(ver)
-        tar.addfile(ti, io.BytesIO(ver))
+        for name in PAYLOAD_FILES:
+            if (SOURCE / name).is_file():
+                tar.add(SOURCE / name, arcname=name, filter=skip)
+        version = f"{VERSION}\n".encode()
+        version_file = tarfile.TarInfo("VERSION")
+        version_file.size = len(version)
+        tar.addfile(version_file, io.BytesIO(version))
     return buf.getvalue()
 
 
-def _toml(v) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return str(v)
-    if isinstance(v, (list, tuple)):
-        return "[" + ", ".join(_toml(x) for x in v) + "]"
-    return json.dumps(str(v))
+# _toml(): one value in TOML syntax (true/false, numbers, lists; text as a JSON string, which TOML accepts) >w<
+def _toml(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return json.dumps(str(value))          # a JSON string is a valid TOML basic string
 
 
-def config_toml(a: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: str | None, vm_ip: str) -> str:
-    lo, hi = a.vmid_ranges
+# config_toml(): /etc/valor/config.toml for the VM: how to reach Proxmox, what the engine may use (pools, storage,
+# bridges, VM ids, VLANs, the memory limit, reserved networks, ISO storages), paths, guest defaults and the web
+# settings. Written with a "re-run the installer instead of editing" header OwO
+def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: str | None, vm_ip: str) -> str:
+    """/etc/valor/config.toml for the VALOR VM: what the engine may use on this cluster (read by valor/config.py and
+    valor/web/config.py)."""
+    first_vmid, last_vmid = settings.vmid_ranges
     url = f"https://{vm_ip}"
     sections = {
         "proxmox": {"api_host": api_host, "api_port": 8006,
                     "verify_ssl": "/etc/valor/pve-ca.pem" if ca_pem else True,
                     "token_file": "/etc/valor/token.json", "node": facts.node},
-        "resources": {"pool": a.pool_ranges, "template_pool": a.pool_templates, "storage": a.range_storage,
-                      "segment_bridge": bridge, "uplink_bridge": a.vm_bridge, "uplink_vlan": a.vm_vlan,
-                      "vmid_min": lo, "vmid_max": hi, "vlan_min": a.vlan_min, "vlan_max": a.vlan_max,
-                      "max_memory_fraction": 0.7, "reserved_networks": a.reserved_networks,
-                      "iso_storage": a.iso_storage, "iso_storages": a.iso_storages},
+        "resources": {"pool": settings.pool_ranges, "template_pool": settings.pool_templates, "storage": settings.range_storage,
+                      "segment_bridge": bridge, "uplink_bridge": settings.vm_bridge, "uplink_vlan": settings.vm_vlan,
+                      "vmid_min": first_vmid, "vmid_max": last_vmid,
+                      "vlan_min": settings.vlan_min, "vlan_max": settings.vlan_max,
+                      "max_memory_fraction": 0.7, "reserved_networks": settings.reserved_networks,
+                      "iso_storage": settings.iso_storage, "iso_storages": settings.iso_storages},
         "paths": {"content_dir": "/opt/valor/share", "data_dir": "/var/lib/valor/data",
                   "state_dir": "/var/lib/valor/state", "ssh_public_key": "/etc/valor/ssh/id_ed25519.pub"},
-        "guest": {"default_os": "ubuntu-24.04", "nameservers": a.nameservers, "internet_probe": a.internet_probe,
+        "guest": {"default_os": "ubuntu-24.04", "nameservers": settings.nameservers, "internet_probe": settings.internet_probe,
                   "guest_user": "valor"},
         "web": {"db": "/var/lib/valor/web.sqlite3", "secret_key_file": "/etc/valor/secret.key",
-                "instance_name": a.instance_name, "tls_cert": "/etc/valor/tls/server.crt",
-                "appliance_vmid": a.vmid_vm, "public_url": url},
+                "instance_name": settings.instance_name, "tls_cert": "/etc/valor/tls/server.crt",
+                "appliance_vmid": settings.vmid_vm, "public_url": url},
     }
     lines = [f"# VALOR {VERSION} configuration, written by the installer on {facts.node} "
              f"({time.strftime('%Y-%m-%d %H:%M %Z')}).",
              "# Re-run the installer (./install.sh --upgrade) instead of editing by hand.", ""]
     for name, values in sections.items():
         lines.append(f"[{name}]")
-        lines += [f"{k} = {_toml(v)}" for k, v in values.items()]
+        lines += [f"{key} = {_toml(value)}" for key, value in values.items()]
         lines.append("")
     return "\n".join(lines)
 
 
-def appliance_env(a: Answers, facts: Facts, mode: str, api_host: str) -> str:
+# appliance_env(): the settings file setup.sh reads: mode, version, who may reach the UI, who may SSH in (break-glass:
+# the Proxmox nodes), TLS mode, host name, domain, first admin, and the Proxmox host ^w^
+def appliance_env(settings: Answers, facts: Facts, mode: str, api_host: str) -> str:
     """Settings for setup.sh (values were validated by the installer: CIDRs, IPs, DNS labels)."""
-    ssh_from = sorted({n["ip"] for n in facts.nodes if n.get("ip")} | {facts.node_ip})
+    ssh_from = sorted({node["ip"] for node in facts.nodes if node.get("ip")} | {facts.node_ip})    # break-glass SSH
     env = {
         "MODE": mode,
         "VALOR_VERSION": VERSION,
-        "ALLOWED_NETWORKS": " ".join(a.allowed_networks),
+        "ALLOWED_NETWORKS": " ".join(settings.allowed_networks),
         "SSH_FROM": " ".join(ssh_from),
-        "TLS_MODE": a.tls,
-        "VM_HOSTNAME": a.vm_hostname,
-        "VM_DOMAIN": a.vm_domain,
-        "ADMIN_USER": a.admin_user,
+        "TLS_MODE": settings.tls,
+        "VM_HOSTNAME": settings.vm_hostname,
+        "VM_DOMAIN": settings.vm_domain,
+        "ADMIN_USER": settings.admin_user,
         "PVE_HOST": api_host,
         "PVE_IP": facts.node_ip,
     }
-    return "".join(f'{k}="{v}"\n' for k, v in env.items())
+    return "".join(f'{key}="{value}"\n' for key, value in env.items())
 
 
+# new_password(): the first admin's one-time password: 4 groups of 6 letters/digits (changed at the first sign-in) UwU
 def new_password() -> str:
+    """The first admin's one-time password: 4 groups of 6 letters/digits (changed at the first sign-in)."""
     alphabet = string.ascii_letters + string.digits
     return "-".join("".join(secrets.choice(alphabet) for _ in range(6)) for _ in range(4))
 
 
+# _qm(): run `qm ...` and return its output >w<
 def _qm(*args: str) -> str:
     return run(["qm", *args]).stdout
 
 
-def create(a: Answers, facts: Facts, rec: Record, template: int) -> int:
-    vmid = a.vmid_vm
+# create(): make the VALOR VM: a FULL clone of the Ubuntu template (so it never depends on a template), in the
+# system pool, with its size, CPU, network, cloud-init user and break-glass SSH key, autostart, tags and a
+# description. An existing VALOR VM (a resumed install) is kept; a foreign VM with that id stops the install OwO
+def create(settings: Answers, facts: Facts, rec: Record, template: int) -> int:
+    """Clone the Ubuntu template into the VALOR VM (a full clone: it must not depend on a template) and set its
+    size, network, cloud-init user and break-glass SSH key. An existing VALOR VM (a resumed install) is kept."""
+    vmid = settings.vmid_vm
     exists = run(["qm", "status", str(vmid)], check=False).returncode == 0
     if exists:
-        cfg = _qm("config", str(vmid))
-        if "valor-appliance" not in cfg:
+        config = _qm("config", str(vmid))
+        if "valor-appliance" not in config:
             raise SystemExit(f"VM {vmid} exists and is not a VALOR VM; choose another vmid_start")
         ui.ok(f"VALOR VM {vmid} exists (resuming)")
-        rec.set("vm", {"vmid": vmid, "name": a.vm_hostname})
+        rec.set("vm", {"vmid": vmid, "name": settings.vm_hostname})
         return vmid
-    ui.info(f"cloning template {template} into VM {vmid} on {a.vm_storage}")
-    run(["qm", "clone", str(template), str(vmid), "--name", a.vm_hostname, "--full", "1", "--storage", a.vm_storage,
-         "--pool", a.pool_system])
-    rec.set("vm", {"vmid": vmid, "name": a.vm_hostname})
-    key = rec_key(a)
-    net = f"virtio,bridge={a.vm_bridge}" + (f",tag={a.vm_vlan}" if a.vm_vlan else "")
-    ipcfg = "ip=dhcp" if a.vm_ip == "dhcp" else f"ip={a.vm_ip},gw={a.vm_gateway}"
-    desc = (f"VALOR {VERSION} appliance (instance '{a.id}'): engine + web UI. Created by the VALOR installer on "
-            f"{time.strftime('%Y-%m-%d')}. Manage with ./install.sh --status | --upgrade | --uninstall.")
-    run(["qm", "set", str(vmid), "--cores", str(a.vm_cores), "--memory", str(a.vm_memory), "--cpu", cpu_type(facts),
-         "--net0", net, "--ipconfig0", ipcfg, "--ciuser", "valoradmin", "--sshkeys", str(key) + ".pub",
-         "--onboot", "1", "--startup", "order=1", "--tags", f"valor-appliance;valor-{a.id}",
-         "--description", desc, "--agent", "enabled=1,fstrim_cloned_disks=1",
-         *(["--nameserver", " ".join(a.vm_dns)] if a.vm_ip != "dhcp" and a.vm_dns else []),
-         *(["--searchdomain", a.vm_domain] if a.vm_domain else [])])
-    run(["qm", "disk", "resize", str(vmid), "scsi0", f"{a.vm_disk}G"])
-    ui.ok(f"VALOR VM {vmid} created ({a.vm_cores} vCPU, {a.vm_memory} MiB, {a.vm_disk} GiB, {net})")
+    ui.info(f"cloning template {template} into VM {vmid} on {settings.vm_storage}")
+    run(["qm", "clone", str(template), str(vmid), "--name", settings.vm_hostname, "--full", "1", "--storage", settings.vm_storage,
+         "--pool", settings.pool_system])
+    rec.set("vm", {"vmid": vmid, "name": settings.vm_hostname})
+    key = rec_key(settings)
+    net = f"virtio,bridge={settings.vm_bridge}" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else "")
+    ip_config = "ip=dhcp" if settings.vm_ip == "dhcp" else f"ip={settings.vm_ip},gw={settings.vm_gateway}"
+    description = (f"VALOR {VERSION} appliance (instance '{settings.id}'): engine + web UI. Created by the VALOR "
+                   f"installer on {time.strftime('%Y-%m-%d')}. Manage with ./install.sh --status | --upgrade | --uninstall.")
+    run(["qm", "set", str(vmid), "--cores", str(settings.vm_cores), "--memory", str(settings.vm_memory),
+         "--cpu", cpu_type(facts), "--net0", net, "--ipconfig0", ip_config, "--ciuser", "valoradmin",
+         "--sshkeys", str(key) + ".pub", "--onboot", "1", "--startup", "order=1",
+         "--tags", f"valor-appliance;valor-{settings.id}",
+         "--description", description, "--agent", "enabled=1,fstrim_cloned_disks=1",
+         *(["--nameserver", " ".join(settings.vm_dns)] if settings.vm_ip != "dhcp" and settings.vm_dns else []),
+         *(["--searchdomain", settings.vm_domain] if settings.vm_domain else [])])
+    run(["qm", "disk", "resize", str(vmid), "scsi0", f"{settings.vm_disk}G"])
+    ui.ok(f"VALOR VM {vmid} created ({settings.vm_cores} vCPU, {settings.vm_memory} MiB, {settings.vm_disk} GiB, {net})")
     return vmid
 
 
-def rec_key(a: Answers) -> Path:
+# rec_key(): the break-glass SSH key for the VALOR VM, created once and kept cluster-wide, root-only ^w^
+def rec_key(settings: Answers) -> Path:
     """Break-glass SSH key for the VALOR VM, kept cluster-wide and root-only."""
     from . import RECORD_DIR
-    key = RECORD_DIR / f"{a.id}-ssh_ed25519"
+    key = RECORD_DIR / f"{settings.id}-ssh_ed25519"
     if not key.exists():
         RECORD_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = Path("/root") / f".valor-{a.id}-key"
-        for p in (tmp, Path(str(tmp) + ".pub")):
-            p.unlink(missing_ok=True)
-        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"valor-{a.id}-breakglass", "-f", str(tmp)])
+        tmp = Path("/root") / f".valor-{settings.id}-key"
+        for leftover in (tmp, Path(str(tmp) + ".pub")):
+            leftover.unlink(missing_ok=True)
+        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"valor-{settings.id}-breakglass", "-f", str(tmp)])
         key.write_bytes(tmp.read_bytes())
         Path(str(key) + ".pub").write_bytes(Path(str(tmp) + ".pub").read_bytes())
         tmp.unlink()
@@ -172,7 +202,10 @@ def rec_key(a: Answers) -> Path:
     return key
 
 
+# boot(): start the VM if needed and wait until it's usable: the guest agent answers, cloud-init finished, and it has
+# an IPv4 address. Returns that address UwU
 def boot(facts: Facts, vmid: int) -> str:
+    """Start the VM if needed and wait until it is usable (guest agent, cloud-init done, an IPv4 address)."""
     if "running" not in _qm("status", str(vmid)):
         run(["qm", "start", str(vmid)])
     ui.info("waiting for the VM to boot and its guest agent to answer")
@@ -190,7 +223,9 @@ def boot(facts: Facts, vmid: int) -> str:
     return ip
 
 
-def provision(a: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, str | bytes]) -> None:
+# provision(): copy the payload and the files (config, secrets) in, unpack, and run setup.sh in the background,
+# showing its "[time] step" lines as they appear; fail with the log's last lines if it fails (40 minutes max) >w<
+def provision(settings: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, str | bytes]) -> None:
     """files: staging-relative name -> content (config, secrets). Runs setup.sh and streams its log."""
     node = facts.node
     data = payload()
@@ -201,6 +236,7 @@ def provision(a: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, s
         guest.write_file(node, vmid, f"{STAGE}/{name}", content)
     guest.check(node, vmid, f"set -e; mkdir -p {STAGE}/src; tar -xzf {STAGE}/payload.tar.gz -C {STAGE}/src")
     ui.info("running the appliance setup inside the VM (packages, TLS, firewall, services) - a few minutes")
+    # setup.sh runs for minutes: start it in the background and follow its log (its "[time] step" lines)
     pid = guest.start_script(node, vmid, f"exec bash {STAGE}/src/appliance/setup.sh {mode} > /var/log/valor-setup.log 2>&1")
     shown, end = 0, time.time() + 2400
     while time.time() < end:
@@ -214,20 +250,22 @@ def provision(a: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, s
             if line.startswith("[") or line.startswith("ERROR") or line.startswith("WARN"):
                 ui.info(ui.dim(line))
         shown = len(lines)
-        st = guest.status(node, vmid, pid)
-        if st.get("exited"):
-            if int(st.get("exitcode", 1)) != 0:
+        status = guest.status(node, vmid, pid)
+        if status.get("exited"):
+            if int(status.get("exitcode", 1)) != 0:
                 tail = "\n".join(lines[-25:])
-                raise SystemExit(f"appliance setup failed (exit {st.get('exitcode')}). Last lines of "
+                raise SystemExit(f"appliance setup failed (exit {status.get('exitcode')}). Last lines of "
                                  f"/var/log/valor-setup.log in the VM:\n{tail}")
             ui.ok("appliance setup finished")
             return
     raise SystemExit("appliance setup did not finish within 40 minutes; see /var/log/valor-setup.log in the VM")
 
 
+# JOBS_DIR: where the VM keeps engine jobs OwO
 JOBS_DIR = "/var/lib/valor/state/jobs"
 
 
+# busy_jobs(): jobs running or queued in the VM (an upgrade waits for them) ^w^
 def busy_jobs(facts: Facts, vmid: int) -> list[str]:
     """Jobs running or queued in the VALOR VM (an upgrade restarts the worker, which first finishes its job)."""
     code, out, _ = guest.script(facts.node, vmid, f"""
@@ -239,6 +277,7 @@ true
     return out.split() if code == 0 else []
 
 
+# wait_jobs(): wait (checking every 30 s) until no jobs are busy UwU
 def wait_jobs(facts: Facts, vmid: int, timeout: float = 3 * 3600) -> None:
     end = time.time() + timeout
     while time.time() < end:
@@ -250,33 +289,38 @@ def wait_jobs(facts: Facts, vmid: int, timeout: float = 3 * 3600) -> None:
     raise SystemExit("VALOR jobs are still running; try the upgrade again later")
 
 
+# ca_pem(): VALOR's own CA certificate from the VM >w<
 def ca_pem(facts: Facts, vmid: int) -> str:
     return guest.read_file(facts.node, vmid, "/etc/valor/tls/ca.crt")
 
 
+# health(): does the web UI answer /api/health over HTTPS with a certificate that verifies? OwO
 def health(ip: str, ca: str | None) -> bool:
-    ctx = ssl.create_default_context(cadata=ca) if ca else ssl.create_default_context()
+    """Does the web UI answer over HTTPS with a certificate that verifies (against VALOR's own CA when given)?"""
+    context = ssl.create_default_context(cadata=ca) if ca else ssl.create_default_context()
     try:
-        with urllib.request.urlopen(f"https://{ip}/api/health", context=ctx, timeout=15) as r:
-            return json.load(r).get("ok") is True
+        with urllib.request.urlopen(f"https://{ip}/api/health", context=context, timeout=15) as response:
+            return json.load(response).get("ok") is True
     except Exception as e:
         ui.debug(f"health check: {e}")
         return False
 
 
+# fingerprint(): a certificate's SHA-256 fingerprint as "AB:CD:..." like browsers show it ^w^
 def fingerprint(pem: str) -> str:
     der = ssl.PEM_cert_to_DER_cert(pem)
     import hashlib
-    h = hashlib.sha256(der).hexdigest().upper()
-    return ":".join(h[i:i + 2] for i in range(0, len(h), 2))
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))      # AB:CD:EF... as browsers show it
 
 
+# destroy(): delete the VALOR VM (uninstall), but NEVER a VM without the valor-appliance tag UwU
 def destroy(vmid: int) -> None:
     try:
-        cfg = _qm("config", str(vmid))
+        config = _qm("config", str(vmid))
     except CommandError:
         return
-    if "valor-appliance" not in cfg:
+    if "valor-appliance" not in config:            # never delete a VM the installer didn't make
         ui.warn(f"VM {vmid} is not a VALOR VM; leaving it")
         return
     run(["qm", "stop", str(vmid), "--skiplock", "1"], check=False)
@@ -284,8 +328,10 @@ def destroy(vmid: int) -> None:
     ui.ok(f"VALOR VM {vmid} removed")
 
 
+# pool_vms(): the VMs in a pool (empty when the pool is gone) >w< *locks up the little house*
 def pool_vms(pool: str) -> list[dict]:
     try:
-        return [m for m in (pvesh("get", f"/pools/{pool}") or {}).get("members", []) if m.get("type") == "qemu"]
+        members = (pvesh("get", f"/pools/{pool}") or {}).get("members", [])
+        return [member for member in members if member.get("type") == "qemu"]
     except CommandError:
         return []
