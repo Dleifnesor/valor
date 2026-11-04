@@ -1,62 +1,80 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ApiError, del, get, post, put } from "../api";
+// *grabs the map-editing crayons* OwO web/src/components/RangeEditing.tsx: EDITING a built range on its map! ^w^
+// The map's buttons and the chat panel both change the range's DRAFT; the draft is drawn in the plan colors and is
+// only built through "Review plan" -> approve. The forms live in VmForms.tsx and SegmentEditing.tsx; the chat is
+// RangeChat.tsx *wags tail*
+import { useEffect, useState } from "react";
+// API calls, hooks, the node type, UI pieces, VM actions, the map, the plan dialog, and the forms UwU
+import { ApiError, del, get, post } from "../api";
 import { go, useApi, when } from "../hooks";
-import { Topology, TopoNode } from "../types";
-import { ErrorBox, Icon, Loading, MenuAction, MenuItems, Modal } from "./ui";
+import { TopoNode } from "../types";
+import { ErrorBox, Icon, Loading, MenuAction, MenuItems } from "./ui";
 import { vmActions } from "./RangeActions";
 import { TopologyMap } from "./Topology";
 import { PlanModal, PlanResponse } from "./PlanModal";
 import { AddSegmentModal, EditSegmentModal, RuleModal, rulesOf } from "./SegmentEditing";
-import { BuilderInfo, ChatLog, Mode, PendingApproval, ProviderPick, useChat } from "./ChatFeed";
+import { AddServiceModal, AddVmModal, Catalog, EditVmModal, Op, View, YamlModal } from "./VmForms";
+import { RangeChat } from "./RangeChat";
 
 // Editing a built range on its map. Map controls and the chat panel both change the range's draft; the draft is
 // drawn in the plan colors and built only through "Review plan" -> approve.
+//
+// The forms behind the map's buttons are in VmForms.tsx (VMs, services, YAML) and SegmentEditing.tsx (segments,
+// traffic rules); the chat panel is RangeChat.tsx.
 
-interface CatalogRole { name: string; description: string; ports?: number[]; families?: string[]; params: Record<string, { default?: any; description?: string; required?: boolean }> }
-interface Catalog { default_os: string; os: { name: string; family?: string; description: string; template: boolean }[]; roles: CatalogRole[] }
-interface Draft { yaml: string; valid: boolean; error?: string; meta: { by?: string; source?: string; updated?: string }; summary?: Record<string, number>; diff?: string }
-interface View { draft: Draft | null; topology: Topology }
-interface Op { op: string; [k: string]: any }
-interface ChatSummary { id: number; title: string; updated: number; status: string }
-
+/** Where a draft's changes came from, as the draft bar says it. */
+// SOURCE: where a draft came from, as the draft bar says it >w<
 const SOURCE: Record<string, string> = { map: "map", yaml: "YAML", "chat:plan": "chat (plan)", "chat:code": "chat (code)" };
 
+/** Which form is open over the map. */
+// OpenModal: which form is open over the map (and what it's about) OwO
+type OpenModal = null | { kind: "addvm"; segment?: string } | { kind: "service" | "edit"; host: TopoNode }
+  | { kind: "yaml" } | { kind: "addseg" } | { kind: "editseg"; seg: TopoNode } | { kind: "rule"; from?: string };
+
+// RangeMapTab: the range's Map section; chatId opens the chat panel on a conversation ^w^
 export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: string; canOperate: boolean; onConsole?: (host: string) => void; chatId?: number }) {
+  // The draft view, errors, the open form, the plan dialog, planning, the chat panel (remembered), and the catalog UwU
   const [view, setView] = useState<View | null>(null);
   const [err, setErr] = useState<ApiError | null>(null);
-  const [modal, setModal] = useState<null | { kind: "addvm"; segment?: string } | { kind: "service" | "edit"; host: TopoNode }
-    | { kind: "yaml" } | { kind: "addseg" } | { kind: "editseg"; seg: TopoNode } | { kind: "rule"; from?: string }>(null);
+  const [modal, setModal] = useState<OpenModal>(null);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [planning, setPlanning] = useState(false);
   const [chatOpen, setChatOpen] = useState(() => { if (chatId) return true; try { return localStorage.getItem("valor-range-chat") === "1"; } catch { return false; } });
   const catalog = useApi<Catalog>(canOperate ? "/api/catalog" : null);
 
+  // load(): fetch the draft view; refresh every 20 s; remember the chat panel's state >w<
   const load = () => get<View>(`/api/ranges/${name}/draft`).then(setView).catch(setErr);
-  useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, [name]);
+  useEffect(() => { load(); const timer = setInterval(load, 20000); return () => clearInterval(timer); }, [name]);
   useEffect(() => { try { localStorage.setItem("valor-range-chat", chatOpen ? "1" : "0"); } catch { /* not kept */ } }, [chatOpen]);
 
+  /** Send map edits; the answer is the new view (draft + map). True when they were accepted. */
+  // edit(): send map edits; the answer is the new view. True when they were accepted OwO
   const edit = async (ops: Op[]) => {
     setErr(null);
     try { setView(await post<View>(`/api/ranges/${name}/draft/ops`, { ops })); return true; }
     catch (e) { setErr(e as ApiError); return false; }
   };
+  // reviewPlan(): ask for the DRAFT's plan and open it ^w^
   const reviewPlan = async () => {
     setPlanning(true); setErr(null);
     try { setPlan(await post<PlanResponse>(`/api/ranges/${name}/plan`, { draft: true })); }
     catch (e) { setErr(e as ApiError); }
     finally { setPlanning(false); }
   };
+  // discard(): throw the draft away UwU
   const discard = async () => {
     try { setView(await del<View>(`/api/ranges/${name}/draft`)); } catch (e) { setErr(e as ApiError); }
   };
 
+  // Not loaded yet: spinner or error >w<
   if (!view) return err ? <div className="card-body"><ErrorBox error={err} /></div> : <Loading />;
-  const segments = view.topology.nodes.filter((n) => n.kind === "segment").map((n) => n.label);
-  const d = view.draft;
-  const vpn = view.topology.nodes.find((n) => n.kind === "vpn");
-  const vpnReaches = (seg: string) => !!vpn?.reach?.includes(seg);
+  // Segment names, the draft, the VPN node, and which segments the VPN reaches OwO
+  const segments = view.topology.nodes.filter((node) => node.kind === "segment").map((node) => node.label);
+  const draft = view.draft;
+  const vpn = view.topology.nodes.find((node) => node.kind === "vpn");
+  const vpnReaches = (segment: string) => !!vpn?.reach?.includes(segment);
+  // removeSegment(): confirm (mentioning its VMs, which go too) and send the edit ^w^
   const removeSegment = (seg: TopoNode, close: () => void) => {
-    const inside = view.topology.nodes.filter((n) => n.parent === seg.id && n.change !== "remove").map((n) => n.label);
+    const inside = view.topology.nodes.filter((node) => node.parent === seg.id && node.change !== "remove").map((node) => node.label);
     if (inside.length) {
       if (!window.confirm(`${seg.label} has ${inside.length} VM(s): ${inside.join(", ")}. Remove the segment AND these VMs? They are deleted when the plan is approved.`)) return;
     } else if (!window.confirm(`Remove segment ${seg.label}? The router is rebuilt when the plan is approved.`)) return;
@@ -64,8 +82,10 @@ export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: str
     close();
   };
 
+  // overlay: buttons over the map (operators): Add VM, Add segment, Allow traffic, and the Chat toggle UwU
   const overlay = canOperate ? (
     <div className="map-tools">
+      {/* The four buttons */}
       <button className="btn small" onClick={() => setModal({ kind: "addvm" })}>+ Add VM</button>
       <button className="btn small" onClick={() => setModal({ kind: "addseg" })}>+ Add segment</button>
       <button className="btn small" onClick={() => setModal({ kind: "rule" })}>+ Allow traffic</button>
@@ -74,422 +94,150 @@ export function RangeMapTab({ name, canOperate, onConsole, chatId }: { name: str
   ) : null;
 
   // What the map can change on a node: buttons in its panel and entries in its right-click menu.
-  const nodeEdits = (n: TopoNode, close: () => void): MenuAction[] => {
+  // nodeEdits(): what can be changed on a node (segment: add VM here, allow traffic, edit, remove; VM: add service,
+  // edit, remove) >w<
+  const nodeEdits = (node: TopoNode, close: () => void): MenuAction[] => {
     if (!canOperate) return [];
-    if (n.kind === "segment") return [
-      { label: "Add VM here", icon: "plus", onClick: () => { setModal({ kind: "addvm", segment: n.label }); close(); } },
-      { label: "Allow traffic", icon: "plus", onClick: () => { setModal({ kind: "rule", from: n.label }); close(); } },
-      { label: "Edit segment", icon: "edit", onClick: () => { setModal({ kind: "editseg", seg: n }); close(); } },
-      { label: "Remove", icon: "trash", danger: true, onClick: () => removeSegment(n, close) },
+    if (node.kind === "segment") return [
+      { label: "Add VM here", icon: "plus", onClick: () => { setModal({ kind: "addvm", segment: node.label }); close(); } },
+      { label: "Allow traffic", icon: "plus", onClick: () => { setModal({ kind: "rule", from: node.label }); close(); } },
+      { label: "Edit segment", icon: "edit", onClick: () => { setModal({ kind: "editseg", seg: node }); close(); } },
+      { label: "Remove", icon: "trash", danger: true, onClick: () => removeSegment(node, close) },
     ];
-    if (n.kind !== "host" || n.change === "remove") return [];
-    const host = n.id.slice(5);
+    if (node.kind !== "host" || node.change === "remove") return [];
+    const host = node.id.slice(5);                       // node ids are "host:<name>"
     return [
-      { label: "Add service", icon: "plus", onClick: () => { setModal({ kind: "service", host: n }); close(); } },
-      { label: "Edit VM", icon: "edit", onClick: () => { setModal({ kind: "edit", host: n }); close(); } },
+      { label: "Add service", icon: "plus", onClick: () => { setModal({ kind: "service", host: node }); close(); } },
+      { label: "Edit VM", icon: "edit", onClick: () => { setModal({ kind: "edit", host: node }); close(); } },
       { label: "Remove VM", icon: "trash", danger: true,
         onClick: () => { if (window.confirm(`Remove ${host} from the range? It is deleted when the plan is approved.`)) { edit([{ op: "remove_host", name: host }]); close(); } } },
     ];
   };
-  const editButtons = (n: TopoNode, close: () => void) => (
+  // editButtons(): those edits as buttons OwO
+  const editButtons = (node: TopoNode, close: () => void) => (
     <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-      {nodeEdits(n, close).map((a) => (
-        <button key={a.label} className={`btn small${a.danger ? " danger" : ""}`} onClick={a.onClick}>
-          {a.icon && <Icon name={a.icon} size={13} />} {a.label}
+      {/* One button per edit */}
+      {nodeEdits(node, close).map((action) => (
+        <button key={action.label} className={`btn small${action.danger ? " danger" : ""}`} onClick={action.onClick}>
+          {action.icon && <Icon name={action.icon} size={13} />} {action.label}
         </button>
       ))}
     </div>
   );
 
-  const nodeActions = (n: TopoNode, close: () => void) => {
+  // The panel under a clicked node: a segment's traffic rules, a VM's services, then the edit buttons.
+  // nodeActions(): what the clicked node's panel shows: a segment's traffic rules (each removable), or a VM's services
+  // (each removable), then the edit buttons ^w^
+  const nodeActions = (node: TopoNode, close: () => void) => {
     if (!canOperate) return null;
-    if (n.kind === "segment") {
-      const rules = rulesOf(view.topology, n.label);
+    if (node.kind === "segment") {
+      const rules = rulesOf(view.topology, node.label);
       return (
         <div className="node-actions">
+          {/* The segment's rules (or "none"), then the edit buttons */}
           <div className="small muted" style={{ marginBottom: 4 }}>Traffic rules</div>
-          {rules.length === 0 && <div className="small muted">None: blocked except inside the segment{n.internet ? " and to the internet" : ""}.</div>}
-          {rules.map((r) => (
-            <div className="rule-row" key={r.edge.id}>
-              <span className="mono small">{r.from} → {r.to}</span><span className="badge">{r.edge.label}</span><span className="grow" />
+          {rules.length === 0 && <div className="small muted">None: blocked except inside the segment{node.internet ? " and to the internet" : ""}.</div>}
+          {rules.map((rule) => (
+            <div className="rule-row" key={rule.edge.id}>
+              {/* From → to, what it allows, and × */}
+              <span className="mono small">{rule.from} → {rule.to}</span><span className="badge">{rule.edge.label}</span><span className="grow" />
               <button className="chip-x" aria-label="Remove rule" title="Remove rule"
-                onClick={() => edit([{ op: "remove_rule", index: r.index, from: r.from, to: r.to }])}>×</button>
+                onClick={() => edit([{ op: "remove_rule", index: rule.index, from: rule.from, to: rule.to }])}>×</button>
             </div>
           ))}
-          {editButtons(n, close)}
+          {editButtons(node, close)}
         </div>
       );
     }
-    if (n.kind !== "host" || n.change === "remove") return null;
-    const host = n.id.slice(5);
+    if (node.kind !== "host" || node.change === "remove") return null;
+    const host = node.id.slice(5);
     return (
       <div className="node-actions">
-        {!!n.roles?.length && (
+        {/* The VM's services as chips with ×, then the edit buttons */}
+        {!!node.roles?.length && (
           <div className="service-chips">
-            {n.roles.map((r) => (
-              <span className="service-chip" key={r}>{r}
-                <button className="chip-x" title={`Remove ${r}`} aria-label={`Remove ${r}`} onClick={() => edit([{ op: "remove_role", host, role: r }])}>×</button>
+            {node.roles.map((role) => (
+              <span className="service-chip" key={role}>{role}
+                <button className="chip-x" title={`Remove ${role}`} aria-label={`Remove ${role}`} onClick={() => edit([{ op: "remove_role", host, role }])}>×</button>
               </span>
             ))}
           </div>
         )}
-        {editButtons(n, close)}
+        {editButtons(node, close)}
       </div>
     );
   };
 
   // Right-click on a VM or the router: its page, power and consoles (once built), then the map's edits.
-  const nodeMenu = (n: TopoNode): MenuItems => {
-    const host = n.kind === "router" ? "rtr" : n.kind === "host" ? n.id.slice(5) : "";
-    if (!host || !n.vmid) return nodeEdits(n, () => {});
-    const vm = vmActions(name, host, n.status);
+  // nodeMenu(): right-click on a built VM or router: its page, power and consoles, then the map edits UwU
+  const nodeMenu = (node: TopoNode): MenuItems => {
+    const host = node.kind === "router" ? "rtr" : node.kind === "host" ? node.id.slice(5) : "";
+    if (!host || !node.vmid) return nodeEdits(node, () => {});
+    const vm = vmActions(name, host, node.status);
     const operate: MenuItems = canOperate ? [vm.start, vm.shutdown, vm.reboot, vm.stop, "-", vm.console, vm.serial] : [];
-    return [{ label: "Open VM page", icon: "vm", onClick: () => go(`ranges/${name}/vm/${host}`) }, ...operate, "-", ...nodeEdits(n, () => {})];
+    return [{ label: "Open VM page", icon: "vm", onClick: () => go(`ranges/${name}/vm/${host}`) }, ...operate, "-", ...nodeEdits(node, () => {})];
   };
 
+  // closeModal() / submitAndClose(): close a form, or send its edits and close it when accepted >w<
+  const closeModal = () => setModal(null);
+  const submitAndClose = async (ops: Op[]) => { if (await edit(ops)) setModal(null); };
+
+  // The section OwO
   return (
     <>
-      {d && (
-        <div className={`draft-bar${d.valid ? "" : " invalid"}`}>
+      {/* The draft bar: what the draft changes (or its error), where it came from, and YAML / Discard / Review plan */}
+      {draft && (
+        <div className={`draft-bar${draft.valid ? "" : " invalid"}`}>
+          {/* Title, change counts, source and time */}
           <b>Draft changes</b>
-          {d.valid ? Object.entries(d.summary ?? {}).map(([k, v]) => <span key={k} className={`badge c-${k}`}>{v} {k}</span>)
-            : <span className="error-text">{d.error}</span>}
-          <span className="muted small">from {SOURCE[d.meta.source ?? ""] ?? d.meta.source} by {d.meta.by} · {when(d.meta.updated)}</span>
+          {draft.valid ? Object.entries(draft.summary ?? {}).map(([action, count]) => <span key={action} className={`badge c-${action}`}>{count} {action}</span>)
+            : <span className="error-text">{draft.error}</span>}
+          <span className="muted small">from {SOURCE[draft.meta.source ?? ""] ?? draft.meta.source} by {draft.meta.by} · {when(draft.meta.updated)}</span>
           <span className="grow" />
           {canOperate && <>
+            {/* The draft's buttons */}
             <button className="btn small" onClick={() => setModal({ kind: "yaml" })}>YAML</button>
             <button className="btn small" onClick={discard}>Discard</button>
-            <button className="btn small primary" disabled={!d.valid || planning} onClick={reviewPlan}>
+            <button className="btn small primary" disabled={!draft.valid || planning} onClick={reviewPlan}>
               {planning ? <><span className="spinner" /> Planning…</> : "Review plan"}
             </button>
           </>}
         </div>
       )}
+      {/* Errors, then the map (with the chat panel beside it when open) */}
       <ErrorBox error={err} />
       <div className={`map-layout${chatOpen ? " with-chat" : ""}`}>
         <div className="map-main">
+          {/* Clicking a rule arrow offers "Remove this rule" (rule edge ids are "rule:<index in the policy>") */}
           <TopologyMap topology={view.topology} tall onConsole={onConsole} overlay={overlay} nodeActions={nodeActions} nodeMenu={nodeMenu}
-            edgeActions={canOperate ? (e, close) => {
-              const index = Number(e.id.split(":")[1]);
-              const from = e.source.replace(/^(host|seg):/, ""), to = e.target.replace(/^(host|seg):/, "");
+            edgeActions={canOperate ? (edge, close) => {
+              const index = Number(edge.id.split(":")[1]);         // rule edges are "rule:<index in the policy>"
+              const from = edge.source.replace(/^(host|seg):/, ""), to = edge.target.replace(/^(host|seg):/, "");
               return <div className="node-actions"><button className="btn small danger"
                 onClick={() => { edit([{ op: "remove_rule", index, from, to }]); close(); }}>Remove this rule</button></div>;
             } : undefined} />
         </div>
+        {/* The chat panel */}
         {chatOpen && canOperate && (
-          <RangeChat name={name} chatId={chatId} onView={(v) => setView(v)} onReview={reviewPlan} onClose={() => setChatOpen(false)} />
+          <RangeChat name={name} chatId={chatId} onView={setView} onReview={reviewPlan} onClose={() => setChatOpen(false)} />
         )}
       </div>
+      {/* Whichever form is open, and the plan dialog */}
       {modal?.kind === "addvm" && catalog.data && (
-        <AddVmModal segments={segments} segment={modal.segment} catalog={catalog.data} onClose={() => setModal(null)}
-          onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />
+        <AddVmModal segments={segments} segment={modal.segment} catalog={catalog.data} onClose={closeModal} onSubmit={submitAndClose} />
       )}
       {modal?.kind === "service" && catalog.data && (
-        <AddServiceModal host={modal.host} segments={segments} catalog={catalog.data} onClose={() => setModal(null)}
-          onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />
+        <AddServiceModal host={modal.host} segments={segments} catalog={catalog.data} onClose={closeModal} onSubmit={submitAndClose} />
       )}
       {modal?.kind === "edit" && catalog.data && (
-        <EditVmModal host={modal.host} catalog={catalog.data} onClose={() => setModal(null)}
-          onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />
+        <EditVmModal host={modal.host} catalog={catalog.data} onClose={closeModal} onSubmit={submitAndClose} />
       )}
-      {modal?.kind === "addseg" && <AddSegmentModal name={name} topo={view.topology} hasVpn={!!vpn} onClose={() => setModal(null)}
-        onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />}
+      {modal?.kind === "addseg" && <AddSegmentModal name={name} topo={view.topology} hasVpn={!!vpn} onClose={closeModal} onSubmit={submitAndClose} />}
       {modal?.kind === "editseg" && <EditSegmentModal seg={modal.seg} hasVpn={!!vpn} vpnReaches={vpnReaches(modal.seg.label)}
-        onClose={() => setModal(null)} onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />}
-      {modal?.kind === "rule" && <RuleModal topo={view.topology} from={modal.from} onClose={() => setModal(null)}
-        onSubmit={async (ops) => { if (await edit(ops)) setModal(null); }} />}
-      {modal?.kind === "yaml" && d && <YamlModal name={name} yaml={d.yaml} onClose={() => setModal(null)} onSaved={(v) => { setView(v); setModal(null); }} />}
+        onClose={closeModal} onSubmit={submitAndClose} />}
+      {modal?.kind === "rule" && <RuleModal topo={view.topology} from={modal.from} onClose={closeModal} onSubmit={submitAndClose} />}
+      {modal?.kind === "yaml" && draft && <YamlModal name={name} yaml={draft.yaml} onClose={closeModal} onSaved={(saved) => { setView(saved); setModal(null); }} />}
       {plan && <PlanModal name={name} res={plan} draft onClose={() => { setPlan(null); load(); }} />}
     </>
-  );
-}
-
-// ---------------------------------------------------------------------- forms
-
-function familyOf(catalog: Catalog, os: string) {
-  return catalog.os.find((o) => o.name === os)?.family ?? "debian";
-}
-
-function rolesFor(catalog: Catalog, os: string) {
-  const fam = familyOf(catalog, os);
-  return catalog.roles.filter((r) => (r.families ?? ["debian"]).includes(fam));
-}
-
-function RoleParams({ role, values, onChange }: { role: CatalogRole; values: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
-  const entries = Object.entries(role.params ?? {});
-  if (!entries.length) return null;
-  return (
-    <div className="params">
-      {entries.map(([k, p]) => (
-        <label className="field" key={k}>{role.name}: {k}{p.required ? " (required)" : ""}
-          {p.description && <span className="hint">{p.description}</span>}
-          <input name={`param-${k}`} value={values[k] ?? ""} placeholder={p.default !== undefined ? String(p.default) : ""} required={!!p.required}
-            onChange={(e) => onChange({ ...values, [k]: e.target.value })} />
-        </label>
-      ))}
-    </div>
-  );
-}
-
-function AllowFrom({ segments, own, value, onChange }: { segments: string[]; own?: string; value: string[]; onChange: (v: string[]) => void }) {
-  const others = segments.filter((s) => s !== own);
-  if (!others.length) return null;
-  return (
-    <div className="field">Who may reach the new services <span className="hint">adds router rules for their ports; the VM's own segment always can</span>
-      <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
-        {others.map((s) => (
-          <label key={s} className="checkbox"><input name="allow-from" type="checkbox" checked={value.includes(s)}
-            onChange={(e) => onChange(e.target.checked ? [...value, s] : value.filter((x) => x !== s))} /> {s}</label>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function roleOps(host: string, selected: string[], params: Record<string, Record<string, string>>, allow: string[]): Op[] {
-  return selected.map((r) => ({
-    op: "add_role", host, role: r, allow_from: allow,
-    params: Object.fromEntries(Object.entries(params[r] ?? {}).filter(([, v]) => v !== "")),
-  }));
-}
-
-function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
-  segments: string[]; segment?: string; catalog: Catalog; onClose: () => void; onSubmit: (ops: Op[]) => void;
-}) {
-  const osList = catalog.os.filter((o) => o.template);
-  const [name, setName] = useState("");
-  const [seg, setSeg] = useState(segment ?? segments[0] ?? "");
-  const [os, setOs] = useState(catalog.default_os);
-  const [size, setSize] = useState({ cores: 1, memory: 1024, disk: 10 });
-  const [roles, setRoles] = useState<string[]>([]);
-  const [params, setParams] = useState<Record<string, Record<string, string>>>({});
-  const [allow, setAllow] = useState<string[]>([]);
-  const windows = familyOf(catalog, os) === "windows";
-  const available = rolesFor(catalog, os);
-  const valid = /^[a-z][a-z0-9-]{0,13}[a-z0-9]$/.test(name) && !!seg;
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    onSubmit([{ op: "add_host", name, segment: seg, os, ...size }, ...roleOps(name, roles.filter((r) => available.some((a) => a.name === r)), params, allow)]);
-  };
-  return (
-    <Modal title="Add a VM" onClose={onClose} wide footer={
-      <><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" form="addvm" disabled={!valid}>Add to the draft</button></>
-    }>
-      <form id="addvm" className="stack" onSubmit={submit}>
-        <div className="grid cols-2">
-          <label className="field">Name <span className="hint">2-15 lowercase letters, digits, dashes</span>
-            <input name="vm-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} autoFocus required placeholder="web2" />
-          </label>
-          <label className="field">Segment
-            <select name="segment" value={seg} onChange={(e) => setSeg(e.target.value)}>{segments.map((s) => <option key={s}>{s}</option>)}</select>
-          </label>
-          <label className="field">Operating system
-            <select name="os" value={os} onChange={(e) => { setOs(e.target.value); setRoles([]); }}>
-              {osList.map((o) => <option key={o.name} value={o.name}>{o.name}</option>)}
-            </select>
-          </label>
-          <div className="size-row">
-            <label className="field">vCPU<input name="cores" type="number" min={1} max={16} value={size.cores} onChange={(e) => setSize({ ...size, cores: Number(e.target.value) })} /></label>
-            <label className="field">MiB<input name="memory" type="number" min={512} step={512} value={size.memory} onChange={(e) => setSize({ ...size, memory: Number(e.target.value) })} /></label>
-            <label className="field">GiB<input name="disk" type="number" min={8} value={size.disk} onChange={(e) => setSize({ ...size, disk: Number(e.target.value) })} /></label>
-          </div>
-        </div>
-        {windows && <div className="muted small">Windows gets at least the memory and disk its template needs, whatever you enter here.</div>}
-        <div className="field">Services
-          <div className="role-pick">
-            {available.map((r) => (
-              <label key={r.name} className="checkbox" title={r.description}>
-                <input name="roles" type="checkbox" checked={roles.includes(r.name)} onChange={(e) => setRoles(e.target.checked ? [...roles, r.name] : roles.filter((x) => x !== r.name))} />
-                <span><b>{r.name}</b> <span className="muted small">{r.description}</span></span>
-              </label>
-            ))}
-          </div>
-        </div>
-        {roles.map((r) => { const role = available.find((a) => a.name === r); return role ? <RoleParams key={r} role={role} values={params[r] ?? {}} onChange={(v) => setParams({ ...params, [r]: v })} /> : null; })}
-        {roles.length > 0 && <AllowFrom segments={segments} own={seg} value={allow} onChange={setAllow} />}
-        <div className="muted small">The address is the segment's next free one (from .10). Nothing is built until you review and approve the plan.</div>
-      </form>
-    </Modal>
-  );
-}
-
-function AddServiceModal({ host, segments, catalog, onClose, onSubmit }: {
-  host: TopoNode; segments: string[]; catalog: Catalog; onClose: () => void; onSubmit: (ops: Op[]) => void;
-}) {
-  const hostName = host.id.slice(5);
-  const available = rolesFor(catalog, host.os ?? catalog.default_os).filter((r) => !(host.roles ?? []).includes(r.name));
-  const [role, setRole] = useState(available[0]?.name ?? "");
-  const [params, setParams] = useState<Record<string, string>>({});
-  const [allow, setAllow] = useState<string[]>([]);
-  const r = available.find((a) => a.name === role);
-  const own = host.parent?.replace(/^seg:/, "");
-  return (
-    <Modal title={`Add a service to ${hostName}`} onClose={onClose} footer={
-      <><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={!role} onClick={() => onSubmit(roleOps(hostName, [role], { [role]: params }, allow))}>Add to the draft</button></>
-    }>
-      {!available.length ? <div className="empty">No other service supports {host.os}.</div> : (
-        <div className="stack">
-          <label className="field">Service
-            <select name="role" value={role} onChange={(e) => { setRole(e.target.value); setParams({}); }}>
-              {available.map((a) => <option key={a.name} value={a.name}>{a.name} - {a.description}</option>)}
-            </select>
-          </label>
-          {r && <RoleParams role={r} values={params} onChange={setParams} />}
-          {r?.ports?.length ? <AllowFrom segments={segments} own={own} value={allow} onChange={setAllow} />
-            : <div className="muted small">{role} listens on no network port.</div>}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function EditVmModal({ host, catalog, onClose, onSubmit }: { host: TopoNode; catalog: Catalog; onClose: () => void; onSubmit: (ops: Op[]) => void }) {
-  const hostName = host.id.slice(5);
-  const [os, setOs] = useState(host.os ?? catalog.default_os);
-  const [size, setSize] = useState({ cores: host.cores ?? 1, memory: host.memory ?? 1024, disk: host.disk ?? 10 });
-  const osChanged = os !== host.os;
-  return (
-    <Modal title={`Edit ${hostName}`} onClose={onClose} footer={
-      <><button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" onClick={() => onSubmit([{ op: "update_host", name: hostName, ...size, ...(osChanged ? { os } : {}) }])}>Add to the draft</button></>
-    }>
-      <div className="stack">
-        <label className="field">Operating system
-          <select name="os" value={os} onChange={(e) => setOs(e.target.value)}>
-            {catalog.os.filter((o) => o.template || o.name === host.os).map((o) => <option key={o.name} value={o.name}>{o.name}</option>)}
-          </select>
-        </label>
-        {osChanged && <div className="alert warn">A new OS means a new VM: its disk is replaced when the plan runs.</div>}
-        <div className="size-row">
-          <label className="field">vCPU<input name="cores" type="number" min={1} max={16} value={size.cores} onChange={(e) => setSize({ ...size, cores: Number(e.target.value) })} /></label>
-          <label className="field">MiB<input name="memory" type="number" min={512} step={512} value={size.memory} onChange={(e) => setSize({ ...size, memory: Number(e.target.value) })} /></label>
-          <label className="field">GiB<input name="disk" type="number" min={host.disk ?? 8} value={size.disk} onChange={(e) => setSize({ ...size, disk: Number(e.target.value) })} /></label>
-        </div>
-        <div className="muted small">More CPU or memory restarts the VM; disks can grow, never shrink.</div>
-      </div>
-    </Modal>
-  );
-}
-
-function YamlModal({ name, yaml, onClose, onSaved }: { name: string; yaml: string; onClose: () => void; onSaved: (v: View) => void }) {
-  const [text, setText] = useState(yaml);
-  const [err, setErr] = useState<ApiError | null>(null);
-  const save = async () => {
-    try { onSaved(await put<View>(`/api/ranges/${name}/draft`, { yaml: text })); } catch (e) { setErr(e as ApiError); }
-  };
-  return (
-    <Modal title={`Draft spec of ${name}`} onClose={onClose} wide footer={
-      <><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={save}>Save draft</button></>
-    }>
-      <textarea name="spec" className="mono" rows={24} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} style={{ width: "100%" }} />
-      <ErrorBox error={err} />
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------- chat
-
-const MODES: { mode: Mode; label: string; hint: string; placeholder: string }[] = [
-  { mode: "question", label: "Question", hint: "Answers about this range; may look inside the VMs with read-only commands.", placeholder: "Who can reach the database? Is nginx running on web?" },
-  { mode: "plan", label: "Plan", hint: "Proposes a change as a draft on the map, with VALOR's plan to approve.", placeholder: "Add a second web server behind the same policy" },
-  { mode: "code", label: "Code", hint: "Works in the VMs (commands, files, services, power, snapshots) and records changes in the spec. Changes wait for your approval.", placeholder: "Install and configure PostgreSQL on db, reachable from web" },
-];
-
-function RangeChat({ name, chatId, onView, onReview, onClose }: {
-  name: string; chatId?: number; onView: (v: View) => void; onReview: () => void; onClose: () => void;
-}) {
-  const info = useApi<BuilderInfo>("/api/builder");
-  const list = useApi<{ chats: ChatSummary[] }>(`/api/chats?range=${encodeURIComponent(name)}`);
-  const [current, setCurrent] = useState<number | null>(chatId ?? null);
-  const [mode, setMode] = useState<Mode>("question");
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [pick, setPick] = useState("");                  // the provider for a new conversation ("" = the default)
-  const [err, setErr] = useState<ApiError | null>(null);
-  const refreshMap = () => get<View>(`/api/ranges/${name}/draft`).then(onView).catch(() => undefined);
-  const ctl = useChat(current, (m) => { if (m.meta.draft_changed) refreshMap(); });
-  const def = useMemo(() => MODES.find((m) => m.mode === mode)!, [mode]);
-
-  useEffect(() => { if (chatId) setCurrent(chatId); }, [chatId]);
-  useEffect(() => {                                   // open the newest conversation about this range
-    if (current === null && list.data?.chats.length) setCurrent(list.data.chats[0].id);
-  }, [list.data]);
-
-  const send = async (msg: string, as: Mode = mode) => {
-    msg = msg.trim();
-    if (!msg || sending || ctl.busy) return;
-    setSending(true); setErr(null);
-    try {
-      if (!ctl.chat) {
-        const c = await post<{ id: number }>("/api/chats", { kind: "range", range: name, ...(pick ? { provider: pick } : {}) });
-        await post(`/api/chats/${c.id}/messages`, { message: msg, mode: as });
-        setCurrent(c.id);
-        list.reload();
-      } else {
-        await ctl.send(msg, as);
-      }
-      setText("");
-    } catch (e) { setErr(e as ApiError); }
-    finally { setSending(false); }
-  };
-  const chat = ctl.chat;
-  const readonly = !!chat?.readonly;
-  const lastMode = chat?.messages.filter((m) => m.role === "user").slice(-1)[0]?.mode ?? mode;
-
-  return (
-    <aside className="range-chat card" aria-label="Range chat">
-      <div className="card-head">
-        <h2>Chat</h2>
-        <select name="conversation" className="chat-pick grow" value={current ?? ""} aria-label="Conversation"
-          onChange={(e) => setCurrent(e.target.value ? Number(e.target.value) : null)}>
-          <option value="">New conversation</option>
-          {(list.data?.chats ?? []).map((c) => <option key={c.id} value={c.id}>{c.title || `Conversation ${c.id}`}</option>)}
-        </select>
-        <button className="btn ghost small" onClick={onClose} aria-label="Close chat">✕</button>
-      </div>
-      {info.data && !info.data.configured ? (
-        <div className="card-body muted">The chat needs an AI provider: an administrator can connect one in Datacenter → AI providers.</div>
-      ) : (
-        <>
-          <div className="seg-control" role="tablist">
-            {MODES.map((m) => (
-              <button key={m.mode} role="tab" aria-selected={mode === m.mode} className={mode === m.mode ? "active" : ""} onClick={() => setMode(m.mode)}>{m.label}</button>
-            ))}
-          </div>
-          <div className="muted small" style={{ padding: "0 12px" }}>{def.hint}</div>
-          {info.data && info.data.providers.length > 1 && (
-            <label className="provider-row small">Model
-              <ProviderPick info={info.data} value={chat ? chat.provider : pick} disabled={readonly || sending || ctl.busy}
-                onChange={(id) => chat ? ctl.setProvider(id).catch((e) => setErr(e as ApiError)) : setPick(id)} />
-            </label>
-          )}
-          {mode === "code" && chat && !readonly && (
-            <label className="allow-all small">
-              <input name="allow-all" type="checkbox" checked={chat.allow_all} onChange={(e) => {
-                if (!e.target.checked || window.confirm("Let the assistant run commands and other changes in this chat without asking first?"))
-                  ctl.setAllowAll(e.target.checked).catch((x) => setErr(x as ApiError));
-              }} /> Run changes without asking (this conversation)
-            </label>
-          )}
-          <div className="chat-log range">
-            {chat ? <ChatLog chat={chat} ctl={ctl} onReview={onReview} onAnswer={(a) => send(a, lastMode)}
-              empty={<div className="muted small">Ask about this range or describe a change. Conversations are saved (Datacenter → Chats).</div>} />
-              : <div className="muted small">Ask about this range or describe a change. Conversations are saved (Datacenter → Chats).</div>}
-          </div>
-          <PendingApproval chat={chat} ctl={ctl} />
-          <ErrorBox error={err ?? ctl.error} />
-          {readonly ? <div className="card-body muted small">This is {chat?.owner}'s conversation (read-only).</div> : (
-            <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(text); }}>
-              <textarea name="message" rows={3} value={text} disabled={sending || ctl.busy} placeholder={ctl.busy ? "The assistant is working…" : def.placeholder}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }} />
-              <button className="btn primary" disabled={sending || ctl.busy || !text.trim()}>Send</button>
-            </form>
-          )}
-        </>
-      )}
-    </aside>
   );
 }

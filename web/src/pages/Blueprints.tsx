@@ -1,4 +1,8 @@
+// *makes a stack of identical labs* OwO web/src/pages/Blueprints.tsx is the BLUEPRINTS page! ^w^
+// Keep a range spec as a blueprint and deploy copies of it: numbered, or one per student. Each copy is an ordinary
+// range with its own VLANs and networks; deploying runs exactly what the preview showed *wags tail*
 import { useMemo, useState } from "react";
+// API calls, hooks, the map types, UI pieces and the map UwU
 import { ApiError, del, post, put } from "../api";
 import { go, useApi, when } from "../hooks";
 import { Topology } from "../types";
@@ -8,6 +12,7 @@ import { TopologyMap } from "../components/Topology";
 // Blueprints: keep a range spec and deploy copies of it - numbered, or one per student. Each copy is an ordinary
 // range with its own VLANs and networks; deploying runs exactly what the preview showed.
 
+// Blueprint: one entry in the list (invalid ones carry their error) >w<
 interface Blueprint {
   id: string;
   valid: boolean;
@@ -21,6 +26,7 @@ interface Blueprint {
   copies?: string[];
 }
 
+// CopyPreview: one previewed copy: name, student, its VLANs/networks, YAML, problems and plan summary OwO
 interface CopyPreview {
   name: string;
   student: string | null;
@@ -31,6 +37,8 @@ interface CopyPreview {
   plan_summary: Record<string, number> | null;
 }
 
+// Preview: all copies, a cluster error, the memory check, whether everything's OK, and the hash deploy must send
+// back ^w^
 interface Preview {
   copies: CopyPreview[];
   cluster_error: string | null;
@@ -39,8 +47,10 @@ interface Preview {
   deploy_hash: string;
 }
 
+// NAME_RE: valid range names (2-15 chars) UwU
 const NAME_RE = /^[a-z][a-z0-9-]{0,13}[a-z0-9]$/;
 
+// Blueprints: the list page; which dialog is open (new / view / deploy) >w<
 export function Blueprints({ canOperate }: { canOperate: boolean }) {
   const { data, error, loading, reload } = useApi<{ blueprints: Blueprint[] }>("/api/blueprints", 30000);
   const [creating, setCreating] = useState(false);
@@ -49,6 +59,7 @@ export function Blueprints({ canOperate }: { canOperate: boolean }) {
   if (loading && !data) return <Loading />;
   return (
     <>
+      {/* An explanation, and New blueprint for operators */}
       <div className="row">
         <div className="grow muted">
           A blueprint is a range spec you can deploy many times: numbered copies, or one per student. Every copy gets
@@ -57,6 +68,7 @@ export function Blueprints({ canOperate }: { canOperate: boolean }) {
         </div>
         {canOperate && <button className="btn primary" onClick={() => setCreating(true)}>New blueprint</button>}
       </div>
+      {/* Errors, then the table (or an empty message) */}
       <ErrorBox error={error} />
       <section className="card">
         {!data?.blueprints.length ? (
@@ -66,24 +78,29 @@ export function Blueprints({ canOperate }: { canOperate: boolean }) {
             <table>
               <thead><tr><th>Blueprint</th><th>Contents</th><th>Copies</th><th>Updated</th><th></th></tr></thead>
               <tbody>
-                {data.blueprints.map((b) => (
-                  <tr key={b.id}>
+                {/* One row per blueprint: id (opens it) and description, contents, its copies (links), updated, and Deploy */}
+                {data.blueprints.map((blueprint) => (
+                  <tr key={blueprint.id}>
+                    {/* Id and description (or why it's invalid) */}
                     <td>
-                      <button className="link mono" onClick={() => setViewing(b.id)}>{b.id}</button>
-                      <div className="muted small">{b.valid ? b.description : `invalid: ${b.error}`}</div>
+                      <button className="link mono" onClick={() => setViewing(blueprint.id)}>{blueprint.id}</button>
+                      <div className="muted small">{blueprint.valid ? blueprint.description : `invalid: ${blueprint.error}`}</div>
                     </td>
+                    {/* Hosts, segments, OSes, and a WireGuard badge */}
                     <td className="small">
-                      {b.valid && <>{b.hosts} hosts · {b.segments} segments · {b.os?.join(", ")}
-                        {b.wireguard && <span className="badge ok" style={{ marginLeft: 6 }}>WireGuard</span>}</>}
+                      {blueprint.valid && <>{blueprint.hosts} hosts · {blueprint.segments} segments · {blueprint.os?.join(", ")}
+                        {blueprint.wireguard && <span className="badge ok" style={{ marginLeft: 6 }}>WireGuard</span>}</>}
                     </td>
+                    {/* Ranges made from it, as links */}
                     <td className="small">
-                      {b.copies?.length ? b.copies.map((c) => (
-                        <button key={c} className="link mono" style={{ marginRight: 6 }} onClick={() => go(`ranges/${c}`)}>{c}</button>
+                      {blueprint.copies?.length ? blueprint.copies.map((copy) => (
+                        <button key={copy} className="link mono" style={{ marginRight: 6 }} onClick={() => go(`ranges/${copy}`)}>{copy}</button>
                       )) : <span className="muted">none</span>}
                     </td>
-                    <td className="small">{when(b.updated)}</td>
+                    {/* Updated, and Deploy copies… for operators */}
+                    <td className="small">{when(blueprint.updated)}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                      {canOperate && b.valid && <button className="btn small primary" onClick={() => setDeploying(b)}>Deploy copies…</button>}
+                      {canOperate && blueprint.valid && <button className="btn small primary" onClick={() => setDeploying(blueprint)}>Deploy copies…</button>}
                     </td>
                   </tr>
                 ))}
@@ -92,6 +109,7 @@ export function Blueprints({ canOperate }: { canOperate: boolean }) {
           </div>
         )}
       </section>
+      {/* The three dialogs; closing one reloads the list */}
       {creating && <CreateModal onClose={() => { setCreating(false); reload(); }} />}
       {viewing && <ViewModal id={viewing} canOperate={canOperate} onClose={() => { setViewing(null); reload(); }} />}
       {deploying && <DeployModal bp={deploying} onClose={() => { setDeploying(null); reload(); }} />}
@@ -99,6 +117,7 @@ export function Blueprints({ canOperate }: { canOperate: boolean }) {
   );
 }
 
+// CreateModal: a new blueprint, from an existing range or from pasted YAML OwO
 function CreateModal({ onClose }: { onClose: () => void }) {
   const ranges = useApi<{ ranges: { name: string }[] }>("/api/ranges");
   const [mode, setMode] = useState<"range" | "yaml">("range");
@@ -107,6 +126,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   const [yaml, setYaml] = useState("");
   const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  // save(): from-range or PUT the YAML, then close ^w^
   const save = async () => {
     setBusy(true);
     setErr(null);
@@ -120,6 +140,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
       setBusy(false);
     }
   };
+  // The dialog; Save needs a valid id plus a range or some YAML UwU
   return (
     <Modal title="New blueprint" onClose={onClose} wide footer={
       <>
@@ -128,10 +149,12 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           onClick={save}>{busy ? "Saving…" : "Save blueprint"}</button>
       </>
     }>
+      {/* Two tabs: From a range / Paste a spec */}
       <div className="tabs" role="tablist">
         <button role="tab" aria-selected={mode === "range"} className={mode === "range" ? "active" : ""} onClick={() => setMode("range")}>From a range</button>
         <button role="tab" aria-selected={mode === "yaml"} className={mode === "yaml" ? "active" : ""} onClick={() => setMode("yaml")}>Paste a spec</button>
       </div>
+      {/* The id, then a range picker or a YAML box, then errors */}
       <div className="stack" style={{ marginTop: 12 }}>
         <label>Blueprint id
           <input name="blueprint-id" value={id} onChange={(e) => setId(e.target.value.toLowerCase())} placeholder="web-lab" autoFocus />
@@ -140,7 +163,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
           <label>Range
             <select name="range" value={range} onChange={(e) => setRange(e.target.value)}>
               <option value="">Choose a range…</option>
-              {ranges.data?.ranges.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+              {ranges.data?.ranges.map((range) => <option key={range.name} value={range.name}>{range.name}</option>)}
             </select>
           </label>
         ) : (
@@ -154,10 +177,12 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ViewModal: one blueprint: description, map and YAML, with Delete (its copies stay) >w<
 function ViewModal({ id, canOperate, onClose }: { id: string; canOperate: boolean; onClose: () => void }) {
   const { data, error } = useApi<{ id: string; yaml: string; description: string; copies: string[]; topology: Topology }>(`/api/blueprints/${id}`);
   const [err, setErr] = useState<ApiError | null>(null);
   const [confirm, setConfirm] = useState(false);
+  // remove(): delete it and close OwO
   const remove = async () => {
     try {
       await del(`/api/blueprints/${id}`);
@@ -166,6 +191,7 @@ function ViewModal({ id, canOperate, onClose }: { id: string; canOperate: boolea
       setErr(e as ApiError);
     }
   };
+  // The dialog; Delete asks once more ^w^
   return (
     <Modal title={`Blueprint ${id}`} onClose={onClose} wide footer={
       <>
@@ -174,6 +200,7 @@ function ViewModal({ id, canOperate, onClose }: { id: string; canOperate: boolea
         <button className="btn primary" onClick={onClose}>Done</button>
       </>
     }>
+      {/* Errors, then the description, the map and the YAML */}
       <ErrorBox error={error || err} />
       {!data ? <Loading /> : (
         <>
@@ -186,7 +213,10 @@ function ViewModal({ id, canOperate, onClose }: { id: string; canOperate: boolea
   );
 }
 
+// DeployModal: deploy copies UwU
 function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
+  // Settings (one per student or numbered), the prefix, count, students, build now?, the preview, the result, errors,
+  // and busy >w<
   const [mode, setMode] = useState<"numbered" | "students">("students");
   const [prefix, setPrefix] = useState(bp.id.slice(0, 8).replace(/-+$/, ""));
   const [count, setCount] = useState(2);
@@ -197,15 +227,18 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
   const [err, setErr] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // copies: the planned names: "<prefix>-01".. or "<prefix>-<student>", at most 50 OwO
   const copies = useMemo(() => {
     if (mode === "numbered") {
       return Array.from({ length: Math.max(0, Math.min(count, 50)) }, (_, i) => ({ name: `${prefix}-${String(i + 1).padStart(2, "0")}`, student: null }));
     }
-    return students.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
-      .map((s) => ({ name: `${prefix}-${s}`, student: s }));
+    return students.split(/[\s,]+/).map((student) => student.trim().toLowerCase()).filter(Boolean)
+      .map((student) => ({ name: `${prefix}-${student}`, student }));
   }, [mode, prefix, count, students]);
-  const invalid = copies.filter((c) => !NAME_RE.test(c.name));
+  // Names that are too long or invalid ^w^
+  const invalid = copies.filter((copy) => !NAME_RE.test(copy.name));
 
+  // doPreview(): ask the server to plan every copy UwU
   const doPreview = async () => {
     setBusy(true);
     setErr(null);
@@ -218,6 +251,7 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
       setBusy(false);
     }
   };
+  // doDeploy(): deploy what was previewed (with its hash) >w<
   const doDeploy = async () => {
     if (!preview) return;
     setBusy(true);
@@ -231,17 +265,20 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
     }
   };
 
+  // Deployed: list the new ranges with links to their build jobs OwO
   if (result) {
     return (
       <Modal title={`Deployed ${result.ranges.length} ranges`} onClose={onClose} footer={<button className="btn primary" onClick={onClose}>Done</button>}>
+        {/* What happens next, then one link per range (and its build job) */}
         <div className="muted">{build ? "Builds are queued and run one after another." : "The specs are saved; plan and build each range when you are ready."}</div>
         <ul>
-          {result.ranges.map((r) => {
-            const j = result.jobs.find((x) => x.range === r);
+          {result.ranges.map((range) => {
+            // This range's build job, if one was started ^w^
+            const job = result.jobs.find((entry) => entry.range === range);
             return (
-              <li key={r}>
-                <button className="link mono" onClick={() => go(`ranges/${r}`)}>{r}</button>
-                {j && <> · <button className="link" onClick={() => go(`jobs/${j.job}`)}>build job</button></>}
+              <li key={range}>
+                <button className="link mono" onClick={() => go(`ranges/${range}`)}>{range}</button>
+                {job && <> · <button className="link" onClick={() => go(`jobs/${job.job}`)}>build job</button></>}
               </li>
             );
           })}
@@ -249,6 +286,7 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
       </Modal>
     );
   }
+  // The deploy form; footer: Cancel, Preview, and Create (and build) UwU
   return (
     <Modal title={`Deploy copies of ${bp.id}`} onClose={onClose} wide footer={
       <>
@@ -261,10 +299,12 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
         </button>
       </>
     }>
+      {/* Two tabs: one per student / numbered copies (changing anything clears the preview) */}
       <div className="tabs" role="tablist">
         <button role="tab" aria-selected={mode === "students"} className={mode === "students" ? "active" : ""} onClick={() => { setMode("students"); setPreview(null); }}>One per student</button>
         <button role="tab" aria-selected={mode === "numbered"} className={mode === "numbered" ? "active" : ""} onClick={() => { setMode("numbered"); setPreview(null); }}>Numbered copies</button>
       </div>
+      {/* Prefix, then count or students, then Build now */}
       <div className="row" style={{ gap: 12, marginTop: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
         <label>Name prefix
           <input name="prefix" value={prefix} onChange={(e) => { setPrefix(e.target.value.toLowerCase()); setPreview(null); }} style={{ width: 140 }} />
@@ -282,31 +322,35 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
           <input name="build" type="checkbox" checked={build} onChange={(e) => setBuild(e.target.checked)} /> Build now
         </label>
       </div>
+      {/* The names that will be made (and which are invalid) */}
       <div className="small muted" style={{ marginTop: 6 }}>
-        Ranges: {copies.map((c) => c.name).join(", ") || "—"}
-        {invalid.length > 0 && <span className="error-text"> · too long or invalid: {invalid.map((c) => c.name).join(", ")} (2-15 characters)</span>}
+        Ranges: {copies.map((copy) => copy.name).join(", ") || "—"}
+        {invalid.length > 0 && <span className="error-text"> · too long or invalid: {invalid.map((copy) => copy.name).join(", ")} (2-15 characters)</span>}
       </div>
+      {/* Errors, then the preview */}
       <ErrorBox error={err} />
       {preview && (
         <>
+          {/* Cluster unreachable, or not enough memory for all copies */}
           {preview.cluster_error && <div className="alert warn">Cluster not reachable ({preview.cluster_error}): copies can be saved but not built.</div>}
           {preview.capacity && !preview.capacity.within_limit &&
             <div className="alert error">Together the copies need {preview.capacity.additional_memory_mib} MiB more memory than the node may use.</div>}
+          {/* One row per copy: name (and student), its networks, and its plan or problems */}
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table>
               <thead><tr><th>Range</th><th>Networks</th><th>Plan</th></tr></thead>
               <tbody>
-                {preview.copies.map((c) => (
-                  <tr key={c.name}>
-                    <td className="mono">{c.name}{c.student && <div className="muted small">for {c.student}</div>}</td>
+                {preview.copies.map((copy) => (
+                  <tr key={copy.name}>
+                    <td className="mono">{copy.name}{copy.student && <div className="muted small">for {copy.student}</div>}</td>
                     <td className="small mono">
-                      {Object.entries(c.allocation).map(([seg, a]) => (
-                        <div key={seg}>{seg}: {a.cidr ?? a.network}{a.vlan ? ` · VLAN ${a.vlan}` : ""}{a.peers ? ` · peers ${a.peers.join(", ")}` : ""}</div>
+                      {Object.entries(copy.allocation).map(([segment, allocation]) => (
+                        <div key={segment}>{segment}: {allocation.cidr ?? allocation.network}{allocation.vlan ? ` · VLAN ${allocation.vlan}` : ""}{allocation.peers ? ` · peers ${allocation.peers.join(", ")}` : ""}</div>
                       ))}
                     </td>
                     <td className="small">
-                      {c.ok ? (c.plan_summary ? Object.entries(c.plan_summary).map(([k, v]) => `${v} ${k}`).join(", ") : "—")
-                        : c.errors.map((e, i) => <div key={i} className="error-text">{e.message}</div>)}
+                      {copy.ok ? (copy.plan_summary ? Object.entries(copy.plan_summary).map(([change, count]) => `${count} ${change}`).join(", ") : "—")
+                        : copy.errors.map((error, i) => <div key={i} className="error-text">{error.message}</div>)}
                     </td>
                   </tr>
                 ))}

@@ -1,5 +1,13 @@
+// *labels every box neatly* OwO web/src/types.ts: the SHAPES of API data shared by several pages! ^w^
+// Pure TypeScript types (they vanish when compiled; they just let the compiler check our code) *wags tail*
+// The API's shapes that several pages share: users and the session, the topology the maps draw, plans, jobs and
+// the range list. Types used by one page only live in that page.
+
+// Role: the three VALOR roles UwU
 export type Role = "admin" | "operator" | "viewer";
 
+// User: an account as the API shows it (never the password hash or MFA secret; temporary_password appears once
+// after a reset) >w<
 export interface User {
   id: number;
   username: string;
@@ -16,6 +24,8 @@ export interface User {
   temporary_password?: string;
 }
 
+// Me: the signed-in session: the user, the sign-in stage, the CSRF token, VALOR's version and name, and recovery
+// codes right after MFA setup OwO
 export interface Me {
   user: User;
   stage: "mfa" | "enroll" | "full";
@@ -25,8 +35,10 @@ export interface Me {
   recovery_codes?: string[];
 }
 
+// Change: the map's change colors ^w^
 export type Change = "create" | "update" | "replace" | "remove" | "keep";
 
+// TopoNode: one node on the map (internet, router, segment, host or VPN); the fields used depend on its kind UwU
 export interface TopoNode {
   id: string;
   kind: "internet" | "router" | "segment" | "host" | "vpn";
@@ -57,6 +69,7 @@ export interface TopoNode {
   endpoint?: string;
 }
 
+// TopoEdge: one line on the map: uplink, gateway, internet egress, a firewall rule, or the VPN >w<
 export interface TopoEdge {
   id: string;
   source: string;
@@ -66,6 +79,7 @@ export interface TopoEdge {
   description?: string;
 }
 
+// Topology: the whole map, plus change counts when it shows a plan OwO
 export interface Topology {
   range: string;
   nodes: TopoNode[];
@@ -73,6 +87,7 @@ export interface Topology {
   changes: Partial<Record<Change, number>> | null;
 }
 
+// PlanAction: one VM's line in a plan ^w^
 export interface PlanAction {
   host: string;
   action: string;
@@ -87,6 +102,7 @@ export interface PlanAction {
   disk_gib: number;
 }
 
+// Plan: the whole plan (summary counts, whether anything changes, the node's memory check) UwU
 export interface Plan {
   range: string;
   actions: PlanAction[];
@@ -95,6 +111,7 @@ export interface Plan {
   node?: Record<string, any>;
 }
 
+// JobSummary: one job in a list >w<
 export interface JobSummary {
   id: string;
   kind: string;
@@ -130,6 +147,7 @@ export interface RangeRow {
   last_verify: null | { ok: boolean; finished: string; summary: Record<string, any> };
 }
 
+// Check: one health check OwO *ties a bow on the last box*
 export interface Check {
   name: string;
   status: "ok" | "problem" | "unknown";

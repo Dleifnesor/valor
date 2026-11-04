@@ -1,4 +1,9 @@
+// *holds up the plan for approval* OwO web/src/components/PlanModal.tsx shows THE PLAN before a build! ^w^
+// On the map and as a table: what each VM will go through. "Approve and build" starts exactly this plan (the server
+// plans again and compares hashes). With `draft`, it's the plan for the range's draft, and approving makes the draft
+// the range's spec. Custom scripts are shown in full and must be acknowledged first *wags tail*
 import { useState } from "react";
+// post/ApiError, the plan types, openTask (show the started job), ErrorBox/Modal, and the map UwU
 import { ApiError, post } from "../api";
 import { Change, Plan, Topology } from "../types";
 import { openTask } from "../hooks";
@@ -9,6 +14,8 @@ import { CHANGE_LABEL, TopologyMap } from "./Topology";
 // recomputes it and compares hashes). With `draft`, the plan is for the range's draft and approving makes the
 // draft the range's spec.
 
+// PlanResponse: what POST /api/ranges/<name>/plan returns: ok or errors, warnings, the plan and its hash, the map,
+// and the custom scripts it would run >w<
 export interface PlanResponse {
   ok: boolean;
   errors?: { location: string; message: string; hint?: string }[];
@@ -19,91 +26,103 @@ export interface PlanResponse {
   scripts?: { host: string; os?: string; script: string; ports?: string }[];
 }
 
+// PlanModal: `name` = the range; `res` = the plan response; `draft` = plan for the draft OwO
 export function PlanModal({ name, res, onClose, draft }: { name: string; res: PlanResponse; onClose: () => void; draft?: boolean }) {
+  // State: starting, the last error, and "I read the scripts" ^w^
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
   const [ack, setAck] = useState(false);
   const scripts = res.ok ? res.scripts ?? [] : [];
+  // approve(): send the plan hash; on success close and open the started job's task viewer UwU
   const approve = async () => {
     setBusy(true);
     setErr(null);
     try {
-      const r = await post<{ job: string }>(`/api/ranges/${name}/apply`, { plan_hash: res.plan_hash, draft: !!draft });
+      const started = await post<{ job: string }>(`/api/ranges/${name}/apply`, { plan_hash: res.plan_hash, draft: !!draft });
       onClose();
-      openTask(r.job);
+      openTask(started.job);
     } catch (e) {
       setErr(e as ApiError);
       setBusy(false);
     }
   };
-  const p = res.plan;
+  // changeOf: each VM's change color, read from the map nodes ("host:web" -> "web") >w<
+  const plan = res.plan;
   const changeOf: Record<string, Change | undefined> = {};
-  for (const n of res.topology.nodes) {
-    if (n.id === "rtr") changeOf.rtr = n.change;
-    else if (n.id.startsWith("host:")) changeOf[n.id.slice(5)] = n.change;
+  for (const node of res.topology.nodes) {
+    if (node.id === "rtr") changeOf.rtr = node.change;
+    else if (node.id.startsWith("host:")) changeOf[node.id.slice(5)] = node.change;
   }
+  // The dialog; the footer has Close and (when there are changes) Approve, disabled while starting or until the
+  // scripts are acknowledged OwO
   return (
     <Modal title={draft ? `Plan for the changes to ${name}` : `Plan for ${name}`} onClose={onClose} wide footer={
       <>
         <button className="btn" onClick={onClose}>Close</button>
-        {res.ok && p?.changes && (
+        {res.ok && plan?.changes && (
           <button className="btn primary" onClick={approve} disabled={busy || (scripts.length > 0 && !ack)}>
             {busy ? <><span className="spinner" /> Starting…</> : "Approve and build"}
           </button>
         )}
       </>
     }>
+      {/* The spec can't be built: list the problems */}
       {!res.ok && (
         <div className="alert error">
           The spec can't be built on this cluster yet:
-          <ul>{res.errors?.map((e, i) => <li key={i}>{e.location}: {e.message}{e.hint ? ` (${e.hint})` : ""}</li>)}</ul>
+          <ul>{res.errors?.map((error, i) => <li key={i}>{error.location}: {error.message}{error.hint ? ` (${error.hint})` : ""}</li>)}</ul>
         </div>
       )}
-      {res.warnings?.map((w, i) => <div key={i} className="alert warn">{w.message}</div>)}
-      {p && !p.changes && <div className="alert ok">Nothing to do: the range already matches its spec.</div>}
-      {p && p.changes && (
+      {/* Warnings, "nothing to do", or the change counts */}
+      {res.warnings?.map((warning, i) => <div key={i} className="alert warn">{warning.message}</div>)}
+      {plan && !plan.changes && <div className="alert ok">Nothing to do: the range already matches its spec.</div>}
+      {plan && plan.changes && (
         <div className="row small">
-          {Object.entries(p.summary).map(([k, n]) => <span key={k} className="badge">{k} {n}</span>)}
+          {Object.entries(plan.summary).map(([change, count]) => <span key={change} className="badge">{change} {count}</span>)}
           <span className="muted">Approving runs exactly this plan; if anything changes before it starts, VALOR asks again.</span>
         </div>
       )}
+      {/* The map with change colors */}
       <div className="card" style={{ overflow: "hidden" }}><TopologyMap topology={res.topology} /></div>
-      {p && (
+      {/* One row per VM: name and id, the action (colored), and why */}
+      {plan && (
         <div className="table-wrap">
           <table>
             <thead><tr><th>VM</th><th>Change</th><th>Why</th></tr></thead>
             <tbody>
-              {p.actions.map((a) => (
-                <tr key={a.host}>
-                  <td><b>{a.host}</b> <span className="muted small">{a.vmid ? `#${a.vmid}` : ""}</span></td>
+              {plan.actions.map((action) => (
+                <tr key={action.host}>
+                  <td><b>{action.host}</b> <span className="muted small">{action.vmid ? `#${action.vmid}` : ""}</span></td>
                   <td>
-                    <span className="badge" style={{ color: `var(--c-${changeOf[a.host] ?? "keep"})` }}>{a.action}</span>{" "}
-                    <span className="muted small">{CHANGE_LABEL[changeOf[a.host] ?? "keep"]}</span>
+                    <span className="badge" style={{ color: `var(--c-${changeOf[action.host] ?? "keep"})` }}>{action.action}</span>{" "}
+                    <span className="muted small">{CHANGE_LABEL[changeOf[action.host] ?? "keep"]}</span>
                   </td>
-                  <td className="small">{a.reasons.join("; ") || "–"}</td>
+                  <td className="small">{action.reasons.join("; ") || "–"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {scripts.length > 0 && p?.changes && (
+      {/* Custom scripts this plan runs as root/SYSTEM, shown in full, with the acknowledgement checkbox */}
+      {scripts.length > 0 && plan?.changes && (
         <div className="card scripts-review">
           <h3>Custom scripts this plan runs</h3>
           <p className="small muted">
             These run as root (Linux) or SYSTEM (Windows) on the hosts below while the range has internet access for the
             build. Read them before approving.
           </p>
-          {scripts.map((s, i) => (
+          {scripts.map((entry, i) => (
             <div key={i}>
-              <div className="small"><b>{s.host}</b> <span className="muted">{s.os ?? ""}{s.ports ? ` · ports ${s.ports}` : ""}</span></div>
-              <pre className="script">{s.script}</pre>
+              <div className="small"><b>{entry.host}</b> <span className="muted">{entry.os ?? ""}{entry.ports ? ` · ports ${entry.ports}` : ""}</span></div>
+              <pre className="script">{entry.script}</pre>
             </div>
           ))}
           <label className="row small"><input name="acknowledge" type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
             I have read the custom scripts and want to run them</label>
         </div>
       )}
+      {/* Any error from approving */}
       <ErrorBox error={err} />
     </Modal>
   );
