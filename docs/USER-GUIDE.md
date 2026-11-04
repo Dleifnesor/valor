@@ -267,6 +267,9 @@ that snapshot and starts, then VALOR verifies the range again) or delete one. Af
 
 Some storage types (ZFS) only roll back to the newest snapshot; VALOR says so and offers to delete the newer ones.
 
+Right after a VM stops or reboots, Proxmox keeps its configuration locked for a few seconds while it cleans up. A
+snapshot, reset or delete that runs into that lock waits and tries again (for about a minute) before the job fails.
+
 ## Removing a range
 
 **Destroy** shows which VMs will be deleted and asks for confirmation. Only VMs in VALOR's range pool that carry the

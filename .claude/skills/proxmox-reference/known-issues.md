@@ -47,3 +47,13 @@ Newest at the bottom. Keep entries short.
   back decoded as UTF-8; `exec` refuses non-ASCII arguments (pass such text on stdin or in a file); PowerShell
   scripts get a BOM and UTF-8 output. (2026-10-24, found in a range chat's `systemctl status`)
 
+## Snapshot right after a reboot: "can't lock file ... got timeout"
+- **Symptom**: a snapshot job fails with `task_failed` "snapshot <name> of VM <id> failed: can't lock file
+  '/var/lock/qemu-server/lock-<id>.conf' - got timeout" (task log: "trying to acquire lock..."); the VMs before it
+  keep the snapshot, so a reset to it then fails with `snapshot_missing`.
+- **Cause**: VALOR's reboot is shutdown + start. When the old QEMU process exits, qmeventd runs `qm cleanup`, which
+  waits for the new start to release the VM's config lock and then holds it for 10-20 s; a snapshot task only waits
+  10 s for that lock. Proxmox changes nothing when it gives up.
+- **Fix**: built in (`valor/pve.py`: `run_locked_task`): snapshot, rollback and snapshot delete start the task again
+  after a lock timeout (3 more attempts, 10 s apart, ~70 s in all); other errors are not retried. (2026-11-03, test
+  VALOR: snapshot of a range right after rebooting `db`)
