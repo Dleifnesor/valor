@@ -326,6 +326,8 @@ def uninstall(args, facts: Facts) -> None:
     ui.info(f"VALOR VM {record.objects.get('vm', {}).get('vmid')}, the API user/token/permissions and what the "
             f"installer created. {len(ranges)} range VMs " + ("will be DELETED." if args.purge_ranges else "are kept."))
     if not ui.confirm("Remove VALOR?", default=False):
+        if not sys.stdin.isatty():             # nobody could answer, so "no" was not a choice: say so, fail
+            raise SystemExit("VALOR not removed: run with --yes to confirm (no terminal to ask on)")
         raise SystemExit(0)
     # The VM, the ranges (if purging), the templates (when no ranges are left), the identity, the pools, the bridge, the
     # credentials file and finally the record itself OwO
