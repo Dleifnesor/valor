@@ -63,6 +63,14 @@ AGENT_DOWN = "QEMU guest agent is not running"         # Proxmox's answer when i
 AGENT_RETRIES = 3
 PS_START_WAIT = 300                                     # s: for a script whose start request timed out
 
+# A snapshot task waits 10 s for its VM's config lock, then fails without changing anything: "can't lock file
+# '/var/lock/qemu-server/lock-<vmid>.conf' - got timeout". Right after a VM stops (a reboot is shutdown + start),
+# Proxmox's own cleanup of the old QEMU process (qmeventd: qm cleanup) holds that lock for 10-20 s while the VM starts
+# again, so these tasks are started again a few times, VM_LOCK_PAUSE apart, before the error counts.
+VM_LOCK_BUSY = re.compile(r"can't lock file \S+ - got timeout")
+VM_LOCK_RETRIES = 3
+VM_LOCK_PAUSE = 10                                      # s between attempts; with Proxmox's 10 s wait ~70 s in all
+
 
 # The comment below explains a nasty quirk: Proxmox treats guest-agent text as Latin-1 (one byte per character).
 # to_agent/from_agent convert UTF-8 text to/from that form, so emoji and accents survive the round trip UwU
@@ -257,19 +265,35 @@ class PVE:
         return [snap for snap in self.call(f"list snapshots of VM {vmid}", self.vm(vmid).snapshot.get)
                 if snap.get("name") != "current"]       # "current" is the live state, not a snapshot
 
-    # snapshot / rollback / delete_snapshot: each starts a task and waits up to 15 min OwO
+    # run_locked_task: start a task that needs the VM's config lock and wait for it. Right after a reboot Proxmox
+    # may still hold that lock ("can't lock file ... got timeout"), and then the task did nothing, so it is started
+    # again after a pause; any other error is raised right away *waits patiently by the door* >w<
+    def run_locked_task(self, what: str, start, timeout: int = 900) -> None:
+        """Start a task that takes the VM's config lock (start() returns its task ID) and wait for it. While Proxmox
+        answers that the lock is busy the task did nothing, so it is started again (see VM_LOCK_BUSY); any other
+        error, or the lock still busy after the last attempt, is raised as it came."""
+        for attempt in range(VM_LOCK_RETRIES + 1):
+            try:
+                return self.wait_task(start(), what, timeout)
+            except ValorError as e:
+                if attempt == VM_LOCK_RETRIES or not VM_LOCK_BUSY.search(f"{e.message} {e.details}"):
+                    raise
+            time.sleep(VM_LOCK_PAUSE)
+
+    # snapshot / rollback / delete_snapshot: each starts a task through run_locked_task and waits up to 15 min OwO
     def snapshot(self, vmid: int, name: str, description: str = "") -> None:
-        upid = self.call(f"snapshot VM {vmid}", self.vm(vmid).snapshot.post, snapname=name,
-                         description=description, vmstate=0)
-        self.wait_task(upid, f"snapshot {name} of VM {vmid}", 900)
+        self.run_locked_task(f"snapshot {name} of VM {vmid}",
+                             lambda: self.call(f"snapshot VM {vmid}", self.vm(vmid).snapshot.post, snapname=name,
+                                               description=description, vmstate=0))
 
     def rollback(self, vmid: int, name: str, start: bool = True) -> None:
-        upid = self.call(f"roll back VM {vmid}", self.vm(vmid).snapshot(name).rollback.post, start=int(start))
-        self.wait_task(upid, f"roll back VM {vmid} to {name}", 900)
+        self.run_locked_task(f"roll back VM {vmid} to {name}",
+                             lambda: self.call(f"roll back VM {vmid}", self.vm(vmid).snapshot(name).rollback.post,
+                                               start=int(start)))
 
     def delete_snapshot(self, vmid: int, name: str) -> None:
-        upid = self.call(f"delete snapshot of VM {vmid}", self.vm(vmid).snapshot(name).delete)
-        self.wait_task(upid, f"delete snapshot {name} of VM {vmid}", 900)
+        self.run_locked_task(f"delete snapshot {name} of VM {vmid}",
+                             lambda: self.call(f"delete snapshot of VM {vmid}", self.vm(vmid).snapshot(name).delete))
 
     # destroy: stop the VM if it runs, then delete it with its disks (purge also removes it from backup jobs and
     # HA) ^w^ *gulps*
