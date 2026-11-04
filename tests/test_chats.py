@@ -1,6 +1,10 @@
+# *curls up next to the chat log* OwO tests/test_chats.py: the BIGGEST test file! Saved chats, the background
+# turns and their live feed, question cards, the chat builder, the range assistant (reads run at once, changes
+# wait for approval), and the automatic fixing of failed builds ^w^ *wags tail*
 """Saved chats: ownership, the background turn and its feed, question cards, the chat builder, and the range agent
 (read-only commands run at once, changes wait for approval, denial, allow-all, Question mode, spec drafts, stop)."""
 
+# dataclasses, json, sqlite3, time, pytest, and every chat-related piece of VALOR under test UwU
 import dataclasses
 import json
 import sqlite3
@@ -15,11 +19,15 @@ from valor.pve import ExecResult
 from valor.web import builder, chats, db
 from valor.web.chats import autofix, turn
 
+# *borrows toys from the other test files* GOOD/Stream from the builder tests, SPEC/_app from the editing tests,
+# and the web app fixture + helpers from test_web.py >w<
 from test_builder import GOOD, Stream
 from test_editing import SPEC, _app
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
 
 
+# *puts on a scripted mask* Script: a fake AI provider that answers from a list. Each item is either plain text
+# or (text, [(tool name, tool input), ...]) for answers that call tools OwO
 class Script(ai.Provider):
     """Answers from a list: a string, or (text, [(tool, input), ...])."""
     name = "fake"
@@ -28,20 +36,26 @@ class Script(ai.Provider):
         super().__init__("fake-model")
         self.replies, self.calls = list(replies), []
 
+    # Records a deep copy of what was sent (so later changes to the list don't rewrite history) and which tools were
+    # offered ^w^
     def complete(self, system, messages, tools=None, on_delta=None):
         self.calls.append({"system": system, "messages": json.loads(json.dumps(messages)),
                            "tools": [t["name"] for t in tools or []]})
         item = self.replies.pop(0)
         text, calls = (item, []) if isinstance(item, str) else item
+        # Streams a "thinking" piece and the text through on_delta, just like a real streaming model UwU
         if on_delta:
             on_delta("thinking", "considering it")
             if text:
                 on_delta("text", text)
+        # Tool call ids are unique per call ("c" + call number + index) >w<
         n = len(self.calls)
         return ai.Reply(text, 100, 20, reasoning="considering it",
-                        tool_calls=[{"id": f"c{n}{i}", "name": name, "input": a} for i, (name, a) in enumerate(calls)])
+                        tool_calls=[{"id": f"c{n}{i}", "name": name, "input": assistant_msg} for i, (name, assistant_msg) in enumerate(calls)])
 
 
+# *fakes a whole cluster* FakePVE: records every script/PowerShell run and file write; bash answers "active",
+# PowerShell "Running", and only /etc/hosts can be read OwO
 class FakePVE:
     def __init__(self):
         self.ran = []
@@ -61,25 +75,31 @@ class FakePVE:
         self.ran.append((vmid, f"write {path}"))
 
 
+# *taps paw impatiently* wait(): poll a chat message until it reaches one of the `until` states (or fail after
+# `timeout` seconds) ^w^
 def wait(c, chat_id, msg_id, until=("done", "failed", "waiting", "stopped"), timeout=10):
-    end, m = time.time() + timeout, {}
+    end, reply_msg = time.time() + timeout, {}
     while time.time() < end:
-        m = c.get(f"/api/chats/{chat_id}/messages/{msg_id}").json()
-        if m.get("status") in until:
-            return m
+        reply_msg = c.get(f"/api/chats/{chat_id}/messages/{msg_id}").json()
+        if reply_msg.get("status") in until:
+            return reply_msg
         time.sleep(0.03)
-    raise AssertionError(f"message still {m.get('status')}: {m}")
+    raise AssertionError(f"message still {reply_msg.get('status')}: {reply_msg}")
 
 
+# *sets up the playground* lab: the editing tests' app with a "lab" range of three VMs (one stopped), a fake
+# Proxmox, and no real cluster checks, references or catalog UwU
 @pytest.fixture
 def lab(env, tmp_path, monkeypatch):
     app, wcfg, cfg = _app(env, tmp_path)
     pve = FakePVE()
     vms = [VMState(201, "lab-rtr", "running", [], {"host": "rtr"}), VMState(202, "lab-web", "running", [], {"host": "web"}),
            VMState(203, "lab-pc", "stopped", [], {"host": "pc"})]
+    # Both the turn runner and autofix get the fake Proxmox and a cluster check that finds nothing >w<
     for mod in (turn, autofix):
         monkeypatch.setattr(mod, "PVE", lambda c: pve)
         monkeypatch.setattr(mod, "validate_cluster", lambda p, s: {"ok": False, "errors": []})
+    # The range's VMs, the reference text, the role catalog and the spec check are all faked for speed OwO
     monkeypatch.setattr(turn, "range_vms", lambda p, name, **k: vms)
     monkeypatch.setattr(turn, "reference_for", lambda c, p: "REFERENCE")
     monkeypatch.setattr(turn, "load_catalog", lambda c: {})
@@ -87,6 +107,9 @@ def lab(env, tmp_path, monkeypatch):
     return app, wcfg, cfg, pve
 
 
+# *opens two doors* start(): sign in an admin and an operator, set up one hosted AI provider, and make every
+# provider lookup return the given fake. Returns (admin client, admin headers, operator client, operator headers)
+# ^w^
 def start(app, monkeypatch, fake):
     adm, op = client(app), client(app)
     adm.__enter__(), op.__enter__()
@@ -94,25 +117,29 @@ def start(app, monkeypatch, fake):
     adm.put("/api/settings/ai", json={"providers": [{"name": "Hosted", "provider": "openrouter", "model": "m",
                                                      "api_key": "k"}]},
             headers={"X-CSRF-Token": ame["csrf"]})
-    monkeypatch.setattr(ai, "provider_from", lambda st, key: fake)
+    monkeypatch.setattr(ai, "provider_from", lambda step, key: fake)
     me, _ = enroll(op, "olivia")
     return adm, {"X-CSRF-Token": ame["csrf"]}, op, {"X-CSRF-Token": me["csrf"]}
 
 
-def say(c, h, chat_id, text, mode):
-    r = c.post(f"/api/chats/{chat_id}/messages", json={"message": text, "mode": mode}, headers=h)
+# say(): post a message in a mode; the reply is the user message plus an assistant message that is "running" UwU
+def say(c, csrf_headers, chat_id, text, mode):
+    r = c.post(f"/api/chats/{chat_id}/messages", json={"message": text, "mode": mode}, headers=csrf_headers)
     assert r.status_code == 200, r.text
     user, asst = r.json()["messages"]
     assert user["role"] == "user" and asst["status"] == "running"
     return asst["id"]
 
 
+# NEW_SPEC: the editing tests' SPEC with a second LAN client, pc2 >w<
 NEW_SPEC = SPEC.replace("  - {name: pc, segment: lan, address: 10.69.0.10}",
                         "  - {name: pc, segment: lan, address: 10.69.0.10}\n  - {name: pc2, segment: lan, address: 10.69.0.11}")
 
 
+# *takes the range assistant for a full walk* six chapters in one test, each building on the last OwO
 def test_range_agent(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
+    # The model's script, in order: the replies for chapters 1-6 below ^w^
     fake = Script([
         ("Checking nginx.", [("run_command", {"host": "web", "command": "systemctl status nginx", "purpose": "look"}),
                              ("run_command", {"host": "web", "command": "systemctl restart nginx", "purpose": "restart"}),
@@ -130,199 +157,229 @@ def test_range_agent(lab, monkeypatch):
         "Done.",
         ("", [("run_command", {"host": "web", "command": "touch /tmp/b", "purpose": "x"})]),
     ])
-    adm, ah, op, h = start(app, monkeypatch, fake)
-    chat = op.post("/api/chats", json={"kind": "range", "range": "lab"}, headers=h).json()
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
+    chat = op.post("/api/chats", json={"kind": "range", "range": "lab"}, headers=csrf_headers).json()
     cid = chat["id"]
 
+    # *sniffs nginx* reads first, then changes wait for the human UwU
     # 1. a read runs at once; the restart waits for approval and the read after it waits too
-    mid = say(op, h, cid, "is nginx ok?", "code")
-    m = wait(op, cid, mid)
-    assert m["status"] == "waiting" and len(pve.ran) == 1 and "systemctl status nginx" in pve.ran[0][1]
-    tools = [s for s in m["meta"]["steps"] if s["type"] == "tool"]
+    mid = say(op, csrf_headers, cid, "is nginx ok?", "code")
+    reply_msg = wait(op, cid, mid)
+    assert reply_msg["status"] == "waiting" and len(pve.ran) == 1 and "systemctl status nginx" in pve.ran[0][1]
+    tools = [s for s in reply_msg["meta"]["steps"] if s["type"] == "tool"]
     assert [(t["status"], t.get("approval")) for t in tools] == [("done", None), ("pending", True), ("queued", False)]
     assert tools[0]["readonly"] and tools[0]["output"] == "active\n" and tools[1]["purpose"] == "restart"
-    assert any(s["type"] == "thinking" and s["text"] == "considering it" for s in m["meta"]["steps"])
-    assert op.post(f"/api/chats/{cid}/messages", json={"message": "hi", "mode": "code"}, headers=h).status_code == 409
+    assert any(s["type"] == "thinking" and s["text"] == "considering it" for s in reply_msg["meta"]["steps"])
+    # Only one running answer per chat at a time (409) >w<
+    assert op.post(f"/api/chats/{cid}/messages", json={"message": "hi", "mode": "code"}, headers=csrf_headers).status_code == 409
     full = adm.get(f"/api/chats/{cid}").json()                     # admins read, but cannot act
     assert full["readonly"] and full["owner"] == "olivia"
     assert adm.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {tools[1]["id"]: "approve"}},
-                    headers=ah).status_code == 404
-    r = op.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {tools[1]["id"]: "approve"}}, headers=h)
+                    headers=admin_headers).status_code == 404
+    r = op.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {tools[1]["id"]: "approve"}}, headers=csrf_headers)
     assert r.status_code == 200
-    m = wait(op, cid, mid, until=("done", "failed"))
-    assert m["status"] == "done" and m["content"] == "nginx restarted and active." and len(pve.ran) == 2
-    assert [t["status"] for t in m["meta"]["steps"] if t["type"] == "tool"] == ["done", "done", "done"]
+    reply_msg = wait(op, cid, mid, until=("done", "failed"))
+    assert reply_msg["status"] == "done" and reply_msg["content"] == "nginx restarted and active." and len(pve.ran) == 2
+    assert [t["status"] for t in reply_msg["meta"]["steps"] if t["type"] == "tool"] == ["done", "done", "done"]
+    # The system prompt is built once per turn and reused across its rounds OwO
     assert fake.calls[0]["system"] == fake.calls[1]["system"]          # the turn's prompt is frozen
     results = fake.calls[1]["messages"][-1]
     assert results["role"] == "tool" and [x["content"].split("\n")[0] for x in results["results"]] == \
         ["exit code 0", "exit code 0", "127.0.0.1 localhost"]
     assert fake.calls[0]["tools"] == list(agent.TOOLS)
 
+    # *gets told "no"* ^w^
     # 2. a denied action goes back to the model as denied; earlier turns are summarized for it
-    mid = say(op, h, cid, "update the kernel", "code")
-    m = wait(op, cid, mid)
-    power = next(s for s in m["meta"]["steps"] if s["type"] == "tool")
-    assert m["status"] == "waiting" and power["summary"] == "reboot web"
-    op.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {power["id"]: "deny"}}, headers=h)
-    m = wait(op, cid, mid, until=("done", "failed"))
-    assert m["content"] == "Fine, no reboot." and "denied" in fake.calls[3]["messages"][-1]["results"][0]["content"]
+    mid = say(op, csrf_headers, cid, "update the kernel", "code")
+    reply_msg = wait(op, cid, mid)
+    power = next(s for s in reply_msg["meta"]["steps"] if s["type"] == "tool")
+    assert reply_msg["status"] == "waiting" and power["summary"] == "reboot web"
+    op.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {power["id"]: "deny"}}, headers=csrf_headers)
+    reply_msg = wait(op, cid, mid, until=("done", "failed"))
+    assert reply_msg["content"] == "Fine, no reboot." and "denied" in fake.calls[3]["messages"][-1]["results"][0]["content"]
     history = fake.calls[2]["messages"]
     assert history[0] == {"role": "user", "content": "is nginx ok?"} and "[Actions in that answer]" in history[1]["content"]
 
+    # *scribbles in the spec* UwU
     # 3. an invalid spec is answered at once; a valid one is shown as a diff to approve, then saved as the draft
-    mid = say(op, h, cid, "add a client", "code")
-    m = wait(op, cid, mid)
-    specs = [s for s in m["meta"]["steps"] if s["type"] == "tool"]
+    mid = say(op, csrf_headers, cid, "add a client", "code")
+    reply_msg = wait(op, cid, mid)
+    specs = [s for s in reply_msg["meta"]["steps"] if s["type"] == "tool"]
     assert specs[0]["status"] == "failed" and "could not use that spec" in specs[0]["output"]
     assert specs[1]["status"] == "pending" and "+  - {name: pc2" in specs[1]["diff"] and drafts.load(cfg, "lab") is None
-    op.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {specs[1]["id"]: "approve"}}, headers=h)
-    m = wait(op, cid, mid, until=("done", "failed"))
-    assert m["status"] == "done" and m["meta"]["draft_changed"] and "pc2" in drafts.load(cfg, "lab")[0]
+    op.post(f"/api/chats/{cid}/messages/{mid}/decide", json={"decisions": {specs[1]["id"]: "approve"}}, headers=csrf_headers)
+    reply_msg = wait(op, cid, mid, until=("done", "failed"))
+    assert reply_msg["status"] == "done" and reply_msg["meta"]["draft_changed"] and "pc2" in drafts.load(cfg, "lab")[0]
 
+    # *puts on the "just looking" hat* >w<
     # 4. Question mode: read-only tools only; a change is refused, a read runs
-    mid = say(op, h, cid, "clean up tmp", "question")
-    m = wait(op, cid, mid, until=("done", "failed"))
+    mid = say(op, csrf_headers, cid, "clean up tmp", "question")
+    reply_msg = wait(op, cid, mid, until=("done", "failed"))
     assert fake.calls[7]["tools"] == list(agent.READ_TOOLS) and "may look inside the VMs" in fake.calls[7]["system"]
-    assert [s["status"] for s in m["meta"]["steps"] if s["type"] == "tool"] == ["refused", "done"]
+    assert [s["status"] for s in reply_msg["meta"]["steps"] if s["type"] == "tool"] == ["refused", "done"]
 
+    # *trusts the assistant fully* OwO
     # 5. allow all: changes run without asking (and are audited)
-    assert op.patch(f"/api/chats/{cid}", json={"allow_all": True}, headers=h).json()["allow_all"] is True
-    mid = say(op, h, cid, "write a file", "code")
-    m = wait(op, cid, mid, until=("done", "failed"))
-    assert m["content"] == "Done." and (202, "write /tmp/a") in pve.ran
+    assert op.patch(f"/api/chats/{cid}", json={"allow_all": True}, headers=csrf_headers).json()["allow_all"] is True
+    mid = say(op, csrf_headers, cid, "write a file", "code")
+    reply_msg = wait(op, cid, mid, until=("done", "failed"))
+    assert reply_msg["content"] == "Done." and (202, "write /tmp/a") in pve.ran
     audit = db.connect(wcfg.db).execute("SELECT detail FROM audit WHERE action = 'chat.action'").fetchall()
-    assert len(audit) == 6 and any('"approved_by": "allow_all"' in a["detail"] for a in audit)
+    assert len(audit) == 6 and any('"approved_by": "allow_all"' in assistant_msg["detail"] for assistant_msg in audit)
 
+    # *hits the big red button* ^w^
     # 6. stop: a waiting answer is stopped and its pending action cancelled
-    op.patch(f"/api/chats/{cid}", json={"allow_all": False}, headers=h)
-    mid = say(op, h, cid, "touch b", "code")
+    op.patch(f"/api/chats/{cid}", json={"allow_all": False}, headers=csrf_headers)
+    mid = say(op, csrf_headers, cid, "touch b", "code")
     wait(op, cid, mid)
-    assert op.post(f"/api/chats/{cid}/messages/{mid}/stop", headers=h).status_code == 200
-    m = op.get(f"/api/chats/{cid}/messages/{mid}").json()
-    assert m["status"] == "stopped" and [s["status"] for s in m["meta"]["steps"] if s["type"] == "tool"] == ["cancelled"]
+    assert op.post(f"/api/chats/{cid}/messages/{mid}/stop", headers=csrf_headers).status_code == 200
+    reply_msg = op.get(f"/api/chats/{cid}/messages/{mid}").json()
+    assert reply_msg["status"] == "stopped" and [s["status"] for s in reply_msg["meta"]["steps"] if s["type"] == "tool"] == ["cancelled"]
 
+    # Every model call was recorded as usage (100 input tokens each), then close both clients UwU
     usage = db.connect(wcfg.db).execute("SELECT COUNT(*), SUM(input_tokens) FROM ai_usage").fetchone()
     assert tuple(usage) == (len(fake.calls), 100 * len(fake.calls))
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *plans ahead* Plan mode writes a draft (not the real spec) and summarizes it; operators only see their own
+# chats, admins see all and may delete any >w<
 def test_plan_mode_and_ownership(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
     fake = Script([f"- add pc2 to the LAN\n```yaml\n{NEW_SPEC}```"])
-    adm, ah, op, h = start(app, monkeypatch, fake)
-    cid = op.post("/api/chats", json={"kind": "range", "range": "lab"}, headers=h).json()["id"]
-    assert op.post("/api/chats", json={"kind": "range", "range": "nope"}, headers=h).status_code == 404
-    assert op.post(f"/api/chats/{cid}/messages", json={"message": "x", "mode": "build"}, headers=h).status_code == 400
-    m = wait(op, cid, say(op, h, cid, "add a second client", "plan"))
-    assert m["status"] == "done" and m["meta"]["draft"] == {"create": 1} and m["content"] == "- add pc2 to the LAN"
-    assert not [s for s in m["meta"]["steps"] if s["type"] == "text"]     # the answer is not repeated in the feed
-    mine = adm.post("/api/chats", json={"kind": "builder"}, headers=ah).json()["id"]
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
+    cid = op.post("/api/chats", json={"kind": "range", "range": "lab"}, headers=csrf_headers).json()["id"]
+    assert op.post("/api/chats", json={"kind": "range", "range": "nope"}, headers=csrf_headers).status_code == 404
+    assert op.post(f"/api/chats/{cid}/messages", json={"message": "x", "mode": "build"}, headers=csrf_headers).status_code == 400
+    reply_msg = wait(op, cid, say(op, csrf_headers, cid, "add a second client", "plan"))
+    assert reply_msg["status"] == "done" and reply_msg["meta"]["draft"] == {"create": 1} and reply_msg["content"] == "- add pc2 to the LAN"
+    assert not [s for s in reply_msg["meta"]["steps"] if s["type"] == "text"]     # the answer is not repeated in the feed
+    # Chat ownership: the admin's builder chat is invisible to the operator OwO
+    mine = adm.post("/api/chats", json={"kind": "builder"}, headers=admin_headers).json()["id"]
     assert [c["id"] for c in op.get("/api/chats?scope=all").json()["chats"]] == [cid]      # operators: their own
     assert {c["id"] for c in adm.get("/api/chats?scope=all").json()["chats"]} == {cid, mine}
     assert [c["id"] for c in adm.get("/api/chats").json()["chats"]] == [mine]
     listed = op.get("/api/chats?range=lab").json()["chats"][0]
     assert listed["title"] == "add a second client" and listed["messages"] == 2 and listed["status"] == "done"
-    assert op.get(f"/api/chats/{mine}").status_code == 404 and op.delete(f"/api/chats/{mine}", headers=h).status_code == 404
-    assert adm.delete(f"/api/chats/{cid}", headers=ah).status_code == 200                  # admins may delete
+    assert op.get(f"/api/chats/{mine}").status_code == 404 and op.delete(f"/api/chats/{mine}", headers=csrf_headers).status_code == 404
+    assert adm.delete(f"/api/chats/{cid}", headers=admin_headers).status_code == 200                  # admins may delete
     assert op.get("/api/chats").json()["chats"] == []
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *asks before building* The builder asks question cards first (with header, options and a recommendation), then
+# builds once the answers come back ^w^
 def test_builder_chat_asks_then_builds(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
     fake = Script(["A few questions first.\n```questions\n- header: Compliance\n  question: Which framework?\n"
                    "  options: [NIST SP 800-171, None]\n  recommended: None\n- What operating system?\n```",
                    f"Built it.\n```yaml\n{GOOD}```"])
-    adm, ah, op, h = start(app, monkeypatch, fake)
-    cid = op.post("/api/chats", json={"kind": "builder"}, headers=h).json()["id"]
-    m = wait(op, cid, say(op, h, cid, "a web lab", "build"))
-    assert m["content"] == "A few questions first." and [q["question"] for q in m["meta"]["questions"]] == \
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
+    cid = op.post("/api/chats", json={"kind": "builder"}, headers=csrf_headers).json()["id"]
+    reply_msg = wait(op, cid, say(op, csrf_headers, cid, "a web lab", "build"))
+    assert reply_msg["content"] == "A few questions first." and [q["question"] for q in reply_msg["meta"]["questions"]] == \
         ["Which framework?", "What operating system?"]
-    q = m["meta"]["questions"][0]
+    q = reply_msg["meta"]["questions"][0]
     assert q["options"] == ["NIST SP 800-171", "None"] and q["recommended"] == "None" and q["header"] == "Compliance"
     assert "Asking first" in fake.calls[0]["system"] and "```questions" in fake.calls[0]["system"]
-    m = wait(op, cid, say(op, h, cid, "Answers:\n1. None\n2. Ubuntu", "build"))
-    assert m["content"] == "Built it." and m["meta"]["yaml"] == GOOD
+    reply_msg = wait(op, cid, say(op, csrf_headers, cid, "Answers:\n1. None\n2. Ubuntu", "build"))
+    assert reply_msg["content"] == "Built it." and reply_msg["meta"]["yaml"] == GOOD
     assert "[Questions asked]" in fake.calls[1]["messages"][1]["content"]
     chat = op.get(f"/api/chats/{cid}").json()
     assert chat["spec"] == GOOD and chat["topology"]["nodes"] and chat["title"] == "a web lab"
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *runs through the whole checklist* everything every turn goes through UwU
 def test_every_turn_checks_key_prompt_budget_and_rate(env, tmp_path, monkeypatch):
     """What every chat turn goes through: the provider (its key decrypted on the server only), the cluster reference
     in the prompt, the spec check and fix loop, usage, the daily budget and the rate limit."""
     app, wcfg = env
     cfg = dataclasses.replace(app.state.cfg, data_dir=str(tmp_path / "data"))
     app.state.cfg = cfg
+    # A range called "taken" already exists, so the model's first name clashes with it >w<
     cfg.ranges_dir.mkdir(parents=True)
     (cfg.ranges_dir / "taken.yaml").write_text(GOOD.replace("name: chatlab", "name: taken"))
+    # Clear the builder's rate limiter, which is shared across tests OwO
     builder._rate.clear()
     with client(app) as adm, client(app) as op, client(app) as viewer:
         ame, _ = enroll(adm, "admin")
-        ah = {"X-CSRF-Token": ame["csrf"]}
+        admin_headers = {"X-CSRF-Token": ame["csrf"]}
         ome, _ = enroll(op, "olivia")
-        h = {"X-CSRF-Token": ome["csrf"]}
+        csrf_headers = {"X-CSRF-Token": ome["csrf"]}
         vme, _ = enroll(viewer, "vic")
-        cid = op.post("/api/chats", json={"kind": "builder"}, headers=h).json()["id"]
+        cid = op.post("/api/chats", json={"kind": "builder"}, headers=csrf_headers).json()["id"]
         ask = {"message": "a web server and a client that may browse it", "mode": "build"}
-        assert op.post(f"/api/chats/{cid}/messages", json=ask, headers=h).status_code == 409    # no provider yet
+        # No AI provider set up yet: 409 ^w^
+        assert op.post(f"/api/chats/{cid}/messages", json=ask, headers=csrf_headers).status_code == 409    # no provider yet
         orr = {"name": "OpenRouter", "provider": "openrouter", "model": "qwen/qwen3.8-27b", "api_key": "sk-or-SECRET"}
-        adm.put("/api/settings/ai", json={"providers": [orr], "daily_tokens_per_user": 300}, headers=ah)
+        adm.put("/api/settings/ai", json={"providers": [orr], "daily_tokens_per_user": 300}, headers=admin_headers)
         fake = Script([f"Named it taken.\n```yaml\n{GOOD.replace('name: chatlab', 'name: taken')}```",
                        f"Renamed.\n```yaml\n{GOOD}```"])
         seen = {}
-        monkeypatch.setattr(ai, "provider_from", lambda st, key: seen.update(key=key) or fake)
+        # `seen.update(...) or fake` records the decrypted key and still returns the fake (update() returns None) UwU
+        monkeypatch.setattr(ai, "provider_from", lambda step, key: seen.update(key=key) or fake)
         assert viewer.post(f"/api/chats/{cid}/messages", json=ask, headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
-        m = wait(op, cid, say(op, h, cid, ask["message"], "build"))
-        assert m["content"] == "Renamed." and m["meta"]["yaml"] == GOOD and m["meta"]["warnings"] == []
-        assert len(m["meta"]["fixed"]) == 1 and "already exists" in m["meta"]["fixed"][0]
+        reply_msg = wait(op, cid, say(op, csrf_headers, cid, ask["message"], "build"))
+        assert reply_msg["content"] == "Renamed." and reply_msg["meta"]["yaml"] == GOOD and reply_msg["meta"]["warnings"] == []
+        assert len(reply_msg["meta"]["fixed"]) == 1 and "already exists" in reply_msg["meta"]["fixed"][0]
         assert seen["key"] == "sk-or-SECRET"                                              # decrypted server-side only
         system = fake.calls[0]["system"]
         assert "ad-dc" in system and "access:" in system and "taken" in system             # roles, reference, facts
         assert "already exists" in fake.calls[1]["messages"][-1]["content"]
+        # Usage per user: 2 calls x 100 input tokens, and today's total (input + output) is 240 >w<
         u = adm.get("/api/settings/ai/usage").json()["users"]
         assert u[0]["username"] == "olivia" and u[0]["input"] == 200 and u[0]["today"] == 240
+        # *frowns at "baseline: none"* allowed, but it comes with a visible warning OwO
         fake.replies = [f"No hardening.\n```yaml\n{GOOD}baseline: none\n```"]
-        m = wait(op, cid, say(op, h, cid, "no hardening", "build"))
-        assert m["meta"]["warnings"] == [validate.NO_BASELINE]                             # shown, not hidden
+        reply_msg = wait(op, cid, say(op, csrf_headers, cid, "no hardening", "build"))
+        assert reply_msg["meta"]["warnings"] == [validate.NO_BASELINE]                             # shown, not hidden
         assert "The current spec in the builder" in fake.calls[-1]["messages"][-1]["content"]
-        over = op.post(f"/api/chats/{cid}/messages", json=ask, headers=h)                 # 360 tokens > 300 a day
+        # Over the daily token budget: 429 "ai_budget" ^w^
+        over = op.post(f"/api/chats/{cid}/messages", json=ask, headers=csrf_headers)                 # 360 tokens > 300 a day
         assert over.status_code == 429 and over.json()["error"] == "ai_budget"
+        # *counts requests* with no budget, the per-minute rate limit (RATE[0] turns) stops the next one UwU
         builder._rate.clear()
         adm.put("/api/settings/ai", json={"providers": adm.get("/api/settings/ai").json()["providers"],
-                                          "daily_tokens_per_user": 0}, headers=ah)
+                                          "daily_tokens_per_user": 0}, headers=admin_headers)
         fake.replies = [f"```yaml\n{GOOD}```"] * 20
-        ids = [op.post("/api/chats", json={"kind": "builder"}, headers=h).json()["id"] for _ in range(builder.RATE[0] + 1)]
-        sent = [op.post(f"/api/chats/{c}/messages", json=ask, headers=h) for c in ids]
+        ids = [op.post("/api/chats", json={"kind": "builder"}, headers=csrf_headers).json()["id"] for _ in range(builder.RATE[0] + 1)]
+        sent = [op.post(f"/api/chats/{c}/messages", json=ask, headers=csrf_headers) for c in ids]
         assert [r.status_code for r in sent] == [200] * builder.RATE[0] + [429]
         for c, r in zip(ids, sent[:-1]):
             wait(op, c, r.json()["messages"][1]["id"])
 
 
+# *trips over a cable* A cut-off answer fails as ai_context_full and is only counted once; an answer left
+# "running" by a restart shows as interrupted when the chat is next opened >w<
 def test_failures_and_interrupted_turns(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
 
+    # Cut: every answer stops at once with nothing written (the context window is full) OwO
     class Cut(Script):
         def complete(self, system, messages, tools=None, on_delta=None):
             self.calls.append(1)
             return ai.Reply("", 30_000, 2, truncated=True)
-    adm, ah, op, h = start(app, monkeypatch, Cut([]))
-    cid = op.post("/api/chats", json={"kind": "range", "range": "lab"}, headers=h).json()["id"]
-    m = wait(op, cid, say(op, h, cid, "hi", "question"))
-    assert m["status"] == "failed" and m["meta"]["error"]["code"] == "ai_context_full"
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, Cut([]))
+    cid = op.post("/api/chats", json={"kind": "range", "range": "lab"}, headers=csrf_headers).json()["id"]
+    reply_msg = wait(op, cid, say(op, csrf_headers, cid, "hi", "question"))
+    assert reply_msg["status"] == "failed" and reply_msg["meta"]["error"]["code"] == "ai_context_full"
     conn = db.connect(wcfg.db)
     assert conn.execute("SELECT COUNT(*) FROM ai_usage").fetchone()[0] == 1          # counted once
+    # Pretend VALOR died in the middle of an answer ^w^
     stale = conn.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status) VALUES (?, ?, 'assistant', "
                          "'code', 'running')", (cid, time.time())).lastrowid
-    m = op.get(f"/api/chats/{cid}").json()["messages"][-1]
-    assert m["id"] == stale and m["status"] == "failed" and m["meta"]["error"]["code"] == "interrupted"
+    reply_msg = op.get(f"/api/chats/{cid}").json()["messages"][-1]
+    assert reply_msg["id"] == stale and reply_msg["status"] == "failed" and reply_msg["meta"]["error"]["code"] == "interrupted"
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *moves house* Database migration: the old per-range chat table becomes saved chats, one per (range, person),
+# titled by the first message, with all messages kept and the old table dropped UwU
 def test_range_chat_moves_into_saved_chats(tmp_path):
     path = tmp_path / "web.sqlite3"
     conn = sqlite3.connect(path)
+    # Build the database as it was after migration 3, with four old chat rows >w<
     for i, script in enumerate(db.MIGRATIONS[:3], start=1):
         conn.executescript("BEGIN;" + script + f"PRAGMA user_version = {i}; COMMIT;")
     rows = [("lab", 1.0, "olivia", "user", "question", "who can reach web?", "{}"),
@@ -342,6 +399,8 @@ def test_range_chat_moves_into_saved_chats(tmp_path):
     assert not c.execute("SELECT name FROM sqlite_master WHERE name = 'range_chat'").fetchone()
 
 
+# *sorts commands into piles* READ_ONLY: commands the assistant may run without asking, because they only look
+# (many were seen in real model runs) OwO
 READ_ONLY = [
     "(cd /; ls)", "(ufw status verbose 2>/dev/null || nft list ruleset 2>/dev/null || iptables -S) | head -60",
     "pg_isready -h 10.86.3.10 -p 5432", "su - postgres -c 'psql -l'", "runuser -u postgres -- psql -l", "mysqladmin -h db status",
@@ -358,6 +417,8 @@ READ_ONLY = [
     "dpkg -l | grep nginx", "rpm -qa | sort", "docker ps -a", "firewall-cmd --list-all", "iptables -L -n",
     "find /etc -name '*.conf'", "timeout 5 nc -zv 10.0.0.1 22", "sudo cat /etc/shadow", "wc -l < /etc/passwd",
     "systemctl", "nft list ruleset", "date +%s", "ping -c 2 10.0.0.1", "semanage port -l | grep http"]
+# CHANGES: commands that change something, or that can't be proven harmless (redirects, $(...), sed -i, curl -o,
+# `exec`, unbalanced quotes...), so they need approval ^w^
 CHANGES = [
     "(rm -rf /tmp/x) | head", "(cat /etc/hosts; touch /tmp/x)", "f() { rm -rf /; }; f",
     "psql -c 'drop table x'", "su - postgres -c \"psql -tAc 'SELECT 1'\"", "runuser -u postgres -- bash", "mysqladmin shutdown",
@@ -376,6 +437,7 @@ CHANGES = [
     "chronyc makestep", "env rm x", "nc -l 9999", "sysctl -w a=1", "sysctl net.ipv4.ip_forward=1",
     "firewall-cmd --add-port=80/tcp", "tee /etc/x", "xargs rm", "rpm -i x.rpm", "wg showconf wg0", "ping 1.2.3.4",
     "journalctl --vacuum-size=1M", "awk '{system(\"id\")}'", "ls 'unbalanced"]
+# The same two piles for PowerShell on Windows guests UwU
 PS_READ_ONLY = ["Get-Service W32Time", "Get-Service | Where-Object { $_.Status -eq 'Running' } | Select-Object Name",
                 "ipconfig /all", "Get-WinEvent -LogName System -MaxEvents 10 | Format-List", "w32tm /query /status",
                 "net user", "net user bob", "Test-NetConnection 10.0.0.1 -Port 445", "(Get-Service x).Status",
@@ -387,6 +449,8 @@ PS_CHANGES = ["Stop-Service x", "Restart-Computer", "Get-Service x | Stop-Servic
               "icacls C:\\x /grant Everyone:F", "gpresult /h x.html", '"$(Remove-Item x)"', "klist purge"]
 
 
+# *checks every pile* every read-only command passes, every change is caught, for Linux and PowerShell alike;
+# which tools count as reads; and a multi-line command's card says there is more >w<
 def test_read_only_commands():
     assert [c for c in READ_ONLY if not agent.linux_readonly(c)] == []
     assert [c for c in CHANGES if agent.linux_readonly(c)] == []
@@ -401,11 +465,16 @@ def test_read_only_commands():
         "web: head -2 /etc/os-release … (+1 line)"                          # the card says there is more
 
 
+# *listens to the wire* Tool calls over the OpenAI format: <think> text split off, tool call arguments put
+# together from streamed pieces, our tool results sent back as "tool" messages, and tool calls written as text
+# (<tool_call>) understood too OwO
 def test_tool_calls_on_the_wire(monkeypatch):
     sent = {}
 
     def post(url, headers, json, timeout, stream):
         sent.update(body=json, headers=headers)
+        # The streamed answer: thinking in <think> tags, some text, then one tool call whose arguments arrive in two
+        # pieces ^w^
         return Stream([
             {"choices": [{"delta": {"content": "<think>plan"}}]}, {"choices": [{"delta": {"content": " it</think>Let me look."}}]},
             {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "read_file", "arguments": '{"host":'}}]}}]},
@@ -413,6 +482,7 @@ def test_tool_calls_on_the_wire(monkeypatch):
                           "finish_reason": "tool_calls"}]}])
     monkeypatch.setattr(ai.providers.requests, "post", post)
     tools = agent.tool_specs("code")
+    # An earlier round: the model ran `ls` and it failed UwU
     turn = [{"role": "user", "content": "go"},
             {"role": "assistant", "content": "", "tool_calls": [{"id": "call_0", "name": "run_command",
                                                                  "input": {"host": "web", "command": "ls"}}]},
@@ -428,10 +498,13 @@ def test_tool_calls_on_the_wire(monkeypatch):
     msgs = sent["body"]["messages"]
     assert msgs[2]["tool_calls"][0]["function"] == {"name": "run_command", "arguments": '{"host": "web", "command": "ls"}'}
     assert msgs[3] == {"role": "tool", "tool_call_id": "call_0", "content": "exit code 1"}
+    # Some models write tool calls as text instead; those are found too >w<
     text, calls = ai.text_tool_calls('Sure.\n<tool_call>{"name": "range_status", "arguments": {}}</tool_call>')
     assert text == "Sure." and calls[0]["name"] == "range_status" and calls[0]["input"] == {}
 
 
+# *counts the questions* duplicate options are dropped, "yes" means multiple choice, a question without text is
+# skipped, and broken YAML gives no questions OwO
 def test_questions(monkeypatch):
     qs, text = ai.extract_questions("Hi\n```questions\nquestions:\n  - question: A?\n    options: [x, x, y]\n"
                                     "    multiple: yes\n  - {options: [z]}\n```")
@@ -440,33 +513,38 @@ def test_questions(monkeypatch):
     assert ai.extract_questions("```questions\n: [bad\n```")[0] is None
 
 
+# *picks a favorite model* A chat can use its own provider: an unknown one is refused, "" means the default, and
+# a removed provider falls back to the default ^w^
 def test_a_chat_uses_its_own_provider(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
     fake = Script([f"Built it.\n```yaml\n{GOOD}```"] * 4)
-    adm, ah, op, h = start(app, monkeypatch, fake)
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
     used = []
-    monkeypatch.setattr(ai, "provider_from", lambda st, key: used.append((st["name"], st["provider"], key)) or fake)
+    # Record which provider (name, kind, key) each turn used UwU
+    monkeypatch.setattr(ai, "provider_from", lambda step, key: used.append((step["name"], step["provider"], key)) or fake)
     hosted = adm.get("/api/settings/ai").json()["providers"][0]
     r = adm.put("/api/settings/ai", json={"providers": [hosted, {"name": "OpenRouter", "provider": "openrouter",
-                                                                  "model": "qwen/qwen3.8-27b", "api_key": "sk-or-1"}]}, headers=ah)
+                                                                  "model": "qwen/qwen3.8-27b", "api_key": "sk-or-1"}]}, headers=admin_headers)
     hosted, orr = r.json()["providers"]
     assert hosted["default"] and not orr["default"]
-    assert op.post("/api/chats", json={"kind": "builder", "provider": "nope"}, headers=h).status_code == 400
-    chat = op.post("/api/chats", json={"kind": "builder", "provider": orr["id"]}, headers=h).json()
+    assert op.post("/api/chats", json={"kind": "builder", "provider": "nope"}, headers=csrf_headers).status_code == 400
+    chat = op.post("/api/chats", json={"kind": "builder", "provider": orr["id"]}, headers=csrf_headers).json()
     assert chat["provider"] == orr["id"]
-    wait(op, chat["id"], say(op, h, chat["id"], "a web lab", "build"))
+    wait(op, chat["id"], say(op, csrf_headers, chat["id"], "a web lab", "build"))
     assert used[-1] == ("OpenRouter", "openrouter", "sk-or-1")
-    assert op.patch(f"/api/chats/{chat['id']}", json={"provider": "nope"}, headers=h).status_code == 400
-    assert op.patch(f"/api/chats/{chat['id']}", json={"provider": ""}, headers=h).json()["provider"] is None
-    wait(op, chat["id"], say(op, h, chat["id"], "again", "build"))
+    assert op.patch(f"/api/chats/{chat['id']}", json={"provider": "nope"}, headers=csrf_headers).status_code == 400
+    assert op.patch(f"/api/chats/{chat['id']}", json={"provider": ""}, headers=csrf_headers).json()["provider"] is None
+    wait(op, chat["id"], say(op, csrf_headers, chat["id"], "again", "build"))
     assert used[-1] == ("Hosted", "openrouter", "k")                      # "" = the default
-    op.patch(f"/api/chats/{chat['id']}", json={"provider": orr["id"]}, headers=h)
-    adm.put("/api/settings/ai", json={"providers": [hosted]}, headers=ah)  # its provider is removed
-    wait(op, chat["id"], say(op, h, chat["id"], "once more", "build"))
+    op.patch(f"/api/chats/{chat['id']}", json={"provider": orr["id"]}, headers=csrf_headers)
+    adm.put("/api/settings/ai", json={"providers": [hosted]}, headers=admin_headers)  # its provider is removed
+    wait(op, chat["id"], say(op, csrf_headers, chat["id"], "once more", "build"))
     assert used[-1][0] == "Hosted"                                        # falls back to the default
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *fakes a sad build* _failed_build(): a finished, failed apply job (role nginx failed on web), finished `age`
+# seconds ago >w<
 def _failed_build(cfg, origin="web:olivia", error="role_failed", age=0):
     from valor import jobs
     jid = jobs.create(cfg, "apply", {"spec": "lab.yaml", "verify": True}, origin)
@@ -478,6 +556,8 @@ def _failed_build(cfg, origin="web:olivia", error="role_failed", age=0):
     return jid
 
 
+# _fake_builds(): builds started by the automatic fix are only recorded; the plan check sees a valid spec whose
+# plan has the given (host, action) pairs OwO
 def _fake_builds(monkeypatch, cfg, plan_actions=(("web", "converge"),)):
     """Builds the automatic fix starts are recorded as jobs, not run; its plan check sees a valid spec."""
     from valor import jobs
@@ -488,13 +568,15 @@ def _fake_builds(monkeypatch, cfg, plan_actions=(("web", "converge"),)):
         started.append((jid, origin))
         return {"job": jid, "state": "queued"}
     monkeypatch.setattr(ops, "start", start)
-    actions = [{"host": h, "action": a} for h, a in plan_actions]
+    # The comprehension's loop names are just (host, action) for each pair ^w^
+    actions = [{"host": csrf_headers, "action": assistant_msg} for csrf_headers, assistant_msg in plan_actions]
     for mod in (turn, autofix):
         monkeypatch.setattr(mod, "validate_cluster", lambda p, s: {"ok": True, "errors": []})
-        monkeypatch.setattr(mod, "make_plan", lambda p, s: {"actions": actions, "summary": {a: 1 for _, a in plan_actions}})
+        monkeypatch.setattr(mod, "make_plan", lambda p, s: {"actions": actions, "summary": {assistant_msg: 1 for _, assistant_msg in plan_actions}})
     return started
 
 
+# _end_build(): finish a job as passed (3/3 tests) or failed UwU
 def _end_build(cfg, jid, ok=True, error="baseline_failed"):
     from valor import jobs
     jobs.finish(cfg, jid, {"ok": True, "verify": {"summary": {"tests_passed": 3, "tests_total": 3}}} if ok else
@@ -502,6 +584,7 @@ def _end_build(cfg, jid, ok=True, error="baseline_failed"):
     jobs.update(cfg, jid, state="succeeded" if ok else "failed", finished=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
 
 
+# *rolls up sleeves* the hands-off fixer, from start to finish >w<
 def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     """Mode 'auto': the assistant's actions run without approval cards, VALOR rebuilds when it is done, a failed
     rebuild goes on in the same chat (5 rounds; the same failure gets one more try, not two), a successful one closes
@@ -510,20 +593,22 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     fake = Script([("Restarting nginx.", [("run_command", {"host": "web", "command": "systemctl restart nginx", "purpose": "fix"})]),
                    "Restarted nginx; the build will pass now.", "Round 2: fixed the baseline.",
                    "Round 3: fixed it another way.", "Fixed for good.", "Changed the OS of web.", "Answered by the second provider."])
-    adm, ah, op, h = start(app, monkeypatch, fake)
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
+    # Forget which builds were already handled (that memory is shared across tests) OwO
     started = _fake_builds(monkeypatch, cfg)
     autofix._fix_seen.clear()
     _failed_build(cfg)
     [cid] = chats.fix_failed_builds(app)
     chat = op.get(f"/api/chats/{cid}").json()
-    m = wait(op, cid, chat["messages"][1]["id"])
-    assert chat["allow_all"] and m["status"] == "done" and pve.ran and "systemctl restart nginx" in pve.ran[-1][1]
+    reply_msg = wait(op, cid, chat["messages"][1]["id"])
+    assert chat["allow_all"] and reply_msg["status"] == "done" and pve.ran and "systemctl restart nginx" in pve.ran[-1][1]
     ask = chat["messages"][0]["content"]
     assert "VALOR rebuilds and verifies the range as soon as you finish" in ask and "approval" not in ask.replace("without approval", "")
     [(rjob, origin)] = started
-    assert origin == f"assistant:olivia:{cid}" and m["meta"]["rebuild"]["job"] == rjob     # rebuilt on its own
-    assert "VALOR rebuilds the range now (1 converge)" in m["meta"]["rebuild"]["note"]
+    assert origin == f"assistant:olivia:{cid}" and reply_msg["meta"]["rebuild"]["job"] == rjob     # rebuilt on its own
+    assert "VALOR rebuilds the range now (1 converge)" in reply_msg["meta"]["rebuild"]["note"]
     assert op.get(f"/api/jobs/{rjob}/fix").json()["chats"][0]["id"] == cid
+    # *tries again, and again* ^w^
     # the rebuild failed another way: round 2 in the same chat; the same way again: one more round to try another
     # way; the same way a third time: VALOR stops
     _end_build(cfg, rjob, ok=False)
@@ -541,6 +626,7 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     assert chats.fix_failed_builds(app) == []
     last = op.get(f"/api/chats/{cid}").json()["messages"][-1]
     assert last["role"] == "assistant" and "the rebuild failed the same way three times" in last["content"]
+    # *happy tail wags* UwU
     # a fix that works: the successful rebuild closes the chat
     _failed_build(cfg)
     [cid2] = chats.fix_failed_builds(app)
@@ -548,33 +634,37 @@ def test_failed_builds_are_fixed_and_rebuilt_on_their_own(lab, monkeypatch):
     _end_build(cfg, started[-1][0], ok=True)
     chats.fix_failed_builds(app)
     assert "VALOR rebuilt the range: the build succeeded" in op.get(f"/api/chats/{cid2}").json()["messages"][-1]["content"]
+    # *stops before anything drastic* >w<
     # a plan that would replace a VM is left to the person
     _fake_builds(monkeypatch, cfg, plan_actions=(("web", "replace"),))
     _failed_build(cfg)
     [cid3] = chats.fix_failed_builds(app)
-    m = wait(op, cid3, op.get(f"/api/chats/{cid3}").json()["messages"][1]["id"])
-    assert "did not rebuild on its own: the plan would replace web" in m["meta"]["rebuild"]["note"]
+    reply_msg = wait(op, cid3, op.get(f"/api/chats/{cid3}").json()["messages"][1]["id"])
+    assert "did not rebuild on its own: the plan would replace web" in reply_msg["meta"]["rebuild"]["note"]
+    # *passes the baton* OwO
     # a provider that cannot answer (LM Studio with an 8k context) hands over to the next one
     hosted = adm.get("/api/settings/ai").json()["providers"][0]
     local = {"name": "Local", "provider": "openai", "model": "q", "base_url": "http://192.168.1.50:1234/v1", "default": True}
-    adm.put("/api/settings/ai", json={"providers": [local, {**hosted, "default": False}]}, headers=ah)
+    adm.put("/api/settings/ai", json={"providers": [local, {**hosted, "default": False}]}, headers=admin_headers)
 
+    # Small: a provider whose context window is too small for any answer ^w^
     class Small(ai.Provider):
-        def complete(self, *a, **k):
+        def complete(self, *assistant_msg, **k):
             raise ValorError("ai_context_full", "the model's context window is too small: 8192 tokens")
-    monkeypatch.setattr(ai, "provider_from", lambda st, key: Small("q") if st["name"] == "Local" else fake)
+    monkeypatch.setattr(ai, "provider_from", lambda step, key: Small("q") if step["name"] == "Local" else fake)
     _fake_builds(monkeypatch, cfg)
     _failed_build(cfg)
     [cid4] = chats.fix_failed_builds(app)
-    m = wait(op, cid4, op.get(f"/api/chats/{cid4}").json()["messages"][1]["id"])
-    assert m["status"] == "done" and m["content"] == "Answered by the second provider."
+    reply_msg = wait(op, cid4, op.get(f"/api/chats/{cid4}").json()["messages"][1]["id"])
+    assert reply_msg["status"] == "done" and reply_msg["content"] == "Answered by the second provider."
     assert any(s["type"] == "check" and "Local could not answer" in s["text"] and "VALOR asks Hosted instead" in s["text"]
-               for s in m["meta"]["steps"])
+               for s in reply_msg["meta"]["steps"])
     assert op.get(f"/api/chats/{cid4}").json()["provider"] == hosted["id"]
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
 
+# *nudges the sleepy fixer* UwU
 def test_a_fix_that_ends_early_is_started_again(lab, monkeypatch):
     """hr-nist171 (2026-10-25): the fix turn used all its steps on a transient guest-agent error and nothing happened
     until the person typed "continue" 15 hours later. Now a fix turn is told to finish before it runs out, one that
@@ -582,31 +672,35 @@ def test_a_fix_that_ends_early_is_started_again(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
     look = ("Looking.", [("run_command", {"host": "web", "command": "systemctl status nginx", "purpose": "look"})])
     fake = Script([look, look, look, "It was transient; nginx is fine now.", "My own question, answered."])
-    adm, ah, op, h = start(app, monkeypatch, fake)
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
     started = _fake_builds(monkeypatch, cfg)
+    # Tiny limits so the test runs quickly: 3 rounds per turn, the wrap-up warning 2 steps before the end, no
+    # waiting before a revive >w<
     monkeypatch.setattr(turn, "MAX_ROUNDS", 3)
     monkeypatch.setattr(turn, "WRAP_UP", 2)
     monkeypatch.setattr(autofix, "REVIVE_WAIT", 0)
     autofix._fix_seen.clear()
     _failed_build(cfg)
     [cid] = chats.fix_failed_builds(app)
-    m = wait(op, cid, op.get(f"/api/chats/{cid}").json()["messages"][1]["id"])
-    assert m["status"] == "failed" and m["meta"]["error"]["code"] == "ai_too_many_steps" and not started
+    reply_msg = wait(op, cid, op.get(f"/api/chats/{cid}").json()["messages"][1]["id"])
+    assert reply_msg["status"] == "failed" and reply_msg["meta"]["error"]["code"] == "ai_too_many_steps" and not started
     assert "2 steps are left in this turn" in json.dumps(fake.calls[1]["messages"])           # told to wrap up
     assert "steps are left" not in json.dumps(fake.calls[0]["messages"])
     assert chats.fix_failed_builds(app) == [cid]                                             # started again
     msgs = op.get(f"/api/chats/{cid}").json()["messages"]
     assert msgs[2]["content"].startswith("[VALOR] Your last answer ended early (the assistant used 3 steps")
     assert "Looking." in fake.calls[3]["messages"][-2]["content"]                            # its notes so far
-    m = wait(op, cid, msgs[3]["id"])
-    assert m["status"] == "done" and m["meta"]["rebuild"]["job"] == started[-1][0]           # and it rebuilds
+    reply_msg = wait(op, cid, msgs[3]["id"])
+    assert reply_msg["status"] == "done" and reply_msg["meta"]["rebuild"]["job"] == started[-1][0]           # and it rebuilds
     assert chats.fix_failed_builds(app) == []                                                # nothing more to do
     # VALOR restarted while a fix turn ran: the turn is marked interrupted and started again
+    # Fake an interrupted fix turn straight in the database OwO
     with sqlite3.connect(wcfg.db) as c:
         c.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, content) VALUES (?, ?, 'user', 'code', ?)",
                   (cid, time.time(), "[VALOR] Round 2 of 5: the rebuild failed too."))
         c.execute("INSERT INTO chat_messages(chat_id, ts, role, mode, status, meta) VALUES (?, ?, 'assistant', 'code', "
                   "'running', '{\"steps\": []}')", (cid, time.time()))
+    # The next answer from the model (put at the front of its list) ^w^
     fake.replies[:0] = ["Fixed after the restart."]
     assert chats.fix_failed_builds(app) == [cid]
     msgs = op.get(f"/api/chats/{cid}").json()["messages"]
@@ -614,14 +708,15 @@ def test_a_fix_that_ends_early_is_started_again(lab, monkeypatch):
     assert "ended early (VALOR restarted" in msgs[-2]["content"]
     assert wait(op, cid, msgs[-1]["id"])["content"] == "Fixed after the restart."
     # no provider answers at all: two more tries (after PROVIDER_WAIT), then VALOR rebuilds anyway
+    # Down: a provider that can never be reached UwU
     class Down(ai.Provider):
-        def complete(self, *a, **k):
+        def complete(self, *assistant_msg, **k):
             raise ValorError("ai_unreachable", "cannot reach the AI provider")
-    monkeypatch.setattr(ai, "provider_from", lambda st, key: Down("m"))
+    monkeypatch.setattr(ai, "provider_from", lambda step, key: Down("m"))
     _failed_build(cfg)
     [cid2] = chats.fix_failed_builds(app)
-    m = wait(op, cid2, op.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
-    assert m["status"] == "failed" and chats.fix_failed_builds(app) == []                     # waits PROVIDER_WAIT
+    reply_msg = wait(op, cid2, op.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
+    assert reply_msg["status"] == "failed" and chats.fix_failed_builds(app) == []                     # waits PROVIDER_WAIT
     monkeypatch.setattr(autofix, "PROVIDER_WAIT", 0)
     n = len(started)
     for _ in range(autofix.REVIVES):
@@ -632,21 +727,24 @@ def test_a_fix_that_ends_early_is_started_again(lab, monkeypatch):
     assert last["content"] == "The assistant did not finish after 3 tries. VALOR rebuilds the range now (1 converge)."
     assert chats.fix_failed_builds(app) == []
     # a person who wrote in a fix chat themselves is there to try again: VALOR leaves that turn alone
-    r = op.post(f"/api/chats/{cid2}/messages", json={"message": "why?", "mode": "question"}, headers=h).json()
+    r = op.post(f"/api/chats/{cid2}/messages", json={"message": "why?", "mode": "question"}, headers=csrf_headers).json()
     assert wait(op, cid2, r["messages"][1]["id"])["status"] == "failed"
     assert chats.fix_failed_builds(app) == []
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
+# *takes the careful path* fix mode "prepare": actions wait for approval, one chat per failed build, and the
+# chat asks whether to re-apply >w<
 def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     app, wcfg, cfg, pve = lab
     fake = Script([("Looking.", [("run_command", {"host": "web", "command": "systemctl status nginx", "purpose": "look"})]),
                    "apt was locked by the boot-time refresh; nginx installs on the next apply. Re-apply the range.",
                    "Same chat.", "The CLI build: looked at it.", "Fixed with the other provider."])
-    adm, ah, op, h = start(app, monkeypatch, fake)
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
     started = _fake_builds(monkeypatch, cfg)
-    st = adm.get("/api/settings/ai").json()
-    assert st["fix_mode"] == "auto"
-    adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_mode": "prepare"}, headers=ah)  # approvals
+    # Switch from the default "auto" to "prepare" (approval cards) OwO
+    step = adm.get("/api/settings/ai").json()
+    assert step["fix_mode"] == "auto"
+    adm.put("/api/settings/ai", json={"providers": step["providers"], "fix_mode": "prepare"}, headers=admin_headers)  # approvals
     autofix._fix_seen.clear()
     jid = _failed_build(cfg)
     assert chats.fix_failed_builds(app) and chats.fix_failed_builds(app) == []          # once per build
@@ -656,56 +754,63 @@ def test_a_failed_build_goes_to_the_assistant(lab, monkeypatch):
     chat = op.get(f"/api/chats/{found[0]['id']}").json()
     ask, answer = chat["messages"]
     assert ask["role"] == "user" and ask["mode"] == "code" and f"job {jid}" in ask["content"]
+    # The opening message holds everything needed: the failed step, the details, VALOR's hint, what already
+    # finished, and the question ^w^
     for words in ("Failed step: role nginx on web", "apt_install failed for: nginx", "VALOR's hint: Fix roles/nginx/",
                   "create VM [web]", "whether I should re-apply"):
         assert words in ask["content"], words
-    m = wait(op, chat["id"], answer["id"])
-    assert m["status"] == "done" and "Re-apply" in m["content"] and len(pve.ran) == 1       # it looked inside web
+    reply_msg = wait(op, chat["id"], answer["id"])
+    assert reply_msg["status"] == "done" and "Re-apply" in reply_msg["content"] and len(pve.ran) == 1       # it looked inside web
     assert "run_command" in fake.calls[0]["tools"] and "update_spec" in fake.calls[0]["tools"]  # Code mode
     # the button on the job page opens the same chat; another failed build gets its own
-    assert op.post(f"/api/jobs/{jid}/fix", headers=h).json() == {"chat": chat["id"], "range": "lab"}
+    assert op.post(f"/api/jobs/{jid}/fix", headers=csrf_headers).json() == {"chat": chat["id"], "range": "lab"}
+    # A build started from the CLI goes to the first admin UwU
     jid2 = _failed_build(cfg, origin="cli")                     # not started in the web UI: the first admin's chat
     [cid2] = chats.fix_failed_builds(app)
     assert adm.get(f"/api/chats/{cid2}").json()["owner"] == "admin"
     wait(adm, cid2, adm.get(f"/api/chats/{cid2}").json()["messages"][1]["id"])
     hosted = adm.get("/api/settings/ai").json()["providers"][0]["id"]
-    assert op.post(f"/api/jobs/{jid2}/fix", json={"provider": "nope"}, headers=h).status_code == 400
-    r = op.post(f"/api/jobs/{jid2}/fix", json={"provider": hosted}, headers=h).json()
+    assert op.post(f"/api/jobs/{jid2}/fix", json={"provider": "nope"}, headers=csrf_headers).status_code == 400
+    r = op.post(f"/api/jobs/{jid2}/fix", json={"provider": hosted}, headers=csrf_headers).json()
     assert r["chat"] != chat["id"] and wait(op, r["chat"], op.get(f"/api/chats/{r['chat']}").json()["messages"][1]["id"])
     assert op.get(f"/api/chats/{r['chat']}").json()["provider"] == hosted
     # the worker stopped: the same build runs once more (no chat), never a third time; an old failure: nothing
+    # *sorts the edge cases* >w<
     for kw in ({"error": "interrupted"}, {"age": 7200}):
         _failed_build(cfg, **kw)
     assert chats.fix_failed_builds(app) == [] and [o for _, o in started] == ["rerun:web:olivia"]
     _failed_build(cfg, origin="rerun:web:olivia", error="interrupted")
     assert chats.fix_failed_builds(app) == [] and len(started) == 1
-    st = adm.get("/api/settings/ai").json()
-    assert st["fix_failed_builds"] is True and st["fix_provider"] == ""
+    step = adm.get("/api/settings/ai").json()
+    assert step["fix_failed_builds"] is True and step["fix_provider"] == ""
     # failed builds can go to another provider than the default (e.g. a hosted one while a local one is small)
-    r = adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_provider": hosted}, headers=ah).json()
+    r = adm.put("/api/settings/ai", json={"providers": step["providers"], "fix_provider": hosted}, headers=admin_headers).json()
     assert r["fix_provider"] == hosted
     _failed_build(cfg)
     [cid3] = chats.fix_failed_builds(app)
     assert op.get(f"/api/chats/{cid3}").json()["provider"] == hosted
     wait(op, cid3, op.get(f"/api/chats/{cid3}").json()["messages"][1]["id"])
-    assert adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_provider": "gone"}, headers=ah).json()["fix_provider"] == ""
-    adm.put("/api/settings/ai", json={"providers": st["providers"], "fix_failed_builds": False}, headers=ah)
+    assert adm.put("/api/settings/ai", json={"providers": step["providers"], "fix_provider": "gone"}, headers=admin_headers).json()["fix_provider"] == ""
+    adm.put("/api/settings/ai", json={"providers": step["providers"], "fix_failed_builds": False}, headers=admin_headers)
     _failed_build(cfg)
     assert chats.fix_failed_builds(app) == []
-    assert op.post("/api/jobs/20990101-000000-abcdef/fix", headers=h).status_code == 404
+    assert op.post("/api/jobs/20990101-000000-abcdef/fix", headers=csrf_headers).status_code == 404
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *reads the test report* A failed verification (no error message) gives the assistant the failed tests and
+# baseline controls; passing ones are left out OwO
 def test_failed_verification_and_small_context_go_to_the_assistant(lab, monkeypatch):
     """A build whose verification failed has no error message: the assistant gets the failed tests and controls."""
     from valor import jobs, state
     app, wcfg, cfg, pve = lab
     fake = Script(["Nothing listens on app1:8080; I added a container there in the spec. Re-apply."])
-    adm, ah, op, h = start(app, monkeypatch, fake)
+    adm, admin_headers, op, csrf_headers = start(app, monkeypatch, fake)
     autofix._fix_seen.clear()
     jid = jobs.create(cfg, "apply", {"spec": "lab.yaml", "verify": True}, "web:olivia")
     jobs.finish(cfg, jid, {"ok": False, "verify": {"ok": False, "summary": {"tests_passed": 1, "tests_total": 2}}})
     jobs.update(cfg, jid, state="failed", finished=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    # The saved verification: one failed and one passed test, plus one failed and one passed baseline control ^w^
     state.save(cfg, "lab", "verify", {"job": jid, "ok": False, "tests": [
         {"name": "policy allows web -> pc tcp/8080", "from": "web", "to": "pc", "proto": "tcp", "port": 8080,
          "expect": "open", "observed": "closed", "detail": "refused (nothing listening, or rejected)", "pass": False},
@@ -722,14 +827,16 @@ def test_failed_verification_and_small_context_go_to_the_assistant(lab, monkeypa
     op.__exit__(None, None, None), adm.__exit__(None, None, None)
 
 
+# *squeezes into a tiny context* LM Studio's "exceeds the available context size" error, as a stream event or as
+# HTTP 400, is reported as ai_context_full with a hint to raise Context Length UwU
 def test_a_context_too_small_is_named(monkeypatch):
     """LM Studio reports a prompt larger than the loaded context as an error event (or HTTP 400)."""
     msg = 'request (9655 tokens) exceeds the available context size (8192 tokens), try increasing it'
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream([{"error": {"code": 400, "message": msg, "type": "exceed_context_size_error"}}]))
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *assistant_msg, **k: Stream([{"error": {"code": 400, "message": msg, "type": "exceed_context_size_error"}}]))
     with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://x:1234/v1").complete("S", [])
     assert e.value.code == "ai_context_full" and "Context Length" in e.value.hint and "9655" in e.value.message
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(status=400, error={"message": msg}))
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *assistant_msg, **k: Stream(status=400, error={"message": msg}))
     with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://x:1234/v1").complete("S", [])
     assert e.value.code == "ai_context_full"

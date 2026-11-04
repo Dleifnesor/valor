@@ -1,18 +1,36 @@
-"""Service roles: idempotent scripts in roles/<name>/role.sh with metadata in role.yaml."""
+# *unpacks a bag of service scripts* OwO valor/roles.py loads and runs ROLES! ^w^
+# A role installs and configures ONE service on a host (nginx, a DNS server, an AD domain controller...). Roles
+# live in roles/<name>/: role.sh (bash, Linux), role.ps1 (PowerShell, Windows) and role.yaml (which OS families,
+# which parameters, which ports). VALOR runs roles on EVERY converge, so they must be safe to re-run: change only
+# what differs, and report whether something changed (VALOR_CHANGED) *wags tail*
+"""Service roles: idempotent scripts in roles/<name>/role.sh with metadata in role.yaml.
 
+A role installs and configures one service on a host (nginx, an AD domain controller, ...). VALOR runs it on
+every converge, so it must be safe to run again: it only changes what differs and reports whether it changed
+something (VALOR_CHANGED), which decides if services restart. Linux roles are bash (role.sh) and get PRELUDE's
+helpers; Windows roles are PowerShell (role.ps1, wrapped in windows.py). role.yaml declares the OS families,
+the parameters (required, default, pattern, ...) and optionally `wait_for` / `ports`.
+"""
+
+# Lazy type hints UwU
 from __future__ import annotations
 
+# hashlib (the role digest), re (names, patterns), shlex (safe shell quoting), dataclass (Role), Path >w<
 import hashlib
 import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+# PyYAML reads role.yaml OwO
 import yaml
 
+# ValorError; RangeSpec ^w^
 from .errors import ValorError
 from .spec import RangeSpec
 
+# APT_SETTLE is a raw string (r"""...""": backslashes stay as they are) holding a bash function. Everything inside
+# the triple quotes is SHELL code that runs inside the VMs UwU
 # Before every `apt-get update` VALOR runs (roles, baselines, the router). A clone's apt-daily.timer is overdue
 # (Persistent=true, last run when the template was built), so Ubuntu starts its daily list refresh right at boot -
 # often before the build has internet - and it can hang for long holding the package-list lock, which `apt-get
@@ -28,6 +46,18 @@ APT_SETTLE = r"""apt_settle() {
 }
 """
 
+# PRELUDE: the bash helpers every Linux role script gets, prepended before the role's own code >w<:
+#   set -euo pipefail          stop on errors, unset variables and failed pipes
+#   apt_install / dnf_install  install packages only when missing, retrying, setting VALOR_CHANGED
+#   pkg_install                one call for both families: "pkg_install deb-pkgs -- rhel-pkgs"
+#   selinux_port               allow a service on a non-standard port under SELinux
+#   firewall_open              open a port in firewalld (Rocky/Alma)
+#   wait_port                  wait until something listens on a TCP port
+#   container_engine / run_container / container_cmd  Docker or Podman, (re)creating a container only when its
+#                              settings changed (tracked with a label holding a hash of them)
+#   write_file                 write a file only when its content differs (sets VALOR_CHANGED)
+#   changed                    mark "something changed"
+#   trap ... EXIT              always print VALOR-ROLE-CHANGED=0/1 at the end, for the engine to read
 # Shared helpers available to every role script.
 PRELUDE = r"""
 set -euo pipefail
@@ -160,97 +190,144 @@ trap 'echo "VALOR-ROLE-CHANGED=$VALOR_CHANGED"' EXIT
 """
 
 
+# Role: one loaded role: its name, bash script (or ""), metadata dict, and PowerShell script (or "") OwO
 @dataclass
 class Role:
     name: str
     script: str                 # role.sh (Debian/RHEL family); "" when the role is Windows-only
-    meta: dict
+    meta: dict                  # role.yaml
     ps_script: str = ""         # role.ps1 (Windows)
 
+    # digest: a fingerprint of the role's scripts + metadata; when it changes, every host using the role re-converges ^w^
     @property
     def digest(self) -> str:
-        return hashlib.sha256((self.script + self.ps_script + repr(sorted(self.meta.items()))).encode()).hexdigest()[:16]
+        """Changes when the role's scripts or metadata change, so hosts using it re-converge (see plan.py)."""
+        content = self.script + self.ps_script + repr(sorted(self.meta.items()))
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
+    # families: OS families the role supports (from role.yaml; otherwise debian for a bash role, windows for a
+    # PowerShell-only role) UwU
     @property
     def families(self) -> list[str]:
         return self.meta.get("families") or (["debian"] if self.script else ["windows"])
 
 
+# load_role: read a role from disk >w<
 def load_role(roles_dir: Path, name: str) -> Role:
+    # The name must look like a role name (no path tricks) OwO
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", name):
         raise ValorError("role_invalid", f"invalid role name '{name}'")
-    d = roles_dir / name
-    sh, ps = d / "role.sh", d / "role.ps1"
-    if not sh.is_file() and not ps.is_file():
-        available = sorted(p.name for p in roles_dir.iterdir() if (p / "role.sh").is_file() or (p / "role.ps1").is_file())
+    folder = roles_dir / name
+    bash_file, powershell_file, meta_file = folder / "role.sh", folder / "role.ps1", folder / "role.yaml"
+    # No script at all = it doesn't exist; the hint lists the roles that do ^w^
+    if not bash_file.is_file() and not powershell_file.is_file():
+        available = sorted(path.name for path in roles_dir.iterdir()
+                           if (path / "role.sh").is_file() or (path / "role.ps1").is_file())
         raise ValorError("role_missing", f"role '{name}' does not exist",
                          hint=f"Available roles: {', '.join(available)}. New roles go in roles/<name>/role.sh or "
                               "role.ps1 (see the role-authoring skill).")
-    meta = yaml.safe_load((d / "role.yaml").read_text()) if (d / "role.yaml").is_file() else {}
-    return Role(name, sh.read_text() if sh.is_file() else "", meta or {}, ps.read_text() if ps.is_file() else "")
+    # Read role.yaml (empty when missing) and both scripts (empty when missing) UwU
+    meta = yaml.safe_load(meta_file.read_text()) if meta_file.is_file() else {}
+    return Role(name,
+                bash_file.read_text() if bash_file.is_file() else "",
+                meta or {},
+                powershell_file.read_text() if powershell_file.is_file() else "")
 
 
+# resolve_param: turn a parameter value into text for the role's environment >w<
 def resolve_param(spec: RangeSpec, value, raw: bool = False) -> str:
     """Host names become their IP (/32), segment names their CIDR; lists are space-separated.
     raw parameters (package names, scripts) are passed as written."""
+    # Booleans become "true"/"false"; lists become space-separated words OwO
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, list):
-        return " ".join(resolve_param(spec, v, raw) for v in value)
-    s = str(value)
+        return " ".join(resolve_param(spec, item, raw) for item in value)
+    text = str(value)
+    # "raw" parameters (package names, scripts) are passed exactly as written ^w^
     if raw:
-        return s
-    if any(h.name == s for h in spec.hosts):
-        return f"{spec.host(s).address}/32"
-    if any(seg.name == s for seg in spec.segments):
-        return str(spec.segment(s).cidr)
-    return s
+        return text
+    # A host name becomes its address /32; a segment name becomes its network (so roles can write firewall rules
+    # using names from the spec) UwU
+    if any(host.name == text for host in spec.hosts):
+        return f"{spec.host(text).address}/32"
+    if any(segment.name == text for segment in spec.segments):
+        return str(spec.segment(text).cidr)
+    return text
 
 
+# role_env: the environment variables a role runs with >w<
 def role_env(spec: RangeSpec, host, role: Role, params: dict) -> dict[str, str]:
-    seg = spec.segment(host.segment)
-    declared = role.meta.get("params", {}) or {}
+    """The environment a role script runs with: facts about the range and host (VALOR_*) plus the role's
+    parameters (VALOR_PARAM_<NAME>), checked against what role.yaml declares. Raises ValorError for a missing,
+    unknown or invalid parameter - validation calls this too, so the spec is rejected before a build."""
+    segment = spec.segment(host.segment)
+    # Facts about the range and this host, all prefixed VALOR_ OwO
     env = {
         "VALOR_RANGE": spec.name, "VALOR_HOST": host.name, "VALOR_ROLE": role.name,
-        "VALOR_ADDRESS": str(host.address), "VALOR_SEGMENT": seg.name, "VALOR_SEGMENT_CIDR": str(seg.cidr),
-        "VALOR_GATEWAY": str(seg.gateway),
+        "VALOR_ADDRESS": str(host.address), "VALOR_SEGMENT": segment.name, "VALOR_SEGMENT_CIDR": str(segment.cidr),
+        "VALOR_GATEWAY": str(segment.gateway),
         # every host of the range as name=address (e.g. for a DNS zone)
-        "VALOR_RANGE_HOSTS": " ".join(f"{h.name}={h.address}" for h in spec.hosts),
+        "VALOR_RANGE_HOSTS": " ".join(f"{other.name}={other.address}" for other in spec.hosts),
     }
-    for pname, pdef in declared.items():
-        if pname not in params:
-            if (pdef or {}).get("required"):
-                raise ValorError("role_param_missing", f"role {role.name} on {host.name} needs parameter '{pname}'",
-                                 host=host.name, hint=(pdef or {}).get("description"))
-            if (pdef or {}).get("default") is not None:
-                env[f"VALOR_PARAM_{pname.upper()}"] = resolve_param(spec, pdef["default"], (pdef or {}).get("raw"))
-    for k, v in params.items():
-        if declared and k not in declared:
-            raise ValorError("role_param_unknown", f"role {role.name} has no parameter '{k}'", host=host.name,
-                             hint=f"Known parameters: {', '.join(declared) or 'none'}")
-        pdef = declared.get(k) or {}
-        value = resolve_param(spec, v, pdef.get("raw"))
-        if pdef.get("max_length") and len(value) > int(pdef["max_length"]):
-            raise ValorError("role_param_too_long", f"parameter '{k}' of role {role.name} on {host.name} is longer "
-                             f"than {pdef['max_length']} characters", host=host.name)
-        if pdef.get("pattern") and not all(re.fullmatch(pdef["pattern"], w) for w in value.split()):
-            raise ValorError("role_param_invalid", f"parameter '{k}' of role {role.name} on {host.name} has an "
-                             f"invalid value '{value[:80]}'", host=host.name, hint=pdef.get("description"))
-        env[f"VALOR_PARAM_{k.upper()}"] = value
+    # What role.yaml declares ^w^
+    declared = role.meta.get("params", {}) or {}
+
+    # Declared but not given: required ones are an error, the others fall back to their default (if any).
+    for name, definition in declared.items():
+        definition = definition or {}
+        if name in params:
+            continue
+        if definition.get("required"):
+            raise ValorError("role_param_missing", f"role {role.name} on {host.name} needs parameter '{name}'",
+                             host=host.name, hint=definition.get("description"))
+        if definition.get("default") is not None:
+            env[f"VALOR_PARAM_{name.upper()}"] = resolve_param(spec, definition["default"], definition.get("raw"))
+
+    # Every given parameter, checked, as VALOR_PARAM_<NAME> UwU
+    for name, value in params.items():
+        env[f"VALOR_PARAM_{name.upper()}"] = _checked_param(spec, host, role, declared, name, value)
     return env
 
 
+# _checked_param: one given parameter: it must be declared (when the role declares any), not too long, and every
+# word must match its pattern >w<
+def _checked_param(spec: RangeSpec, host, role: Role, declared: dict, name: str, value) -> str:
+    """One given parameter, resolved (host -> address, ...) and checked against its declaration."""
+    if declared and name not in declared:
+        raise ValorError("role_param_unknown", f"role {role.name} has no parameter '{name}'", host=host.name,
+                         hint=f"Known parameters: {', '.join(declared) or 'none'}")
+    definition = declared.get(name) or {}
+    text = resolve_param(spec, value, definition.get("raw"))
+    if definition.get("max_length") and len(text) > int(definition["max_length"]):
+        raise ValorError("role_param_too_long", f"parameter '{name}' of role {role.name} on {host.name} is longer "
+                         f"than {definition['max_length']} characters", host=host.name)
+    # The pattern applies to every word (list parameters arrive space-separated).
+    if definition.get("pattern") and not all(re.fullmatch(definition["pattern"], word) for word in text.split()):
+        raise ValorError("role_param_invalid", f"parameter '{name}' of role {role.name} on {host.name} has an "
+                         f"invalid value '{text[:80]}'", host=host.name, hint=definition.get("description"))
+    return text
+
+
+# role_ports: the TCP ports a role serves: a fixed list, or read from one of its parameters (e.g. a configurable
+# port) OwO
 def role_ports(role: Role, params: dict | None = None) -> list[int]:
     """TCP ports a role serves: fixed in role.yaml (ports), or taken from one of its parameters (ports_param)."""
-    pname = role.meta.get("ports_param")
-    if not pname:
+    param = role.meta.get("ports_param")
+    if not param:
         return list(role.meta.get("ports") or [])
-    value = (params or {}).get(pname, ((role.meta.get("params") or {}).get(pname) or {}).get("default") or "")
+    # The parameter's value (or its default), split into words ^w^
+    default = ((role.meta.get("params") or {}).get(param) or {}).get("default") or ""
+    value = (params or {}).get(param, default)
     words = value if isinstance(value, list) else re.split(r"[\s,]+", str(value))
-    words = [str(w).split(":")[0] for w in words]          # "8080:80" (published container port) -> 8080
-    return [int(w) for w in words if w.strip().isdigit() and 0 < int(w) < 65536]
+    words = [str(word).split(":")[0] for word in words]          # "8080:80" (published container port) -> 8080
+    # Keep valid port numbers only (1-65535) UwU
+    return [int(word) for word in words if word.strip().isdigit() and 0 < int(word) < 65536]
 
 
+# build_script: the complete bash script for one role on one host: every environment variable exported (quoted
+# safely with shlex), then PRELUDE, then the role's own script >w< *ties it all with a bow*
 def build_script(role: Role, env: dict[str, str]) -> str:
-    exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in sorted(env.items()))
+    """The complete bash script for one role on one host: exported environment, PRELUDE helpers, the role."""
+    exports = "\n".join(f"export {key}={shlex.quote(value)}" for key, value in sorted(env.items()))
     return f"{exports}\n{PRELUDE}\n# ---- role {role.name} ----\n{role.script}\n"

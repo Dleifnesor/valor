@@ -1,3 +1,9 @@
+# *guards the "runs without asking" door very strictly* OwO valor/agent/readonly.py decides whether an AI tool call
+# only READS! ^w^
+# Read-only calls run at once (even in Question mode); everything else needs a human's approval card. The rule is
+# CONSERVATIVE: a command is read-only only when EVERY part of it is on an allowlist of commands that just report
+# state (with argument checks where needed). Anything VALOR can't parse, any redirection into a file, any command
+# substitution, any unknown command = ask the person *ears flat, very serious*
 """Whether a range chat's tool call only reads - then it runs at once, also in Question mode.
 
 Decided conservatively: a command counts as read-only when every part of it is on an allowlist of commands that only
@@ -5,124 +11,161 @@ report state (with conditions on their arguments where needed); anything VALOR c
 file, command substitution or unknown command needs the person's approval.
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# re (patterns) and shlex (splits a command line like a shell would, respecting quotes) >w<
 import re
 import shlex
 
-# Linux commands that only report state, with the extra condition (on their arguments) some of them need.
-POSITIONAL = lambda args: [a for a in args if not a.startswith("-")]          # noqa: E731
+# ---- Linux -------------------------------------------------------------------------------------------------
+#
+# Each allowlisted command maps to None (any arguments are fine) or a check of its arguments. The helpers below
+# build the common checks.
+
+# _positional: the arguments that aren't options (don't start with "-") OwO
+def _positional(args):
+    """The arguments that are not options."""
+    return [arg for arg in args if not arg.startswith("-")]
 
 
+# _first_in: a check that passes when the first positional argument (the subcommand, like `systemctl status`) is
+# one of `names`; bare_ok also accepts no subcommand at all ^w^
 def _first_in(*names, bare_ok=False):
+    """The subcommand (first positional argument) is one of names; bare_ok: no subcommand at all is fine too."""
     allowed = set(names)
-    return lambda args: (not POSITIONAL(args) and bare_ok) or bool(POSITIONAL(args)) and POSITIONAL(args)[0] in allowed
+    return lambda args: (not _positional(args) and bare_ok) or bool(_positional(args)) and _positional(args)[0] in allowed
 
 
+# _flags_in: only the listed options are used (and at least one from `need`, when given) UwU
 def _flags_in(*flags, need=()):
+    """Only these options (any positional arguments), and at least one of `need` when given."""
     allowed = set(flags)
-    return lambda args: all(a in allowed or not a.startswith("-") for a in args) and \
-        (not need or any(a in need for a in args))
+    return lambda args: all(arg in allowed or not arg.startswith("-") for arg in args) and \
+        (not need or any(arg in need for arg in args))
 
 
+# _only_flags: the arguments are ONLY these options (at least one) >w<
 def _only_flags(*flags):
+    """Nothing but these options (and at least one)."""
     allowed = set(flags)
-    return lambda args: bool(args) and all(a in allowed for a in args)
+    return lambda args: bool(args) and all(arg in allowed for arg in args)
 
 
+# _no_flags: anything goes EXCEPT these options (also caught in --option=value form) OwO
 def _no_flags(*flags):
+    """Anything except these options (also in --option=value form)."""
     bad = set(flags)
-    return lambda args: not any(a.split("=", 1)[0] in bad for a in args)
+    return lambda args: not any(arg.split("=", 1)[0] in bad for arg in args)
 
 
+# _ip: `ip addr|route|link|neigh|rule...` with no verb or a showing verb (show/list/get) ^w^
 def _ip(args):
-    pos = POSITIONAL(args)
-    return bool(pos) and pos[0] in {"a", "addr", "address", "r", "route", "l", "link", "n", "neigh", "neighbor",
-                                    "neighbour", "rule", "maddr", "netns"} \
-        and (len(pos) == 1 or pos[1] in ("show", "list", "ls", "get", "lst") or pos[0] in ("r", "route") and pos[1] == "get")
+    """ip addr / route / link / neigh ... with no verb or a showing verb (show, list, get)."""
+    positional = _positional(args)
+    objects = {"a", "addr", "address", "r", "route", "l", "link", "n", "neigh", "neighbor", "neighbour", "rule",
+               "maddr", "netns"}
+    return bool(positional) and positional[0] in objects \
+        and (len(positional) == 1 or positional[1] in ("show", "list", "ls", "get", "lst")
+             or positional[0] in ("r", "route") and positional[1] == "get")
 
 
+# _curl: curl that only FETCHES: no uploads, posts, custom methods, cookie jars, config files or output files
+# (except throwing the body away with -o /dev/null, used for status-code checks) UwU
 def _curl(args):
+    """curl that only fetches: no uploads, posts, cookie jars or files written (except -o /dev/null)."""
     bad = {"-o", "--output", "-O", "--remote-name", "-d", "--data", "--data-binary", "--data-raw", "--data-urlencode",
            "-F", "--form", "-T", "--upload-file", "-X", "--request", "-K", "--config", "-c", "--cookie-jar", "--json",
            "-D", "--dump-header", "--remote-name-all", "-J"}
     skip = False
-    for i, a in enumerate(args):
+    # Walk the arguments; `skip` jumps over the value of an allowed -o /dev/null >w<
+    for i, arg in enumerate(args):
         if skip:
             skip = False
             continue
-        nxt = args[i + 1] if i + 1 < len(args) else ""
-        if a in ("-o", "--output") and nxt == "/dev/null" or a in ("--output=/dev/null", "-o/dev/null"):
-            skip = a in ("-o", "--output")                  # the body thrown away (e.g. -w '%{http_code}' checks)
+        next_arg = args[i + 1] if i + 1 < len(args) else ""
+        if arg in ("-o", "--output") and next_arg == "/dev/null" or arg in ("--output=/dev/null", "-o/dev/null"):
+            skip = arg in ("-o", "--output")                # the body thrown away (e.g. -w '%{http_code}' checks)
             continue
-        if a.startswith("-") and not a.startswith("--") and len(a) > 2 and a.endswith("o") and nxt == "/dev/null" \
-                and not set(a[1:-1]) & set("oOdFTXKcDJ"):
+        # Combined short flags ending in o followed by /dev/null (like -so /dev/null) are fine if no other bad letter is
+        # in them OwO
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 2 and arg.endswith("o") \
+                and next_arg == "/dev/null" and not set(arg[1:-1]) & set("oOdFTXKcDJ"):
             skip = True                                     # -so /dev/null
             continue
-        if a.split("=", 1)[0] in bad:
+        # Any bad option, or a combined short flag containing a bad letter, means "not read-only" ^w^
+        if arg.split("=", 1)[0] in bad:
             return False
-        if a.startswith("-") and not a.startswith("--") and len(a) > 2 and set(a[1:]) & set("oOdFTXKcDJ"):
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 2 and set(arg[1:]) & set("oOdFTXKcDJ"):
             return False                # combined short flags such as -sSo
     return True
 
 
+# _wget: wget that only prints a page (-O-) or throws it away (-O /dev/null): no files, posts, recursion... UwU
 def _wget(args):
     """Only printing a page (-O- / -qO-) or throwing it away (-O /dev/null): no files, posts or recursion."""
     bad = {"--post-data", "--post-file", "--method", "--body-data", "--body-file", "-r", "--recursive", "-m",
            "--mirror", "-P", "--directory-prefix", "-o", "--output-file", "-a", "--append-output", "-N", "-c",
            "--continue", "-x", "-e", "--execute", "-i", "--input-file", "-B", "--save-cookies", "--save-headers",
            "--delete-after", "-k", "--convert-links", "-p", "--page-requisites"}
+    # Find where the output goes; any bad option or flag letter fails >w<
     out = None
-    for i, a in enumerate(args):
-        if a.split("=", 1)[0] in bad:
+    for i, arg in enumerate(args):
+        if arg.split("=", 1)[0] in bad:
             return False
-        if a in ("-O", "--output-document"):
+        if arg in ("-O", "--output-document"):
             out = args[i + 1] if i + 1 < len(args) else None
-        elif a.startswith("--output-document="):
-            out = a.split("=", 1)[1]
-        elif a.startswith("-") and not a.startswith("--") and "O" in a[1:]:
-            flags, rest = a[1:a.index("O")], a[a.index("O") + 1:]
+        elif arg.startswith("--output-document="):
+            out = arg.split("=", 1)[1]
+        elif arg.startswith("-") and not arg.startswith("--") and "O" in arg[1:]:
+            flags, rest = arg[1:arg.index("O")], arg[arg.index("O") + 1:]       # -qO- / -qO /dev/null
             if set(flags) & set("rmPoacxeiNBkp"):
                 return False
             out = rest or (args[i + 1] if i + 1 < len(args) else None)
-        elif a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("rmPoacxeiNBkp"):
+        elif arg.startswith("-") and not arg.startswith("--") and set(arg[1:]) & set("rmPoacxeiNBkp"):
             return False
+    # Only stdout or /dev/null count as read-only OwO
     return out in ("-", "/dev/null")
 
 
+# _mysqladmin: only ping/status/version/variables, and never a password on the command line ^w^
 def _mysqladmin(args):
     """mysqladmin ping / status / version / variables (no password on the command line)."""
     words, i = [], 0
     while i < len(args):
-        a = args[i]
-        if a in ("-h", "-P", "-u", "-S", "--host", "--port", "--user", "--socket"):
-            i += 2
+        arg = args[i]
+        if arg in ("-h", "-P", "-u", "-S", "--host", "--port", "--user", "--socket"):
+            i += 2                      # an option with its value
             continue
-        if a.startswith("-p") or a.startswith("--password"):
+        if arg.startswith("-p") or arg.startswith("--password"):
             return False
-        if not a.startswith("-"):
-            words.append(a)
+        if not arg.startswith("-"):
+            words.append(arg)
         i += 1
-    return bool(words) and all(w in ("ping", "status", "version", "variables") for w in words)
+    return bool(words) and all(word in ("ping", "status", "version", "variables") for word in words)
 
 
+# REDIS_READ: Redis commands that only read UwU
 REDIS_READ = {"ping", "info", "dbsize", "role", "time", "lastsave", "get", "mget", "exists", "type", "ttl", "pttl",
               "strlen", "llen", "lrange", "scard", "smembers", "hlen", "hget", "hgetall", "zcard", "zrange", "keys", "scan"}
 
 
+# _redis_cli: redis-cli with ONE reading Redis command; no interactive shell, no scripts or bulk modes >w<
 def _redis_cli(args):
+    """redis-cli with one reading Redis command (GET, INFO, CONFIG GET, ...); no interactive shell, no scripts."""
     words, i = [], 0
     while i < len(args):
-        a = args[i]
-        if a in ("-h", "-p", "-n", "-a", "--user", "--pass", "-u", "-s"):
-            i += 2
+        arg = args[i]
+        if arg in ("-h", "-p", "-n", "-a", "--user", "--pass", "-u", "-s"):
+            i += 2                      # an option with its value
             continue
-        if a.startswith("-"):
-            if a in ("--eval", "-x", "--pipe", "--rdb", "--functions-rdb", "-r", "--replica", "--bigkeys", "--memkeys"):
+        if arg.startswith("-"):
+            if arg in ("--eval", "-x", "--pipe", "--rdb", "--functions-rdb", "-r", "--replica", "--bigkeys",
+                       "--memkeys"):
                 return False
             i += 1
             continue
-        words.append(a.lower())
+        words.append(arg.lower())
         i += 1
     if not words:
         return False                                        # an interactive shell
@@ -131,29 +174,32 @@ def _redis_cli(args):
                                                ["memory", "stats"], ["memory", "usage"], ["slowlog", "get"])
 
 
+# SED_PRINT: sed scripts that only print/skip/quit (like '1,120p', '/x/d', '5q'), several joined with ; OwO
 SED_PRINT = re.compile(r"((\d+|\$|/[^/;]*/)(,(\d+|\$|/[^/;]*/))?!?[pdq]|[pdq=])(\s*;\s*((\d+|\$|/[^/;]*/)(,(\d+|\$|/[^/;]*/))?!?[pdq]|[pdq=]))*")
 
 
+# _sed: sed with only such scripts: no -i (in place), no -f, no s/// (its w and e flags can write or execute) ^w^
 def _sed(args):
     """sed that only prints or skips lines (sed -n '1,120p', '/x/d', '5q'): no -i, no s/// (w and e flags), no files written."""
     scripts, i = [], 0
     while i < len(args):
-        a = args[i]
-        if a in ("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-u", "--unbuffered", "-z"):
+        arg = args[i]
+        if arg in ("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-u", "--unbuffered", "-z"):
             i += 1
             continue
-        if a in ("-e", "--expression"):
+        if arg in ("-e", "--expression"):
             scripts.append(args[i + 1] if i + 1 < len(args) else "")
             i += 2
             continue
-        if a.startswith("-"):
+        if arg.startswith("-"):
             return False                # -i (in place), -f (script file), -s ...
         if not scripts:
-            scripts.append(a)           # the script; the rest are files to read
+            scripts.append(arg)         # the script; the rest are files to read
         i += 1
-    return bool(scripts) and all(SED_PRINT.fullmatch(x.strip()) for x in scripts)
+    return bool(scripts) and all(SED_PRINT.fullmatch(script.strip()) for script in scripts)
 
 
+# _rpm / _dpkg: only their query options UwU
 def _rpm(args):
     return bool(args) and (args[0].startswith("-q") or args[0] in ("--query", "-V", "--verify"))
 
@@ -164,7 +210,9 @@ def _dpkg(args):
                                       "--info", "-I", "--verify", "-V", "--audit", "-C")
 
 
+# LINUX_READ: the Linux allowlist: command name -> None (any arguments are fine) or a check function >w<
 LINUX_READ = {
+    # Commands that only read or report, with any arguments (cat, grep, ls, ps, df, dig, sha256sum...) OwO
     **{c: None for c in (
         "cat", "head", "tail", "grep", "egrep", "fgrep", "zgrep", "zcat", "wc", "sort", "uniq", "cut", "tr", "column",
         "ls", "stat", "file", "df", "du", "free", "uptime", "uname", "id", "whoami", "w", "who", "last", "lastlog",
@@ -174,29 +222,37 @@ LINUX_READ = {
         "nslookup", "host", "tracepath", "traceroute", "nproc", "named-checkconf", "named-checkzone", "testparm",
         "dmidecode", "lshw", "base64", "xxd", "od", "sleep", "pwd", "cd", "klist", "locale", "groups", "users",
         "lslogins", "ldd", "getfacl", "sha512sum", "nl", "rev", "fold", "expand", "seq", "hexdump")},
+    # sort without -o (writing a file); find without -exec/-delete/-fprint... ^w^
     "sort": _no_flags("-o", "--output"),
     "find": _no_flags("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
+    # hostname only with options that print (not set the name); date only printing formats (not setting the clock) UwU
     "hostname": lambda args: all(a.startswith("-") and a not in ("-F", "--file", "-b", "--boot") for a in args),
     "date": lambda args: all(a.startswith("+") or a in ("-u", "-R", "-I", "--utc", "--rfc-3339=seconds") or
                              a.startswith("-d") or a.startswith("--date") or a.startswith("-I") for a in args),
+    # sysctl only reading (no "=" or -w/-p); dmesg without clearing; journalctl without vacuuming/rotating >w<
     "sysctl": lambda args: not any("=" in a or a in ("-w", "--write", "-p", "--load", "--system") for a in args),
     "dmesg": _no_flags("-c", "-C", "--clear", "--read-clear", "-D", "-E", "-n", "--console-off", "--console-on",
                        "--console-level"),
     "journalctl": _no_flags("--vacuum-size", "--vacuum-time", "--vacuum-files", "--rotate", "--flush", "--setup-keys",
                             "--sync", "--relinquish-var", "--smart-relinquish-var", "--update-catalog"),
+    # ss without -K (kill sockets); arp/route only showing; ping only with a count (-c) so it ends OwO
     "ss": _no_flags("-K", "--kill"),
     "arp": lambda args: all(a in ("-a", "-n", "-v", "-e") or not a.startswith("-") for a in args) and
                         not any(a in ("-d", "-s", "-f") for a in args),
     "route": lambda args: all(a.startswith("-") and a in ("-n", "-e", "-v", "-ee", "-4", "-6") for a in args),
     "ping": lambda args: any(a.startswith("-c") for a in args),
+    # nc only in scan mode (-z), never executing, listening or using -e/-c/-l ^w^
     "nc": lambda args: any(a.startswith("-") and not a.startswith("--") and "z" in a for a in args) and not any(
         a in ("--exec", "--sh-exec", "--listen") or a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("ecl")
         for a in args),
+    # curl/wget/sed/redis-cli: their own checks above; `command -v X` (is X installed?) UwU
     "curl": _curl,
     "command": lambda args: bool(args) and args[0] in ("-v", "-V"),   # command -v X: is X installed
     "sed": _sed,
     "wget": _wget,
     "redis-cli": _redis_cli,
+    # Service tools in their status/query modes only: fail2ban, PostgreSQL (pg_isready, psql -l), mysqladmin, ip,
+    # env (with no arguments: just print), systemctl/timedatectl/hostnamectl/chronyc status-style subcommands >w<
     "fail2ban-client": _first_in("status", "ping", "version", "get", "banned"),
     "pg_isready": None,                                     # does PostgreSQL accept connections
     "psql": lambda args: bool(args) and all(a in ("-l", "--list", "-w", "--no-password", "-X") or
@@ -210,6 +266,8 @@ LINUX_READ = {
     "timedatectl": _first_in("status", "show", "timesync-status", "show-timesync", bare_ok=True),
     "hostnamectl": _first_in("status", bare_ok=True),
     "chronyc": _first_in("sources", "sourcestats", "tracking", "activity", "clients", "serverstats", "ntpdata"),
+    # Package managers in list/show/search modes; docker/podman inspection; firewall listing (ufw, nft, iptables,
+    # firewall-cmd, semanage); wg show; realm list; rpm/dpkg queries OwO
     "apt": _first_in("list", "show", "policy", "search"),
     "apt-cache": _first_in("show", "policy", "search", "depends", "rdepends", "showpkg", "madison"),
     "dnf": _first_in("list", "info", "repolist", "search", "provides", "repoquery"),
@@ -233,6 +291,7 @@ LINUX_READ = {
         for a in args),
     "semanage": lambda args: any(a in ("-l", "--list") for a in args) and all(
         a in ("-l", "--list", "-n", "-C", "--noheading", "--locallist") or not a.startswith("-") for a in args),
+    # Config TEST modes only: postconf (no edits), sshd -T/-t, nginx -t/-T, apache configtest ^w^
     "postconf": _no_flags("-e", "-X", "-#", "-M", "-F", "-P", "-c"),
     "sshd": _only_flags("-T", "-t"),
     "nginx": _only_flags("-t", "-T", "-V", "-v"),
@@ -240,40 +299,53 @@ LINUX_READ = {
     "apache2ctl": _only_flags("-t", "-S", "-M", "-V", "configtest"),
     "httpd": _only_flags("-t", "-S", "-M", "-V"),
 }
+# SAFE_REDIRECTS: the only redirections allowed (throwing output away, merging stderr). WRAPPERS: prefixes that
+# just run another command (sudo, timeout, nice, stdbuf): the wrapped command is what gets judged UwU
 SAFE_REDIRECTS = {">/dev/null", "1>/dev/null", "2>/dev/null", "&>/dev/null", "2>&1", "1>&2", ">&2"}
 WRAPPERS = ("sudo", "timeout", "nice", "stdbuf")
 
 
+# NET_DEVICE: bash's /dev/tcp|udp/host/port pseudo-files (a connection test); NET marks a command that uses one >w<
 NET_DEVICE = re.compile(r"/dev/(tcp|udp)/[A-Za-z0-9.-]+/\d{1,5}")
 NET = "\x00net"                         # marks a command that opens a /dev/tcp|udp connection
 
 
+# linux_readonly: the main check for a bash command line OwO
 def linux_readonly(command: str, depth: int = 0) -> bool:
+    """Whether a bash command line only reads. It is split into simple commands at ; | && || and parentheses,
+    redirections are checked on the way, and every simple command must pass _linux_segment_ok. depth limits how
+    often `bash -c` / `su -c` may nest."""
     text = command.strip()
+    # Command substitution $( ) or backticks, process substitution and heredocs can hide anything: refuse ^w^
     if not text or any(s in text for s in ("$(", "`", "<(", ">(", "<<")):
         return False
+    # Split into tokens like bash would (newlines count as ;); unbalanced quotes = refuse UwU
     try:
         lex = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=";&|<>()")
         lex.whitespace_split = True
         tokens = list(lex)
     except ValueError:
         return False                    # unbalanced quotes
+    # Walk the tokens, cutting the line into simple commands at ; | || && |& and parentheses >w<
     segments: list[list[str]] = [[]]
     i = 0
     while i < len(tokens):
         tok = tokens[i]
         if tok in (";", "|", "||", "&&", "|&") or set(tok) <= set("()"):
             segments.append([])         # ( a || b ) | head: a group only groups - every command in it is checked
+        # Redirection tokens: background (&) and appending (>>) are refused outright OwO
         elif set(tok) <= set("<>&()"):
             if tok in ("&", ">>", "&>>"):
                 return False            # background jobs, appending to files
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
+            # A /dev/tcp connection test is only OK for exec/echo/true (checked later via the NET marker) ^w^
             if tok in ("<", ">", "<>") and NET_DEVICE.fullmatch(target):
                 if segments[-1] and segments[-1][-1].isdigit():
                     segments[-1].pop()  # 3<>/dev/tcp/10.0.0.5/5432: a connection test ...
                 segments[-1].append(NET)            # ... only for exec / echo / true (no data sent out)
                 i += 2
                 continue
+            # Any other redirection must be on the SAFE_REDIRECTS list (reading input with < is fine) UwU
             fd = segments[-1].pop() if segments[-1] and segments[-1][-1].isdigit() and tok.startswith(">") else ""
             if tok != "<" and f"{fd}{tok}{target}" not in SAFE_REDIRECTS:
                 return False            # only 2>/dev/null, 2>&1 ... (and reading input with <)
@@ -282,22 +354,31 @@ def linux_readonly(command: str, depth: int = 0) -> bool:
         else:
             segments[-1].append(tok)
         i += 1
+    # Every simple command must pass, and there must be at least one >w<
     return all(_linux_segment_ok(s, depth) for s in segments if s) and any(segments)
 
 
+# _linux_segment_ok: judge ONE simple command OwO
 def _linux_segment_ok(words: list[str], depth: int = 0) -> bool:
+    """One simple command (no operators left): allowlisted, with arguments its check accepts."""
     if NET in words:
-        return [w for w in words if w != NET] in ([], ["exec"], ["echo"], ["true"], [":"])
+        return [word for word in words if word != NET] in ([], ["exec"], ["echo"], ["true"], [":"])
     words = list(words)
+    # Strip wrappers (and their options/durations) and judge what they run ^w^
     while words and words[0] in WRAPPERS:           # sudo X, timeout 10 X, nice -n 5 X: judge X
-        w = words.pop(0)
-        while words and (words[0].startswith("-") or w in ("timeout", "nice") and re.fullmatch(r"[\d.]+[smhd]?", words[0])):
+        wrapper = words.pop(0)
+        while words and (words[0].startswith("-")
+                         or wrapper in ("timeout", "nice") and re.fullmatch(r"[\d.]+[smhd]?", words[0])):
             words.pop(0)
+    # An environment assignment in front (FOO=bar cmd) is refused UwU
     if not words or "=" in words[0]:
         return False                    # nothing left, or an environment assignment (FOO=bar cmd)
+    # The command's name (without its path) and its arguments >w<
     cmd, args = words[0].rsplit("/", 1)[-1], words[1:]
+    # `su USER -c 'cmd'`, `runuser -u USER -- cmd` and `bash -c 'cmd'` are judged by what they run (nesting is limited
+    # to 2 levels) OwO
     if cmd == "su" and depth < 2:                   # su [-] USER -c 'cmd': judge cmd
-        rest = [w for w in args if w not in ("-", "-l", "--login")]
+        rest = [word for word in args if word not in ("-", "-l", "--login")]
         return len(rest) == 3 and rest[1] == "-c" and linux_readonly(rest[2], depth + 1)
     if cmd == "runuser" and len(args) >= 4 and args[0] == "-u" and args[2] == "--" and depth < 2:
         return _linux_segment_ok(args[3:], depth + 1)       # runuser -u USER -- cmd
@@ -305,15 +386,20 @@ def _linux_segment_ok(words: list[str], depth: int = 0) -> bool:
         return True                     # exec 3<>/dev/tcp/...: only its (checked) redirections
     if cmd in ("bash", "sh") and len(args) == 2 and args[0] == "-c" and depth < 2:
         return linux_readonly(args[1], depth + 1)       # bash -c '<a read-only script>'
+    # `anything --version` is fine ^w^
     if args == ["--version"] and re.fullmatch(r"[a-z][a-z0-9._+-]*", cmd):
         return True                     # any program's version
+    # Otherwise: on the allowlist, and its argument check (if any) must pass UwU
     if cmd not in LINUX_READ:
         return False
     check = LINUX_READ[cmd]
     return check is None or bool(check(args))
 
 
-# PowerShell: reading cmdlet verbs, executables/aliases that only report (with their allowed arguments), and methods
+# ---- PowerShell: allowed verbs (Get, Test, ...), harmless output cmdlets, read-only aliases >w<
+# ---- PowerShell --------------------------------------------------------------------------------------------
+#
+# Reading cmdlet verbs, executables/aliases that only report (with their allowed arguments), and methods.
 PS_VERBS = {"Get", "Test", "Resolve", "Measure", "Select", "Where", "Sort", "Format", "Group", "Compare", "Find",
             "ConvertTo", "ConvertFrom"}
 PS_OK = {"Out-String", "Out-Host", "Out-Null", "Write-Output", "Write-Host"}
@@ -321,11 +407,15 @@ PS_ALIASES = {"dir", "ls", "cat", "type", "gc", "gci", "gi", "gp", "gsv", "gps",
               "sort", "ft", "fl", "fw", "gm", "measure", "group", "?", "echo", "pwd", "gl", "gdr", "gal", "gcm"}
 
 
+# _all_slash_in: only these /options (Windows style, also /option:value) OwO
 def _all_slash_in(*opts):
-    allowed = {o.lower() for o in opts}
-    return lambda args: all(a.split(":")[0] in allowed for a in args if a.startswith("/"))
+    """Only these /options (Windows style, also /option:value)."""
+    allowed = {opt.lower() for opt in opts}
+    return lambda args: all(arg.split(":")[0] in allowed for arg in args if arg.startswith("/"))
 
 
+# PS_EXES: Windows programs that only report, with checks on their arguments where they could also CHANGE things
+# (net, sc.exe, w32tm, certutil, icacls, ...) ^w^
 PS_EXES = {
     **{c: None for c in ("whoami", "hostname", "systeminfo", "netstat", "nslookup", "ping", "tracert", "getmac",
                          "tasklist", "quser", "driverquery", "ver", "findstr", "dsquery", "dcdiag", "nltest")},
@@ -352,6 +442,8 @@ PS_EXES = {
     "icacls": lambda args: not any(a.startswith("/") for a in args),
     "query": lambda args: bool(args) and args[0] in ("user", "session", "process"),
 }
+# SAFE_METHODS: .NET methods that only compute (string/date helpers, registry reads). PS_TOKEN splits PowerShell
+# roughly into quoted strings, punctuation and words UwU
 SAFE_METHODS = {"ToString", "ToLower", "ToUpper", "Trim", "TrimEnd", "TrimStart", "Split", "Substring", "Contains",
                 "StartsWith", "EndsWith", "GetType", "IndexOf", "Replace", "Equals", "ToShortDateString",
                 "ToLongDateString", "ToUniversalTime", "PadLeft", "PadRight", "Join", "Format", "GetValue",
@@ -359,20 +451,31 @@ SAFE_METHODS = {"ToString", "ToLower", "ToUpper", "Trim", "TrimEnd", "TrimStart"
 PS_TOKEN = re.compile(r"""'(?:[^']|'')*'|"(?:[^"`]|`.)*"|[|;{}()]|[^\s|;{}()'"]+""")
 
 
+# powershell_readonly: the check for PowerShell, which can run code from almost anywhere, so it's strict >w<
 def powershell_readonly(command: str) -> bool:
+    """Whether a PowerShell command only reads. PowerShell can run code from almost anywhere (methods, script
+    blocks, expandable strings), so anything that could is refused first; then every command in the pipeline
+    must be a reading cmdlet, alias or allowlisted executable."""
     text = command.strip()
+    # Refuse static .NET calls (::), subexpressions $( ), here-strings, backticks, comments, Invoke-*, iex/icm and
+    # Start-* OwO
     if not text or re.search(r"::|\$\(|@['\"]|`|#|\binvoke-|\biex\b|\bicm\b|\bstart-", text, re.I):
         return False                    # static .NET calls, subexpressions, here-strings, comments, Invoke-*
+    # Refuse the call operator & and dot-sourcing ^w^
     if re.search(r"(^|[\s;|{(=])&\s*\S", text) or re.search(r"(^|[;|{(])\s*\.\s+\S", text):
         return False                    # call operator, dot-sourcing
+    # Refuse redirection into files (only > $null and 2>&1 are fine) UwU
     if re.search(r"\d?>>?(?!\s*\$null|&1)", text):
         return False                    # redirection into a file (> $null and 2>&1 are fine)
-    for m in re.finditer(r"\.\s*([A-Za-z_]\w*)\s*\(", text):
-        if m.group(1) not in SAFE_METHODS:
+    # Every method call must be a safe method (so no (Get-Service x).Stop()) >w<
+    for method in re.finditer(r"\.\s*([A-Za-z_]\w*)\s*\(", text):
+        if method.group(1) not in SAFE_METHODS:
             return False                # e.g. (Get-Service x).Stop()
+    # Double-quoted strings containing $ can run code: refuse OwO
     tokens = PS_TOKEN.findall(text)
     if any(tok.startswith('"') and "$" in tok for tok in tokens):
         return False                    # expandable strings can run code
+    # Walk the tokens; every command (after | ; { ( or =) is checked as a whole ^w^
     start, current = True, None
     for tok in tokens + [";"]:
         if tok in ("|", ";", "{", "}", "(", ")", "="):
@@ -380,10 +483,12 @@ def powershell_readonly(command: str) -> bool:
                 return False
             current, start = None, tok in ("|", ";", "{", "(", "=")
             continue
+        # Assignments and any cmdlet with a non-reading verb ANYWHERE (even inside script blocks) are refused UwU
         if "=" in tok:
             return False                # assignments inside tokens ($x=rm ...), hashtables: let the person look
         if re.fullmatch(r"[A-Za-z]+-[A-Za-z]+", tok) and tok not in PS_OK and tok.split("-")[0].title() not in PS_VERBS:
             return False                # any changing cmdlet anywhere (script blocks included)
+        # The first word after a separator is the command (an expression like $x or 'text' isn't one) >w<
         if start:
             start = False
             if tok[0] in "$'\"-[" or re.fullmatch(r"[\d.,]+", tok):
@@ -394,6 +499,7 @@ def powershell_readonly(command: str) -> bool:
     return True
 
 
+# _ps_command_ok: a cmdlet with a reading verb, a reading alias, or an allowlisted program whose arguments pass OwO
 def _ps_command_ok(words: list[str]) -> bool:
     cmd = words[0]
     if re.fullmatch(r"[A-Za-z]+-[A-Za-z]+", cmd):
@@ -405,10 +511,14 @@ def _ps_command_ok(words: list[str]) -> bool:
     if exe is None:
         return False
     check = PS_EXES[exe]
-    return check is None or bool(check([a.lower() for a in words[1:]]))
+    return check is None or bool(check([arg.lower() for arg in words[1:]]))
 
 
+# is_readonly: the final answer for a tool call: read_file and range_status always read; snapshot only when
+# listing; run_command by the command checks above (PowerShell on Windows, bash elsewhere); everything else needs
+# approval ^w^ *stamps APPROVED-ONLY-IF-READ*
 def is_readonly(name: str, args: dict, family: str) -> bool:
+    """Whether a tool call may run without the person's approval."""
     if name in ("read_file", "range_status"):
         return True
     if name == "snapshot":
