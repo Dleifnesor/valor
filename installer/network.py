@@ -29,26 +29,38 @@ def _norm(text: str) -> list[str]:
 
 
 def _new_lines(before: str, after: str) -> tuple[list[str], list[str]]:
-    b, a = _norm(before), _norm(after)
-    removed = [l for l in b if l not in a]
-    added = [l for l in a if l not in b]
+    """(lines the change removes, lines it adds)."""
+    before_lines, after_lines = _norm(before), _norm(after)
+    removed = [line for line in before_lines if line not in after_lines]
+    added = [line for line in after_lines if line not in before_lines]
     return removed, added
 
 
 def _gateway_ok() -> bool:
+    """Does the node still reach its default gateway (or, if the gateway ignores ping, the internet)?"""
     route = run(["ip", "-4", "route", "show", "default"], check=False).stdout.split()
     if "via" not in route:
         return False
-    gw = route[route.index("via") + 1]
-    if run(["ping", "-c", "2", "-W", "2", gw], check=False).returncode == 0:
+    gateway = route[route.index("via") + 1]
+    if run(["ping", "-c", "2", "-W", "2", gateway], check=False).returncode == 0:
         return True
     # Some gateways ignore ping: fall back to reaching the internet.
     return run(["curl", "-fsSI", "--max-time", "10", "-o", "/dev/null", "https://cloud-images.ubuntu.com/"],
                check=False).returncode == 0
 
 
+def _arm_rollback(unit: str, backup: Path) -> None:
+    """A one-shot systemd timer that restores the backed-up configuration in ROLLBACK_SECONDS. It is stopped once the
+    node has proven it can still reach its gateway - so a change that cuts the node off undoes itself."""
+    run(["systemd-run", "--quiet", f"--on-active={ROLLBACK_SECONDS}", f"--unit={unit}", "/bin/sh", "-c",
+         f"cp {backup}/interfaces /etc/network/interfaces && rm -f /etc/network/interfaces.new && ifreload -a"])
+
+
 def create_bridge(node: str, name: str, comment: str) -> str:
-    """Returns the backup directory. Raises SystemExit (with the rollback armed) if verification fails."""
+    """Returns the backup directory. Raises SystemExit (with the rollback armed) if verification fails.
+
+    Steps: back up the current files, let Proxmox stage the new bridge (interfaces.new), make sure the staged change
+    only adds the bridge, arm the rollback, apply, check the gateway, cancel the rollback."""
     if Path("/etc/network/interfaces.new").exists():
         raise SystemExit("this node has pending network changes (/etc/network/interfaces.new); apply or revert them "
                          "in the Proxmox UI first")
@@ -64,13 +76,13 @@ def create_bridge(node: str, name: str, comment: str) -> str:
           comments=comment)
     after = Path("/etc/network/interfaces.new").read_text()
     removed, added = _new_lines(before, after)
-    if removed or not any(l.startswith(f"iface {name}") or l.startswith(f"auto {name}") for l in added):
+    adds_the_bridge = any(line.startswith(f"iface {name}") or line.startswith(f"auto {name}") for line in added)
+    if removed or not adds_the_bridge:
         Path("/etc/network/interfaces.new").unlink(missing_ok=True)
         raise SystemExit("the pending network change would alter existing configuration - aborted, nothing applied:\n"
-                         + "\n".join(f"  - {l}" for l in removed))
+                         + "\n".join(f"  - {line}" for line in removed))
     unit = f"valor-net-rollback-{name}"
-    run(["systemd-run", "--quiet", f"--on-active={ROLLBACK_SECONDS}", f"--unit={unit}", "/bin/sh", "-c",
-         f"cp {backup}/interfaces /etc/network/interfaces && rm -f /etc/network/interfaces.new && ifreload -a"])
+    _arm_rollback(unit, backup)
     ui.info(f"rollback armed: the old network configuration comes back in {ROLLBACK_SECONDS // 60} minutes "
             f"unless the check below passes (backup in {backup})")
     pvesh("set", f"/nodes/{node}/network")
@@ -88,8 +100,8 @@ def remove_bridge(node: str, name: str) -> None:
     for vm in pvesh("get", "/cluster/resources", type="vm") or []:
         if vm.get("node") != node:
             continue
-        cfg = pvesh("get", f"/nodes/{node}/qemu/{vm['vmid']}/config") if vm.get("type") == "qemu" else {}
-        if any(k.startswith("net") and f"bridge={name}" in str(v) for k, v in (cfg or {}).items()):
+        config = pvesh("get", f"/nodes/{node}/qemu/{vm['vmid']}/config") if vm.get("type") == "qemu" else {}
+        if any(key.startswith("net") and f"bridge={name}" in str(value) for key, value in (config or {}).items()):
             ui.warn(f"bridge {name} is still used by VM {vm['vmid']}; leaving it")
             return
     if Path("/etc/network/interfaces.new").exists():
@@ -104,8 +116,7 @@ def remove_bridge(node: str, name: str) -> None:
         ui.warn(f"could not remove {name}: {e}")
         return
     unit = f"valor-net-rollback-rm-{name}"
-    run(["systemd-run", "--quiet", f"--on-active={ROLLBACK_SECONDS}", f"--unit={unit}", "/bin/sh", "-c",
-         f"cp {backup}/interfaces /etc/network/interfaces && rm -f /etc/network/interfaces.new && ifreload -a"])
+    _arm_rollback(unit, backup)
     pvesh("set", f"/nodes/{node}/network")
     time.sleep(3)
     if _gateway_ok():

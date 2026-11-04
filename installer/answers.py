@@ -67,7 +67,8 @@ class Answers:
     tls_key: str = ""
     admin_user: str = "admin"
 
-    # ------------------------------------------------------------------ derived
+    # ---- Derived names ----
+
     @property
     def pool_ranges(self) -> str:
         return f"{self.id}-ranges"
@@ -97,26 +98,27 @@ class Answers:
         return self.vmid_start + 900, self.vmid_start + 989
 
     def to_toml(self) -> str:
+        """The settings as an answers file (the standard library reads TOML but cannot write it)."""
         lines = ["# VALOR answers file. Use it with: ./install.sh --answers <this file>",
                  "# Every key is optional; missing keys get the default the installer detects.", ""]
         data = asdict(self)
         for section, keys in SECTIONS.items():
             lines.append(f"[{section}]")
-            for k in keys:
-                lines.append(f"{k} = {_toml_value(data[k])}")
+            for key in keys:
+                lines.append(f"{key} = {_toml_value(data[key])}")
             lines.append("")
         return "\n".join(lines)
 
 
-def _toml_value(v) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, int):
-        return str(v)
-    if isinstance(v, list):
-        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
-    s = str(v).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{s}"'
+def _toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
 
 
 def load_file(path: str | Path) -> dict:
@@ -127,37 +129,41 @@ def load_file(path: str | Path) -> dict:
     for section, values in raw.items():
         if not isinstance(values, dict):
             raise ValueError(f"answers file: [{section}] must be a table")
-        for k, v in values.items():
-            if k not in known:
-                raise ValueError(f"answers file: unknown setting '{k}' in [{section}]")
-            flat[k] = v
+        for key, value in values.items():
+            if key not in known:            # a typo would otherwise be silently replaced by a default
+                raise ValueError(f"answers file: unknown setting '{key}' in [{section}]")
+            flat[key] = value
     return flat
 
 
-# ---------------------------------------------------------------------- defaults
+# ---- Defaults --------------------------------------------------------------------------------------------------
+
 def first_free_bridge(facts: Facts) -> str:
-    names = {b.name for b in facts.bridges} | facts.interfaces
-    n = 100
-    while f"vmbr{n}" in names:
-        n += 1
-    return f"vmbr{n}"
+    """vmbr100, vmbr101, ...: the first name no bridge or interface uses yet."""
+    names = {bridge.name for bridge in facts.bridges} | facts.interfaces
+    number = 100
+    while f"vmbr{number}" in names:
+        number += 1
+    return f"vmbr{number}"
 
 
 def free_vmid_block(facts: Facts, start: int = 4000) -> int:
-    s = start
-    while any(s <= v < s + BLOCK for v in facts.used_vmids):
-        s += BLOCK
-    return s
+    """The first block of BLOCK VMIDs (from `start`, in steps of BLOCK) that no VM uses."""
+    block = start
+    while any(block <= vmid < block + BLOCK for vmid in facts.used_vmids):
+        block += BLOCK
+    return block
 
 
 def default_storage(facts: Facts) -> str:
-    cands = [s for s in facts.storages if s.images and s.active and s.linked_clones]
-    if not cands:
-        cands = [s for s in facts.storages if s.images and s.active]
-    if not cands:
+    """The storage with the most free space that can hold linked clones (any VM storage if none can)."""
+    candidates = [s for s in facts.storages if s.images and s.active and s.linked_clones]
+    if not candidates:
+        candidates = [s for s in facts.storages if s.images and s.active]
+    if not candidates:
         return ""
-    named = [s for s in cands if "valor" in s.id]         # a storage made for VALOR wins
-    return max(named or cands, key=lambda s: s.avail).id
+    named = [s for s in candidates if "valor" in s.id]         # a storage made for VALOR wins
+    return max(named or candidates, key=lambda s: s.avail).id
 
 
 def default_iso_storages(facts: Facts) -> tuple[str, list[str]]:
@@ -179,204 +185,265 @@ def default_snippets(facts: Facts) -> str:
 
 
 def defaults(facts: Facts, given: dict | None = None) -> Answers:
-    rec = (facts.record or {}).get("answers", {})
-    a = Answers(**{**rec, **(given or {})})
-    if not a.vm_storage or not a.range_storage:
-        st = default_storage(facts)
-        a.vm_storage = a.vm_storage or st
-        a.range_storage = a.range_storage or st
-    a.vm_bridge = a.vm_bridge or facts.mgmt_bridge
+    """The settings: what an earlier run of this installation recorded, overridden by `given` (answers file /
+    flags), and every setting still empty filled with what this node suggests."""
+    recorded = (facts.record or {}).get("answers", {})
+    settings = Answers(**{**recorded, **(given or {})})
+    if not settings.vm_storage or not settings.range_storage:
+        storage = default_storage(facts)
+        settings.vm_storage = settings.vm_storage or storage
+        settings.range_storage = settings.range_storage or storage
+    settings.vm_bridge = settings.vm_bridge or facts.mgmt_bridge
     if not given or "vm_vlan" not in given:
-        a.vm_vlan = a.vm_vlan or facts.mgmt_vlan
-    if not a.vmid_start:
-        a.vmid_start = free_vmid_block(facts)
-    if not a.reserved_networks:
-        a.reserved_networks = list(facts.networks)
-    if not a.allowed_networks:
-        a.allowed_networks = [facts.mgmt_network]
-    if not a.snippets_storage:
-        a.snippets_storage = default_snippets(facts)
-    if not a.iso_storage or not a.iso_storages:
+        settings.vm_vlan = settings.vm_vlan or facts.mgmt_vlan
+    if not settings.vmid_start:
+        settings.vmid_start = free_vmid_block(facts)
+    if not settings.reserved_networks:
+        settings.reserved_networks = list(facts.networks)
+    if not settings.allowed_networks:
+        settings.allowed_networks = [facts.mgmt_network]
+    if not settings.snippets_storage:
+        settings.snippets_storage = default_snippets(facts)
+    if not settings.iso_storage or not settings.iso_storages:
         target, readable = default_iso_storages(facts)
-        a.iso_storage = a.iso_storage or target
-        a.iso_storages = a.iso_storages or readable
-    if a.iso_storage and a.iso_storage not in a.iso_storages:
-        a.iso_storages = [a.iso_storage, *a.iso_storages]
-    if not a.vm_dns:
-        a.vm_dns = list(facts.nameservers)
-    if not a.vm_domain:
-        a.vm_domain = facts.search_domain
-    if a.instance_name == "VALOR" and facts.cluster_name and facts.cluster_name.lower() != "valor":
-        a.instance_name = f"VALOR {facts.cluster_name}"
-    return a
+        settings.iso_storage = settings.iso_storage or target
+        settings.iso_storages = settings.iso_storages or readable
+    if settings.iso_storage and settings.iso_storage not in settings.iso_storages:
+        settings.iso_storages = [settings.iso_storage, *settings.iso_storages]
+    if not settings.vm_dns:
+        settings.vm_dns = list(facts.nameservers)
+    if not settings.vm_domain:
+        settings.vm_domain = facts.search_domain
+    if settings.instance_name == "VALOR" and facts.cluster_name and facts.cluster_name.lower() != "valor":
+        settings.instance_name = f"VALOR {facts.cluster_name}"
+    return settings
 
 
-def resolve_bridge(a: Answers, facts: Facts) -> tuple[str, bool]:
+def resolve_bridge(settings: Answers, facts: Facts) -> tuple[str, bool]:
     """(bridge name, must be created)."""
-    rec = (facts.record or {}).get("objects", {}).get("bridge")
-    if a.range_bridge == "new":
-        if rec and facts.bridge(rec["name"]):
-            return rec["name"], False                     # created by an earlier run of this installation
+    recorded = (facts.record or {}).get("objects", {}).get("bridge")
+    if settings.range_bridge == "new":
+        if recorded and facts.bridge(recorded["name"]):
+            return recorded["name"], False                # created by an earlier run of this installation
         return first_free_bridge(facts), True
-    return a.range_bridge, False
+    return settings.range_bridge, False
 
 
-# ---------------------------------------------------------------------- validation
-def _cidr(v: str) -> bool:
+# ---- Validation ------------------------------------------------------------------------------------------------
+
+def _cidr(value: str) -> bool:
     try:
-        ipaddress.ip_network(v, strict=False)
+        ipaddress.ip_network(value, strict=False)
         return True
     except ValueError:
         return False
 
 
-def problems(a: Answers, facts: Facts, catalog: dict) -> list[str]:
-    out: list[str] = []
-    if not ID_RE.match(a.id):
-        out.append("id: 2-12 lowercase letters/digits, starting with a letter")
+def problems(settings: Answers, facts: Facts, catalog: dict) -> list[str]:
+    """Everything wrong with the settings on this node, as "setting: what to fix" lines (empty: good to go)."""
+    return (_id_problems(settings) + _storage_problems(settings, facts) + _bridge_problems(settings, facts)
+            + _vm_problems(settings) + _vmid_problems(settings, facts) + _network_problems(settings)
+            + _template_problems(settings, facts, catalog) + _web_problems(settings))
+
+
+def _id_problems(settings: Answers) -> list[str]:
+    if not ID_RE.match(settings.id):
+        return ["id: 2-12 lowercase letters/digits, starting with a letter"]
+    return []
+
+
+def _storage_problems(settings: Answers, facts: Facts) -> list[str]:
+    out = []
     for key in ("vm_storage", "range_storage"):
-        s = facts.storage(getattr(a, key))
-        if not s:
-            out.append(f"{key}: storage '{getattr(a, key)}' does not exist on {facts.node}")
-        elif not s.images:
-            out.append(f"{key}: storage '{s.id}' cannot hold VM disks (content 'images' missing)")
-        elif not s.active:
-            out.append(f"{key}: storage '{s.id}' is not active")
-    rs = facts.storage(a.range_storage)
-    if rs and rs.images and not rs.linked_clones:
-        out.append(f"range_storage: '{rs.id}' ({rs.type}) does not support linked clones; pick ZFS, LVM-thin, Ceph "
-                   "RBD or a directory/NFS storage")
-    if not facts.bridge(a.vm_bridge):
-        out.append(f"vm_bridge: bridge '{a.vm_bridge}' does not exist on {facts.node}")
-    if a.range_bridge != "new":
-        b = facts.bridge(a.range_bridge)
-        if not b:
-            out.append(f"range_bridge: bridge '{a.range_bridge}' does not exist")
+        storage = facts.storage(getattr(settings, key))
+        if not storage:
+            out.append(f"{key}: storage '{getattr(settings, key)}' does not exist on {facts.node}")
+        elif not storage.images:
+            out.append(f"{key}: storage '{storage.id}' cannot hold VM disks (content 'images' missing)")
+        elif not storage.active:
+            out.append(f"{key}: storage '{storage.id}' is not active")
+    range_storage = facts.storage(settings.range_storage)
+    if range_storage and range_storage.images and not range_storage.linked_clones:
+        out.append(f"range_storage: '{range_storage.id}' ({range_storage.type}) does not support linked clones; "
+                   "pick ZFS, LVM-thin, Ceph RBD or a directory/NFS storage")
+    return out
+
+
+def _bridge_problems(settings: Answers, facts: Facts) -> list[str]:
+    """The range bridge must be VLAN-aware and have no physical port: range traffic never leaves the node."""
+    out = []
+    if not facts.bridge(settings.vm_bridge):
+        out.append(f"vm_bridge: bridge '{settings.vm_bridge}' does not exist on {facts.node}")
+    if settings.range_bridge != "new":
+        bridge = facts.bridge(settings.range_bridge)
+        if not bridge:
+            out.append(f"range_bridge: bridge '{settings.range_bridge}' does not exist")
         else:
-            if not b.vlan_aware:
-                out.append(f"range_bridge: '{b.name}' is not VLAN-aware")
-            if b.ports and b.ports != "none":
-                out.append(f"range_bridge: '{b.name}' has physical ports ({b.ports}); range traffic must not leave the node")
-            if b.name == a.vm_bridge:
+            if not bridge.vlan_aware:
+                out.append(f"range_bridge: '{bridge.name}' is not VLAN-aware")
+            if bridge.ports and bridge.ports != "none":
+                out.append(f"range_bridge: '{bridge.name}' has physical ports ({bridge.ports}); range traffic must "
+                           "not leave the node")
+            if bridge.name == settings.vm_bridge:
                 out.append("range_bridge: must differ from the management bridge")
-    if not 1 <= a.vm_cores <= 64:
+    return out
+
+
+def _vm_problems(settings: Answers) -> list[str]:
+    out = []
+    if not 1 <= settings.vm_cores <= 64:
         out.append("vm_cores: 1-64")
-    if not 2048 <= a.vm_memory <= 65536:
+    if not 2048 <= settings.vm_memory <= 65536:
         out.append("vm_memory: 2048-65536 MiB")
-    if not 16 <= a.vm_disk <= 2048:
+    if not 16 <= settings.vm_disk <= 2048:
         out.append("vm_disk: 16-2048 GiB")
-    if not 0 <= a.vm_vlan <= 4094:
+    if not 0 <= settings.vm_vlan <= 4094:
         out.append("vm_vlan: 0 (untagged) or 1-4094")
-    if a.vm_ip != "dhcp":
+    if settings.vm_ip != "dhcp":
         try:
-            iface = ipaddress.IPv4Interface(a.vm_ip)
+            iface = ipaddress.IPv4Interface(settings.vm_ip)
             if iface.network.prefixlen == 32:
                 raise ValueError
-            if not a.vm_gateway or ipaddress.IPv4Address(a.vm_gateway) not in iface.network:
+            if not settings.vm_gateway or ipaddress.IPv4Address(settings.vm_gateway) not in iface.network:
                 out.append("vm_gateway: required with a static IP, inside the same network")
         except ValueError:
             out.append("vm_ip: 'dhcp' or an address with prefix length, e.g. 192.168.1.50/24")
-    if not HOST_RE.match(a.vm_hostname):
+    if not HOST_RE.match(settings.vm_hostname):
         out.append("vm_hostname: a DNS label (lowercase letters, digits, dashes)")
-    if a.uplink not in ("lan-dhcp",):
+    if settings.uplink not in ("lan-dhcp",):
         out.append("uplink: only 'lan-dhcp' is available in this version (NAT through the VALOR VM: issue #15)")
-    lo, hi = a.vmid_start, a.vmid_start + BLOCK - 1
-    if a.vmid_start < 100 or a.vmid_start % 100:
-        out.append("vmid_start: a multiple of 100, at least 100")
-    else:
-        ours = (a.pool_ranges, a.pool_templates, a.pool_system)      # a re-run finds its own VMs in the block
-        taken = sorted(v for v in facts.used_vmids if lo <= v <= hi and facts.vm_pools.get(v) not in ours)
-        if taken:
-            out.append(f"vmid_start: VMIDs {lo}-{hi} must be free, but {taken[:5]} exist")
-    if not (2 <= a.vlan_min <= a.vlan_max <= 4094):
+    return out
+
+
+def _vmid_problems(settings: Answers, facts: Facts) -> list[str]:
+    """VALOR's block of VMIDs must be free (VMs of this same installation, found by pool, don't count)."""
+    first, last = settings.vmid_start, settings.vmid_start + BLOCK - 1
+    if settings.vmid_start < 100 or settings.vmid_start % 100:
+        return ["vmid_start: a multiple of 100, at least 100"]
+    ours = (settings.pool_ranges, settings.pool_templates, settings.pool_system)    # a re-run finds its own VMs
+    taken = sorted(vmid for vmid in facts.used_vmids if first <= vmid <= last and facts.vm_pools.get(vmid) not in ours)
+    if taken:
+        return [f"vmid_start: VMIDs {first}-{last} must be free, but {taken[:5]} exist"]
+    return []
+
+
+def _network_problems(settings: Answers) -> list[str]:
+    out = []
+    if not (2 <= settings.vlan_min <= settings.vlan_max <= 4094):
         out.append("vlan_min/vlan_max: 2 <= min <= max <= 4094")
     for key in ("reserved_networks", "allowed_networks"):
-        bad = [n for n in getattr(a, key) if not _cidr(n)]
+        bad = [net for net in getattr(settings, key) if not _cidr(net)]
         if bad:
             out.append(f"{key}: not networks: {bad}")
-    if not a.allowed_networks:
+    if not settings.allowed_networks:
         out.append("allowed_networks: at least one network must be allowed to reach the web UI")
-    for ns in a.nameservers + a.vm_dns:
+    for server in settings.nameservers + settings.vm_dns:
         try:
-            ipaddress.ip_address(ns)
+            ipaddress.ip_address(server)
         except ValueError:
-            out.append(f"nameserver '{ns}' is not an IP address")
-    if not re.fullmatch(r"[0-9.]+:\d{1,5}", a.internet_probe):
+            out.append(f"nameserver '{server}' is not an IP address")
+    if not re.fullmatch(r"[0-9.]+:\d{1,5}", settings.internet_probe):
         out.append("internet_probe: public-ip:port, e.g. 1.1.1.1:443")
-    unknown = [t for t in a.templates if t not in catalog]
+    return out
+
+
+def _template_problems(settings: Answers, facts: Facts, catalog: dict) -> list[str]:
+    out = []
+    unknown = [name for name in settings.templates if name not in catalog]
     if unknown:
         out.append(f"templates: unknown {unknown}; choose from {sorted(catalog)}")
-    if "ubuntu-24.04" not in a.templates and not any(_template_on_node(facts, a, "ubuntu-24.04")):
+    if "ubuntu-24.04" not in settings.templates and not any(_template_on_node(facts, settings, "ubuntu-24.04")):
         out.append("templates: ubuntu-24.04 is required (the VALOR VM and the default OS use it)")
-    sn = facts.storage(a.snippets_storage)
-    if not sn or not sn.file_based or not sn.path:
-        out.append(f"snippets_storage: '{a.snippets_storage}' must be a directory-type storage on {facts.node}")
-    if a.iso_storage:
-        st = facts.storage(a.iso_storage)
-        if not st or "iso" not in st.content:
-            out.append(f"iso_storage: '{a.iso_storage}' must be a storage with 'iso' content on {facts.node}")
-    for sid in a.iso_storages:
-        if not facts.storage(sid):
-            out.append(f"iso_storages: '{sid}' does not exist on {facts.node}")
-    if a.tls not in ("valor-ca", "own"):
+    snippets = facts.storage(settings.snippets_storage)
+    if not snippets or not snippets.file_based or not snippets.path:
+        out.append(f"snippets_storage: '{settings.snippets_storage}' must be a directory-type storage on {facts.node}")
+    if settings.iso_storage:
+        iso_storage = facts.storage(settings.iso_storage)
+        if not iso_storage or "iso" not in iso_storage.content:
+            out.append(f"iso_storage: '{settings.iso_storage}' must be a storage with 'iso' content on {facts.node}")
+    for storage_id in settings.iso_storages:
+        if not facts.storage(storage_id):
+            out.append(f"iso_storages: '{storage_id}' does not exist on {facts.node}")
+    return out
+
+
+def _web_problems(settings: Answers) -> list[str]:
+    out = []
+    if settings.tls not in ("valor-ca", "own"):
         out.append("tls: 'valor-ca' or 'own' (ACME DNS-01 is planned: issue #7)")
-    if a.tls == "own":
-        for k in ("tls_cert", "tls_key"):
-            if not getattr(a, k) or not Path(getattr(a, k)).is_file():
-                out.append(f"{k}: PEM file required with tls = own")
-    if not USER_RE.match(a.admin_user):
+    if settings.tls == "own":
+        for key in ("tls_cert", "tls_key"):
+            if not getattr(settings, key) or not Path(getattr(settings, key)).is_file():
+                out.append(f"{key}: PEM file required with tls = own")
+    if not USER_RE.match(settings.admin_user):
         out.append("admin_user: 2-64 letters, digits, dots, dashes, underscores or @")
     return out
 
 
-def _template_on_node(facts: Facts, a: Answers, os_name: str):
+def _template_on_node(facts: Facts, settings: Answers, os_name: str):
     tag = "os-" + os_name.replace(".", "-")
-    for t in facts.valor_templates:
-        if t.get("node") == facts.node and t.get("pool") == a.pool_templates and tag in (t.get("tags") or ""):
-            yield t
+    for template in facts.valor_templates:
+        if (template.get("node") == facts.node and template.get("pool") == settings.pool_templates
+                and tag in (template.get("tags") or "")):
+            yield template
 
 
-# ---------------------------------------------------------------------- interactive editing
-def edit(a: Answers, facts: Facts, catalog: dict) -> Answers:
+# ---- Interactive editing ---------------------------------------------------------------------------------------
+
+def _number(question: str, current: int) -> int:
+    return int(ui.ask(question, str(current), lambda value: None if value.isdigit() else "a number"))
+
+
+def _list(question: str, current: list[str]) -> list[str]:
+    """A comma-separated answer as a list."""
+    return ui.ask(question, ",".join(current)).replace(" ", "").split(",")
+
+
+def edit(settings: Answers, facts: Facts, catalog: dict) -> Answers:
+    """Walk through every setting; Enter keeps the current value."""
     images = [s for s in facts.storages if s.images and s.active]
-    st_opts = [(s.id, f"{s.type}, {s.avail_gib:.0f} GiB free{'' if s.linked_clones else ', no linked clones'}") for s in images]
-    br_opts = [(b.name, (b.cidr or "no address") + (f" - {b.comments}" if b.comments else "")) for b in facts.bridges]
+    storage_options = [(s.id, f"{s.type}, {s.avail_gib:.0f} GiB free{'' if s.linked_clones else ', no linked clones'}")
+                       for s in images]
+    bridge_options = [(b.name, (b.cidr or "no address") + (f" - {b.comments}" if b.comments else ""))
+                      for b in facts.bridges]
 
     ui.say()
     ui.say(ui.bold("  VALOR VM"))
-    a.vm_storage = ui.choose("Storage for the VALOR VM's disk", st_opts, a.vm_storage)
-    a.vm_cores = int(ui.ask("vCPUs", str(a.vm_cores), lambda v: None if v.isdigit() else "a number"))
-    a.vm_memory = int(ui.ask("Memory (MiB)", str(a.vm_memory), lambda v: None if v.isdigit() else "a number"))
-    a.vm_disk = int(ui.ask("Disk (GiB)", str(a.vm_disk), lambda v: None if v.isdigit() else "a number"))
-    a.vm_bridge = ui.choose("Network bridge (LAN users reach the web UI here)", br_opts, a.vm_bridge)
-    a.vm_vlan = int(ui.ask("VLAN tag on that bridge (0 = none)", str(a.vm_vlan), lambda v: None if v.isdigit() else "a number"))
-    a.vm_ip = ui.ask("IP address: 'dhcp' or address/prefix (reserve DHCP addresses in your router)", a.vm_ip)
-    if a.vm_ip != "dhcp":
-        a.vm_gateway = ui.ask("Gateway", a.vm_gateway or facts.mgmt_gateway)
-        a.vm_dns = ui.ask("DNS servers (comma-separated)", ",".join(a.vm_dns)).replace(" ", "").split(",")
-    a.vm_hostname = ui.ask("Hostname", a.vm_hostname)
+    settings.vm_storage = ui.choose("Storage for the VALOR VM's disk", storage_options, settings.vm_storage)
+    settings.vm_cores = _number("vCPUs", settings.vm_cores)
+    settings.vm_memory = _number("Memory (MiB)", settings.vm_memory)
+    settings.vm_disk = _number("Disk (GiB)", settings.vm_disk)
+    settings.vm_bridge = ui.choose("Network bridge (LAN users reach the web UI here)", bridge_options,
+                                   settings.vm_bridge)
+    settings.vm_vlan = _number("VLAN tag on that bridge (0 = none)", settings.vm_vlan)
+    settings.vm_ip = ui.ask("IP address: 'dhcp' or address/prefix (reserve DHCP addresses in your router)",
+                            settings.vm_ip)
+    if settings.vm_ip != "dhcp":
+        settings.vm_gateway = ui.ask("Gateway", settings.vm_gateway or facts.mgmt_gateway)
+        settings.vm_dns = _list("DNS servers (comma-separated)", settings.vm_dns)
+    settings.vm_hostname = ui.ask("Hostname", settings.vm_hostname)
 
     ui.say()
     ui.say(ui.bold("  Ranges"))
-    a.range_storage = ui.choose("Storage for range VMs and templates", st_opts, a.range_storage)
+    settings.range_storage = ui.choose("Storage for range VMs and templates", storage_options, settings.range_storage)
     portless = [(b.name, "existing, VLAN-aware, no physical port") for b in facts.bridges if b.vlan_aware and not b.ports]
-    a.range_bridge = ui.choose("Isolated network for range segments",
-                               [("new", f"create {first_free_bridge(facts)} (VLAN-aware, no physical port)"), *portless],
-                               a.range_bridge)
-    a.vmid_start = int(ui.ask(f"First VMID of VALOR's block of {BLOCK}", str(a.vmid_start),
-                              lambda v: None if v.isdigit() else "a number"))
-    a.reserved_networks = ui.ask("Networks ranges must never use or reach (comma-separated)",
-                                 ",".join(a.reserved_networks)).replace(" ", "").split(",")
+    settings.range_bridge = ui.choose(
+        "Isolated network for range segments",
+        [("new", f"create {first_free_bridge(facts)} (VLAN-aware, no physical port)"), *portless],
+        settings.range_bridge)
+    settings.vmid_start = _number(f"First VMID of VALOR's block of {BLOCK}", settings.vmid_start)
+    settings.reserved_networks = _list("Networks ranges must never use or reach (comma-separated)",
+                                       settings.reserved_networks)
     ui.say()
     ui.say(ui.bold("  Web UI"))
-    a.allowed_networks = ui.ask("Networks allowed to open the web UI: your LAN and VPN subnets (comma-separated)",
-                                ",".join(a.allowed_networks)).replace(" ", "").split(",")
-    a.tls = ui.choose("Web certificate", [("valor-ca", "VALOR creates its own CA (import its certificate once)"),
-                                          ("own", "use your certificate and key (PEM files on this node)")], a.tls)
-    if a.tls == "own":
-        a.tls_cert = ui.ask("Certificate file (PEM, with chain)", a.tls_cert)
-        a.tls_key = ui.ask("Private key file (PEM)", a.tls_key)
-    a.admin_user = ui.ask("First admin username", a.admin_user)
-    names = sorted(catalog)
-    a.templates = ui.ask(f"Templates to build now ({', '.join(names)})", ",".join(a.templates)).replace(" ", "").split(",")
-    return a
+    settings.allowed_networks = _list("Networks allowed to open the web UI: your LAN and VPN subnets (comma-separated)",
+                                      settings.allowed_networks)
+    settings.tls = ui.choose("Web certificate",
+                             [("valor-ca", "VALOR creates its own CA (import its certificate once)"),
+                              ("own", "use your certificate and key (PEM files on this node)")], settings.tls)
+    if settings.tls == "own":
+        settings.tls_cert = ui.ask("Certificate file (PEM, with chain)", settings.tls_cert)
+        settings.tls_key = ui.ask("Private key file (PEM)", settings.tls_key)
+    settings.admin_user = ui.ask("First admin username", settings.admin_user)
+    settings.templates = _list(f"Templates to build now ({', '.join(sorted(catalog))})", settings.templates)
+    return settings

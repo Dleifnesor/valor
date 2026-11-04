@@ -52,9 +52,9 @@ def debug(msg: str) -> None:
 
 
 def table(rows: list[tuple[str, str]], indent: int = 4) -> None:
-    width = max((len(k) for k, _ in rows), default=0)
-    for k, v in rows:
-        print(" " * indent + dim(k.ljust(width)) + "  " + v, flush=True)
+    width = max((len(label) for label, _ in rows), default=0)
+    for label, value in rows:
+        print(" " * indent + dim(label.ljust(width)) + "  " + value, flush=True)
 
 
 def ask(question: str, default: str = "", validate=None) -> str:

@@ -43,9 +43,9 @@ def editions_from_iso(iso: str | Path) -> list[dict]:
         subprocess.run(["mount", "-o", "loop,ro", str(iso), mnt], check=True, capture_output=True)
         try:
             for name in ("install.wim", "install.esd"):
-                p = Path(mnt) / "sources" / name
-                if p.exists():
-                    return editions_from_wim(p)
+                image = Path(mnt) / "sources" / name
+                if image.exists():
+                    return editions_from_wim(image)
             raise ValueError("no sources/install.wim or install.esd on this ISO")
         finally:
             subprocess.run(["umount", mnt], check=False, capture_output=True)

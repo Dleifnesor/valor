@@ -160,11 +160,11 @@ Stop-Transcript
 """
 
 
-def _iso_volid(a: Answers, facts: Facts, filename: str) -> str:
-    for storage in a.iso_storages or [a.iso_storage]:
-        for it in pvesh("get", f"/nodes/{facts.node}/storage/{storage}/content", content="iso") or []:
-            if it["volid"].split("/", 1)[-1] == filename:
-                return it["volid"]
+def _iso_volid(settings: Answers, facts: Facts, filename: str) -> str:
+    for storage in settings.iso_storages or [settings.iso_storage]:
+        for item in pvesh("get", f"/nodes/{facts.node}/storage/{storage}/content", content="iso") or []:
+            if item["volid"].split("/", 1)[-1] == filename:
+                return item["volid"]
     raise SystemExit(f"{filename} is not in the ISO library yet: download it in VALOR (ISO library) first")
 
 
@@ -172,20 +172,41 @@ def _iso_path(facts: Facts, volid: str) -> str:
     return run(["pvesm", "path", volid]).stdout.strip()
 
 
-def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos: dict, cpu: str) -> int:
-    """isos: ISO catalog (templates/isos.toml). Returns the template VMID."""
+def build(settings: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos: dict, cpu: str) -> int:
+    """Build a Windows template from its evaluation ISO: a VM boots the installer with VALOR's answer files on a
+    third CD, installs unattended, adds the VirtIO drivers and the guest agent, sysprepped itself and powers off.
+    isos: ISO catalog (templates/isos.toml). Returns the template VMID."""
     if not shutil.which("genisoimage"):
         raise SystemExit("genisoimage is missing (Proxmox VE installs it with qemu-server for cloud-init): "
                          "apt install genisoimage")
     iso_entry = isos[entry["iso"]]
-    win_volid = _iso_volid(a, facts, iso_entry["filename"])
-    virtio_volid = _iso_volid(a, facts, isos[entry.get("virtio_iso", "virtio-win")]["filename"])
-    edition = pick(editions_from_iso(_iso_path(facts, win_volid)), entry["edition"])
+    windows_volid = _iso_volid(settings, facts, iso_entry["filename"])
+    virtio_volid = _iso_volid(settings, facts, isos[entry.get("virtio_iso", "virtio-win")]["filename"])
+    edition = pick(editions_from_iso(_iso_path(facts, windows_volid)), entry["edition"])
     ui.ok(f"edition: {edition['name']} (image {edition['index']})")
     password = _password()
-    st = facts.storage(a.range_storage)
+    answer_store, answer_path = _answer_iso(settings, facts, edition, password)
+    answer_volid = f"{answer_store.id}:iso/{answer_path.name}"
+    try:
+        vmid = _create_vm(settings, facts, os_name, iso_entry, edition, cpu, windows_volid, virtio_volid, answer_volid)
+        rec.add_template({"os": os_name, "vmid": vmid, "built": True})
+        rec.set(f"windows_password_{vmid}", password)       # break-glass for the template only (root-only record)
+        started = _install_unattended(vmid)
+        # The install media go; the NIC (link down during setup) is connected again for the clones.
+        run(["qm", "set", str(vmid), "--delete", "sata1,sata2,sata3", "--boot", "order=sata0",
+             "--net0", f"e1000e,bridge={settings.vm_bridge}" + (f",tag={settings.vm_vlan}" if settings.vm_vlan else "")])
+        run(["qm", "template", str(vmid)])
+    finally:
+        answer_path.unlink(missing_ok=True)                 # it holds the template's Administrator password
+    ui.ok(f"template {vmid} ({os_name}) ready after {(time.time() - started) / 60:.0f} minutes")
+    return vmid
+
+
+def _answer_iso(settings: Answers, facts: Facts, edition: dict, password: str):
+    """The CD with autounattend.xml (the install), clone-unattend.xml (the clones' first boot) and the setup script.
+    Returns (the storage it is on, its path); it is deleted when the build ends."""
     local = facts.storage("local") if facts.storage("local") and "iso" in facts.storage("local").content else None
-    answer_store = local or facts.storage(a.iso_storage)
+    answer_store = local or facts.storage(settings.iso_storage)
     answer_name = f"valor-unattend-{secrets.token_hex(6)}.iso"
     answer_dir = Path(answer_store.path) / "template" / "iso"
     answer_dir.mkdir(parents=True, exist_ok=True)
@@ -195,46 +216,54 @@ def build(a: Answers, facts: Facts, rec: Record, os_name: str, entry: dict, isos
         (Path(tmp) / "valor-setup.ps1").write_text(SETUP_PS1.replace("\n", "\r\n"))
         run(["genisoimage", "-quiet", "-J", "-r", "-V", "VALOR_UNATTEND", "-o", str(answer_dir / answer_name), tmp])
     os.chmod(answer_dir / answer_name, 0o600)
-    answer_volid = f"{answer_store.id}:iso/{answer_name}"
-    disk_fmt = ",format=qcow2" if st.file_based else ""
+    return answer_store, answer_dir / answer_name
+
+
+def _create_vm(settings: Answers, facts: Facts, os_name: str, iso_entry: dict, edition: dict, cpu: str,
+               windows_volid: str, virtio_volid: str, answer_volid: str) -> int:
+    """UEFI + TPM (Windows 11 needs both), the disk on SATA (Windows has no VirtIO driver during setup), the three
+    CDs, and a NIC that is down during setup (no updates, no network prompts)."""
+    storage = facts.storage(settings.range_storage)
+    disk_format = ",format=qcow2" if storage.file_based else ""
     name = "tpl-" + os_name.replace(".", "")
-    desc = (f"VALOR {a.id} template for {os_name}: {edition['name']} from {iso_entry['filename']}. Built "
-            f"{time.strftime('%Y-%m-%d %H:%M %Z')} (unattended, sysprepped). Managed by the VALOR installer; do not edit.")
-    try:
-        vmid = _create(a, facts, lambda vmid: ["qm", "create", str(vmid), "--name", name, "--pool", a.pool_templates, "--ostype", "win11",
-             "--machine", "q35", "--bios", "ovmf", "--efidisk0", f"{st.id}:1,efitype=4m,pre-enrolled-keys=1{disk_fmt}",
-             "--tpmstate0", f"{st.id}:1,version=v2.0", "--cpu", cpu, "--cores", "2", "--memory", "4096",
-             "--sata0", f"{st.id}:{DISK_GIB},discard=on,ssd=1{disk_fmt}",
-             "--sata1", f"{win_volid},media=cdrom", "--sata2", f"{virtio_volid},media=cdrom",
-             "--sata3", f"{answer_volid},media=cdrom", "--boot", "order=sata1;sata0",
-             "--net0", f"e1000e,bridge={a.vm_bridge},link_down=1" + (f",tag={a.vm_vlan}" if a.vm_vlan else ""),
-             "--agent", "enabled=1", "--vga", "std", "--tablet", "1", "--localtime", "0",
-             "--tags", f"valor-template;os-{os_name.replace('.', '-')}", "--description", desc])
-        ui.info(f"created Windows template VM {vmid} ({name}) on {st.id}")
-        rec.add_template({"os": os_name, "vmid": vmid, "built": True})
-        rec.set(f"windows_password_{vmid}", password)       # break-glass for the template only (root-only record)
-        run(["qm", "start", str(vmid)])
-        # "Press any key to boot from CD or DVD..." - keep pressing a key for the first 40 seconds. A letter, not
-        # Enter: a fast setup can already show its progress page, where Enter would press "Cancel".
-        for _ in range(40):
-            run(["qm", "sendkey", str(vmid), "x"], check=False)
-            time.sleep(1)
-        ui.info("Windows setup runs unattended (install, drivers, guest agent, sysprep): typically 15-40 minutes")
-        t0, end = time.time(), time.time() + 3 * 3600
-        last = 0
-        while time.time() < end:
-            if run(["qm", "status", str(vmid)], check=False).stdout.strip().endswith("stopped"):
-                break
-            if time.time() - last > 300:
-                ui.info(f"... still installing ({(time.time() - t0) / 60:.0f} min)")
-                last = time.time()
-            time.sleep(15)
-        else:
-            raise SystemExit(f"Windows template VM {vmid} did not finish within 3 hours; check its console")
-        run(["qm", "set", str(vmid), "--delete", "sata1,sata2,sata3", "--boot", "order=sata0",
-             "--net0", f"e1000e,bridge={a.vm_bridge}" + (f",tag={a.vm_vlan}" if a.vm_vlan else "")])
-        run(["qm", "template", str(vmid)])
-    finally:
-        (answer_dir / answer_name).unlink(missing_ok=True)
-    ui.ok(f"template {vmid} ({os_name}) ready after {(time.time() - t0) / 60:.0f} minutes")
+    description = (f"VALOR {settings.id} template for {os_name}: {edition['name']} from {iso_entry['filename']}. "
+                   f"Built {time.strftime('%Y-%m-%d %H:%M %Z')} (unattended, sysprepped). Managed by the VALOR "
+                   "installer; do not edit.")
+    vlan = f",tag={settings.vm_vlan}" if settings.vm_vlan else ""
+
+    def command(vmid: int) -> list[str]:
+        return ["qm", "create", str(vmid), "--name", name, "--pool", settings.pool_templates, "--ostype", "win11",
+                "--machine", "q35", "--bios", "ovmf",
+                "--efidisk0", f"{storage.id}:1,efitype=4m,pre-enrolled-keys=1{disk_format}",
+                "--tpmstate0", f"{storage.id}:1,version=v2.0", "--cpu", cpu, "--cores", "2", "--memory", "4096",
+                "--sata0", f"{storage.id}:{DISK_GIB},discard=on,ssd=1{disk_format}",
+                "--sata1", f"{windows_volid},media=cdrom", "--sata2", f"{virtio_volid},media=cdrom",
+                "--sata3", f"{answer_volid},media=cdrom", "--boot", "order=sata1;sata0",
+                "--net0", f"e1000e,bridge={settings.vm_bridge},link_down=1{vlan}",
+                "--agent", "enabled=1", "--vga", "std", "--tablet", "1", "--localtime", "0",
+                "--tags", f"valor-template;os-{os_name.replace('.', '-')}", "--description", description]
+
+    vmid = _create(settings, facts, command)
+    ui.info(f"created Windows template VM {vmid} ({name}) on {storage.id}")
     return vmid
+
+
+def _install_unattended(vmid: int) -> float:
+    """Boot the installer and wait until setup powers the VM off (sysprep's /shutdown). Returns the start time."""
+    run(["qm", "start", str(vmid)])
+    # "Press any key to boot from CD or DVD..." - keep pressing a key for the first 40 seconds. A letter, not
+    # Enter: a fast setup can already show its progress page, where Enter would press "Cancel".
+    for _ in range(40):
+        run(["qm", "sendkey", str(vmid), "x"], check=False)
+        time.sleep(1)
+    ui.info("Windows setup runs unattended (install, drivers, guest agent, sysprep): typically 15-40 minutes")
+    started, end = time.time(), time.time() + 3 * 3600
+    last_note = 0
+    while time.time() < end:
+        if run(["qm", "status", str(vmid)], check=False).stdout.strip().endswith("stopped"):
+            return started
+        if time.time() - last_note > 300:
+            ui.info(f"... still installing ({(time.time() - started) / 60:.0f} min)")
+            last_note = time.time()
+        time.sleep(15)
+    raise SystemExit(f"Windows template VM {vmid} did not finish within 3 hours; check its console")

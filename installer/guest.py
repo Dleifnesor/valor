@@ -48,9 +48,9 @@ def script(node: str, vmid: int, body: str, timeout: float = 120, poll: float = 
     pid = start_script(node, vmid, body)
     end = time.time() + timeout
     while time.time() < end:
-        st = status(node, vmid, pid)
-        if st.get("exited"):
-            return int(st.get("exitcode", -1)), st.get("out-data", ""), st.get("err-data", "")
+        state = status(node, vmid, pid)
+        if state.get("exited"):
+            return int(state.get("exitcode", -1)), state.get("out-data", ""), state.get("err-data", "")
         time.sleep(poll)
     raise TimeoutError(f"script in VM {vmid} still running after {timeout:.0f}s")
 
@@ -95,7 +95,7 @@ def ipv4(node: str, vmid: int) -> str | None:
     for iface in res.get("result", []):
         if iface.get("name") == "lo":
             continue
-        for a in iface.get("ip-addresses", []):
-            if a.get("ip-address-type") == "ipv4" and not a["ip-address"].startswith("127."):
-                return a["ip-address"]
+        for address in iface.get("ip-addresses", []):
+            if address.get("ip-address-type") == "ipv4" and not address["ip-address"].startswith("127."):
+                return address["ip-address"]
     return None
