@@ -1,16 +1,23 @@
+// *opens the big box of building blocks* OwO web/src/components/ui.tsx: the small pieces EVERY page uses! ^w^
+// Icons and the logo, dialogs (Modal), error boxes and spinners, cards, state badges, the object panel (View) with its
+// section menu, menus, toolbar buttons with drop-down menus, and a guard that catches a crashing page *wags tail*
 import { Component, ReactNode, useEffect, useRef, useState } from "react";
+// ApiError: ErrorBox shows the server's hint and details from it UwU
 import { ApiError } from "../api";
 
 // Small building blocks every page uses: icons and the logo, modals, error boxes and spinners, cards, state badges,
 // the object panel (View) with its section menu, and buttons with drop-down menus.
 
+// IconName: every icon's name (TypeScript then rejects typos like "trahs") >w<
 export type IconName =
   | "dashboard" | "ranges" | "jobs" | "users" | "audit" | "settings" | "bell" | "logout" | "menu" | "plus"
   | "refresh" | "shield" | "account" | "theme" | "disc" | "copy" | "chat" | "chats" | "server" | "vm" | "play"
   | "power" | "stop" | "terminal" | "camera" | "check" | "key" | "file" | "book" | "clock" | "info" | "map"
   | "caret" | "search" | "edit" | "trash" | "mail" | "link" | "bot" | "lock" | "download";
 
+// PATHS: each icon as an SVG path on a 24x24 grid (drawn as strokes, like a line-art icon set) OwO
 const PATHS: Record<IconName, string> = {
+  // Navigation icons: dashboard, ranges, jobs, users, audit, settings, bell, logout, menu ^w^
   dashboard: "M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z",
   ranges: "M10 3h4v4h-4zM3 17h4v4H3zm7 0h4v4h-4zm7 0h4v4h-4zM12 7v5M5 17v-5h14v5",
   jobs: "M4 6h16M4 12h10M4 18h7m9-4-3 3-2-2",
@@ -20,6 +27,7 @@ const PATHS: Record<IconName, string> = {
   bell: "M18 16V11a6 6 0 1 0-12 0v5l-2 2h16zM10 20a2 2 0 0 0 4 0",
   logout: "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3",
   menu: "M3 6h18M3 12h18M3 18h18",
+  // Action icons: plus, refresh, shield, account, theme, disc (ISO), copy, chat, chats UwU
   plus: "M12 5v14M5 12h14",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
   shield: "M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z",
@@ -29,6 +37,7 @@ const PATHS: Record<IconName, string> = {
   copy: "M8 8h12v12H8zM4 16V4h12",
   chat: "M4 5h16v11H9l-5 4z",
   chats: "M3 4h13v9H7l-4 3zm6 12h8l4 3V9h-2",
+  // Object and power icons: server, vm, play, power, stop, terminal, camera (snapshot), check, key >w<
   server: "M4 4h16v6H4zm0 10h16v6H4zM8 7h.01M8 17h.01",
   vm: "M3 4h18v12H3zM8 20h8M12 16v4",
   play: "M7 4l13 8-13 8z",
@@ -38,6 +47,7 @@ const PATHS: Record<IconName, string> = {
   camera: "M3 7h4l2-3h6l2 3h4v13H3zm9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
   check: "M4 12l5 5L20 6",
   key: "M7.5 21a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm3.2-7.7L21 3m-4 4 3 3m-5.5-.5 2 2",
+  // Document and misc icons: file, book, clock, info, map, caret, search, edit, trash, mail, link, bot, lock, download OwO
   file: "M6 2h9l5 5v15H6zm8 0v6h6M9 13h8m-8 4h6",
   book: "M5 3h14v16H7a2 2 0 0 0 0 4h12v-4M5 21V5M9 7h6",
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-14v5l3 2",
@@ -54,15 +64,19 @@ const PATHS: Record<IconName, string> = {
   download: "M12 3v12m-5-5 5 5 5-5M5 20h14",
 };
 
+// Icon: draws one icon in the current text color (stroke="currentColor"), hidden from screen readers (aria-hidden;
+// the button text says what it does) ^w^
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}
       strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {/* The icon's path */}
       <path d={PATHS[name]} />
     </svg>
   );
 }
 
+// Logo: VALOR's logo, two stacked chevrons UwU
 export function Logo({ size = 30 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" fill="currentColor">
@@ -73,21 +87,28 @@ export function Logo({ size = 30 }: { size?: number }) {
   );
 }
 
+// Modal: a dialog over the page: a title bar with ✕, the body, and an optional footer. Escape or a click on the dark
+// backdrop closes it >w<
 export function Modal({ title, children, footer, onClose, wide }: {
   title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean;
 }) {
+  // Close on Escape OwO
   useEffect(() => {
     const on = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
   }, [onClose]);
+  // The backdrop closes the dialog only when the click started ON it (not inside the dialog) ^w^
   return (
     <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      {/* The dialog box (role=dialog for screen readers) */}
       <div className={`modal${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+        {/* Title and close button */}
         <div className="modal-head">
           <h2>{title}</h2>
           <button className="btn ghost small" onClick={onClose} aria-label="Close">✕</button>
         </div>
+        {/* The content, then the footer (buttons) when given */}
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
@@ -95,13 +116,17 @@ export function Modal({ title, children, footer, onClose, wide }: {
   );
 }
 
+// ErrorBox: an error as a red box: the message, the server's hint, and up to 12 details (e.g. spec problems with
+// their location). Nothing at all when there's no error UwU
 export function ErrorBox({ error }: { error: ApiError | Error | string | null | undefined }) {
   if (!error) return null;
   const msg = typeof error === "string" ? error : error.message;
   const data = error instanceof ApiError ? error.data : null;
   const details: any[] = Array.isArray(data?.details) ? data.details : [];
   return (
+    // role=alert makes screen readers announce it >w<
     <div className="alert error" role="alert">
+      {/* Message, hint, then the details list */}
       {msg}
       {data?.hint && <div className="small">{data.hint}</div>}
       {details.length > 0 && (
@@ -115,6 +140,7 @@ export function ErrorBox({ error }: { error: ApiError | Error | string | null | 
   );
 }
 
+// Loading: a spinner with a label OwO
 export function Loading({ label = "Loading…" }: { label?: string }) {
   return (
     <div className="empty">
@@ -123,12 +149,14 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
+// STATE_CLASS: which color class each state word gets ^w^
 const STATE_CLASS: Record<string, string> = {
   succeeded: "ok", ok: "ok", pass: "ok", running: "info", queued: "", failed: "bad", fail: "bad", problem: "bad",
   stopped: "", unknown: "", warn: "warn",
 };
 
 /** A state as a coloured mark and words: "● succeeded", spinner while running. */
+// StateBadge: a colored dot (or a spinner while running) and the state's words UwU
 export function StateBadge({ state, label }: { state: string; label?: string }) {
   return (
     <span className={`status ${STATE_CLASS[state] ?? ""}`}>
@@ -138,38 +166,47 @@ export function StateBadge({ state, label }: { state: string; label?: string }) 
   );
 }
 
+// Card: a white box with an optional title bar (title + action buttons) and a body >w<
 export function Card({ title, actions, children, bodyClass = "card-body" }: {
   title?: ReactNode; actions?: ReactNode; children: ReactNode; bodyClass?: string;
 }) {
   return (
     <section className="card">
+      {/* The title bar, only when there's a title or actions */}
       {(title || actions) && (
         <div className="card-head">
           <h2>{title}</h2>
           {actions}
         </div>
       )}
+      {/* The body */}
       <div className={bodyClass}>{children}</div>
     </section>
   );
 }
 
+// MenuEntry: one section in a View's left menu OwO
 export interface MenuEntry { id: string; label: string; icon: IconName; href: string; sub?: boolean }
 
 /** The content panel of one object (VALOR itself, a range, a VM), laid out like Proxmox: a title bar with the
  *  object's actions, a list of its sections on the left and the section on the right. */
+// View: the content panel of one object (VALOR, a range, a VM), like Proxmox: a title bar with the object's tools,
+// its sections on the left, the chosen section on the right ^w^
 export function View({ title, tools, menu, active, children, fill }: {
   title: ReactNode; tools?: ReactNode; menu?: MenuEntry[]; active?: string; children: ReactNode; fill?: boolean;
 }) {
   return (
     <section className="view">
+      {/* Title bar: title and tools */}
       <header className="view-head">
         <h1>{title}</h1>
         {tools && <div className="view-tools">{tools}</div>}
       </header>
+      {/* Section menu (when there is one), then the section */}
       <div className={`view-main${menu ? " with-menu" : ""}`}>
         {menu && (
           <nav className="view-menu" aria-label="Sections">
+            {/* One link per section; the active one is highlighted and marked aria-current */}
             {menu.map((entry) => (
               <a key={entry.id} href={`#/${entry.href}`} className={`${entry.id === active ? "active" : ""}${entry.sub ? " sub" : ""}`}
                 aria-current={entry.id === active ? "page" : undefined}>
@@ -178,23 +215,28 @@ export function View({ title, tools, menu, active, children, fill }: {
             ))}
           </nav>
         )}
+        {/* The section's content (fill = use all the height, e.g. for a console) */}
         <div className={`view-body${fill ? " fill" : ""}`}>{children}</div>
       </div>
     </section>
   );
 }
 
+// MenuAction: one menu entry. MenuItems: a list of entries where "-" is a separator line and `false` entries are
+// skipped (so code can write `built && {...}`) UwU
 export interface MenuAction { label: string; icon?: IconName; onClick: () => void; danger?: boolean; disabled?: boolean }
 /** A menu's entries: "-" draws a line between groups and `false` entries are left out (`built && {...}`). */
 export type MenuItems = (MenuAction | "-" | false)[];
 
 /** The entries of a menu: a DropButton's or a right-click menu's. */
+// MenuList: draw menu entries, dropping skipped ones and separators at the start, end or doubled >w<
 export function MenuList({ items, onPick }: { items: MenuItems; onPick: (action: MenuAction) => void }) {
   const shown: (MenuAction | "-")[] = [];
   for (const i of items) if (i && (i !== "-" || (shown.length && shown[shown.length - 1] !== "-"))) shown.push(i);
   if (shown[shown.length - 1] === "-") shown.pop();
   return (
     <>
+      {/* A line for "-", a button for an action */}
       {shown.map((item, n) => item === "-" ? <hr key={n} className="menu-sep" /> : (
         <button key={n} role="menuitem" className={`menu-item${item.danger ? " danger" : ""}`} disabled={item.disabled} onClick={() => onPick(item)}>
           {item.icon && <Icon name={item.icon} size={15} />} {item.label}
@@ -205,15 +247,18 @@ export function MenuList({ items, onPick }: { items: MenuItems; onPick: (action:
 }
 
 /** A title-bar button for one action, the same action its right-click menu offers. */
+// ToolButton: a title-bar button for one action (the same action its right-click menu offers) OwO
 export function ToolButton({ action, label, primary }: { action: MenuAction; label?: string; primary?: boolean }) {
   return (
     <button className={`btn${primary ? " primary" : ""}`} onClick={action.onClick} disabled={action.disabled}>
+      {/* Icon and label */}
       {action.icon && <Icon name={action.icon} size={14} />} {label ?? action.label}
     </button>
   );
 }
 
 /** A toolbar button that opens a menu ("Shutdown ▾", "More ▾"). */
+// DropButton: a toolbar button that opens a menu ("Shutdown ▾"); a click anywhere else closes it ^w^
 export function DropButton({ label, icon, items, disabled }: { label: string; icon?: IconName; items: MenuItems; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -225,9 +270,11 @@ export function DropButton({ label, icon, items, disabled }: { label: string; ic
   }, [open]);
   return (
     <div className="drop" ref={ref}>
+      {/* The button: icon, label and a caret */}
       <button className="btn" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open} disabled={disabled}>
         {icon && <Icon name={icon} size={14} />}<span className="label">{label}</span><Icon name="caret" size={12} />
       </button>
+      {/* The menu, while open; picking an entry closes it and runs the entry */}
       {open && (
         <div className="popover menu" role="menu">
           <MenuList items={items} onPick={(item) => { setOpen(false); item.onClick(); }} />
@@ -238,6 +285,8 @@ export function DropButton({ label, icon, items, disabled }: { label: string; ic
 }
 
 /** A page that fails to render shows what went wrong instead of leaving the window blank; the rest of the UI stays. */
+// PageGuard: an "error boundary": if a page crashes while drawing, show what went wrong instead of a blank window
+// (the rest of the UI keeps working). Moving to another page tries again UwU
 export class PageGuard extends Component<{ children: ReactNode; page?: string }, { error: Error | null }> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
@@ -246,10 +295,12 @@ export class PageGuard extends Component<{ children: ReactNode; page?: string },
   componentDidUpdate(prev: { page?: string }) {
     if (this.state.error && prev.page !== this.props.page) this.setState({ error: null });   // another page: try again
   }
+  // render(): the page normally; after a crash, the error and a Reload button >w<
   render() {
     if (!this.state.error) return this.props.children;
     return (
       <div className="view-body">
+        {/* What failed, and a way out */}
         <div className="alert error" role="alert">
           This page failed to show: {this.state.error.message}
           <div className="row" style={{ marginTop: 8 }}>

@@ -1,11 +1,14 @@
+# *runs a pretend build* OwO tests/test_apply_flow.py: tests for the BUILD SEQUENCE (explained in the docstring)! ^w^
 """The build sequence of apply(), run against fakes: every host converges, in the right order, with the router's
 build egress open only while hosts converge (a regression once skipped convergence for ranges without ISO installs)."""
 
+# pytest, the apply module (as A), and the spec helpers UwU
 import pytest
 
 from valor import apply as A
 from valor.spec import normalize, parse_spec
 
+# SPEC: a small two-segment range for these tests (a YAML string) >w<
 SPEC = """
 name: flow
 segments:
@@ -19,6 +22,7 @@ policy:
 """
 
 
+# Res: a fake successful command result OwO
 class Res:
     ok, exitcode, out, err = True, 0, "", ""
 
@@ -26,6 +30,7 @@ class Res:
         return ""
 
 
+# FakePVE: just enough of the Proxmox client for apply() ^w^
 class FakePVE:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -40,6 +45,8 @@ class FakePVE:
         return {"status": "running"}
 
 
+# run: a fixture that replaces every real step of apply() with a fake that writes to `log`, so the test can check
+# WHAT happened and in WHICH ORDER UwU
 @pytest.fixture
 def run(cfg, monkeypatch):
     log: list[tuple] = []
@@ -66,6 +73,8 @@ def run(cfg, monkeypatch):
     return lambda: (A.apply(FakePVE(cfg), spec), log)
 
 
+# Every host gets login, roles, baseline and a stamp; the build egress opens once, BEFORE the hosts converge, and the
+# final policy comes AFTER; the router is stamped last >w<
 def test_every_host_converges_inside_the_build_window(run):
     result, log = run()
     assert result["changed"] is True
@@ -77,6 +86,7 @@ def test_every_host_converges_inside_the_build_window(run):
     assert log.count(("policy", "build")) == 1 and log[-1] == ("stamp", "rtr")
 
 
+# A failing host still closes the build window: the final policy is loaded before the error goes up OwO
 def test_a_failing_host_closes_the_build_window(run, monkeypatch):
     policies = []
     monkeypatch.setattr(A, "load_router_policy", lambda pve, s, vmid, ifmap, uplink, build_egress: policies.append(
@@ -90,17 +100,20 @@ def test_a_failing_host_closes_the_build_window(run, monkeypatch):
     assert policies == ["build", "final"]                             # never left open after a failure
 
 
+# _mac() reads the MAC out of a NIC setting ^w^
 def test_mac_from_net_config():
     assert A._mac("virtio=BC:24:11:AA:BB:CC,bridge=vmbr0,firewall=0") == "BC:24:11:AA:BB:CC"
     assert A._mac("virtio,bridge=vmbr0") is None and A._mac("") is None
 
 
+# _disk_gib() reads disk sizes in any unit (a "size=64G" with a base-image path once crashed it) UwU
 def test_disk_size_from_config():
     assert A._disk_gib("valor-tank:base-5901-disk-1/vm-5024-disk-1,discard=on,size=64G,ssd=1") == 64   # once crashed
     assert A._disk_gib("local-lvm:vm-1-disk-0,size=10G") == 10 and A._disk_gib("x:vm-1-disk-0,size=1T") == 1024
     assert A._disk_gib("x:vm-1-disk-0,size=512M") == 0.5 and A._disk_gib("x:vm-1-disk-0") == 0 and A._disk_gib("") == 0
 
 
+# The job list shows who started each job and why a failed one failed >w<
 def test_job_list_names_who_started_it_and_why_it_failed(cfg):
     """The task log in the web UI shows each job's user and, for a failed one, its error."""
     from valor import jobs

@@ -1,6 +1,8 @@
+# *checks every service role* OwO tests/test_services.py: tests for SERVICE ROLES (summary in the docstring)! ^w^
 """Service roles: every role loads and is valid shell, generic roles (packages, windows-features, custom-script),
 parameter handling (raw, pattern, max length), ports from parameters, and custom scripts surfacing in the plan."""
 
+# shutil (is shellcheck installed?), subprocess (bash -n, shellcheck), pytest, and the modules under test UwU
 import shutil
 import subprocess
 
@@ -14,8 +16,10 @@ from valor.web.ranges import custom_scripts, role_list
 
 from conftest import ROOT
 
+# ROLES: every role folder with a role.yaml >w<
 ROLES = sorted(p.name for p in (ROOT / "roles").iterdir() if (p / "role.yaml").is_file())
 
+# SPEC: a small range whose web host runs the generic "packages" and "custom-script" roles (a YAML string) OwO
 SPEC = """
 name: svc
 segments:
@@ -38,6 +42,8 @@ hosts:
 """
 
 
+# For EVERY role: a description, known OS families, every parameter described, a valid ports_param, a role.sh for
+# Linux roles that passes `bash -n` once wrapped with its environment and helpers, and a role.ps1 for Windows roles ^w^
 @pytest.mark.parametrize("name", ROLES)
 def test_every_role_is_complete(name):
     role = load_role(ROOT / "roles", name)
@@ -58,6 +64,7 @@ def test_every_role_is_complete(name):
         assert role.ps_script.strip(), f"{name} claims Windows but has no role.ps1"
 
 
+# Role scripts pass shellcheck's error level (skipped when shellcheck isn't installed) UwU
 @pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck not installed")
 def test_role_scripts_pass_shellcheck():
     for name in ROLES:
@@ -68,6 +75,8 @@ def test_role_scripts_pass_shellcheck():
             assert r.returncode == 0, f"{name}: {r.stdout}"
 
 
+# Parameters: raw values stay as written, injection attempts fail the pattern, overlong scripts fail, and host names
+# become addresses for non-raw params >w<
 def test_parameters_raw_pattern_and_length():
     spec = normalize(parse_spec(SPEC), "ubuntu-24.04")
     web = spec.host("web")
@@ -86,6 +95,7 @@ def test_parameters_raw_pattern_and_length():
     assert role_env(spec, spec.host("pc"), client, {"server": "web"})["VALOR_PARAM_SERVER"] == "10.70.0.10/32"
 
 
+# Ports: fixed, from parameters (with "8080:80" published ports), and allow_from opens exactly those ports OwO
 def test_ports_from_parameters():
     roles = ROOT / "roles"
     assert role_ports(load_role(roles, "nginx")) == [80]
@@ -100,6 +110,7 @@ def test_ports_from_parameters():
     assert data["policy"][-1]["ports"] == [6379] and data["policy"][-1]["from"] == "usr"
 
 
+# Custom scripts show up in the plan for approval only when their host actually runs ^w^
 def test_custom_scripts_are_listed_for_approval():
     spec = normalize(parse_spec(SPEC), "ubuntu-24.04")
     plan = {"actions": [{"host": "web", "action": "create"}, {"host": "pc", "action": "keep"}]}
@@ -108,6 +119,7 @@ def test_custom_scripts_are_listed_for_approval():
     assert custom_scripts(spec, {"actions": [{"host": "web", "action": "keep"}]}) == []     # nothing runs
 
 
+# The model's reference lists roles with families, generic marks, ports and params UwU
 def test_roles_reach_the_model(cfg):
     roles = role_list(cfg)
     text = ai.reference(cfg, {}, set(), roles, {})
@@ -116,6 +128,7 @@ def test_roles_reach_the_model(cfg):
     assert "- custom-script [debian, rhel, windows] (generic)" in text
 
 
+# No role (nor the prelude) pipes into write_file or `grep -q` (comment lines are skipped) >w<
 def test_role_scripts_avoid_subshell_and_sigpipe_traps():
     """`cmd | write_file` loses VALOR_CHANGED (subshell); `cmd | grep -q` can kill cmd with SIGPIPE under pipefail."""
     from valor.roles import PRELUDE

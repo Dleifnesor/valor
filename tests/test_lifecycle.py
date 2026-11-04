@@ -1,5 +1,8 @@
+# *flicks power switches on a pretend cluster* OwO tests/test_lifecycle.py: tests for LOGINS, POWER and SNAPSHOTS
+# (summary in the docstring)! ^w^
 """Range logins, display, power and snapshots - against a fake Proxmox (no cluster needed)."""
 
+# pytest and the modules under test UwU
 import pytest
 
 from valor import credentials, lifecycle
@@ -10,6 +13,7 @@ from valor.errors import ValorError
 from valor.plan import _classify, desired_state
 
 
+# kcfg: a config with a real (temporary) secret key, so logins are enabled >w<
 @pytest.fixture
 def kcfg(cfg, tmp_path):
     key = tmp_path / "secret.key"
@@ -17,6 +21,8 @@ def kcfg(cfg, tmp_path):
     return Config(**{**cfg.__dict__, "secret_key_file": str(key)})
 
 
+# Passwords: 20 easy-to-type characters in 4 groups; stored encrypted (never in plain text); stable; rotation bumps
+# the version; forget deletes it OwO
 def test_password_format_and_encryption_at_rest(kcfg):
     pw = credentials.generate()
     assert len(pw) == 23 and pw.count("-") == 3 and not set(pw.replace("-", "")) & set("0o1li")
@@ -32,11 +38,13 @@ def test_password_format_and_encryption_at_rest(kcfg):
     assert credentials.load(kcfg, "web2tier") is None
 
 
+# No key = no logins (and version 0) ^w^
 def test_logins_disabled_without_a_key(cfg):
     assert credentials.enabled(cfg) is False and credentials.ensure(cfg, "x") is None
     assert credentials.version(cfg, "x") == 0
 
 
+# A different display makes the plan "update" a VM; rotating the password changes every VM's converge fingerprint UwU
 def test_display_and_login_version_drive_the_plan(kcfg, ref_spec):
     d = desired_state(kcfg, ref_spec)[1]
     assert d.hw["display"] == "std"
@@ -51,6 +59,8 @@ def test_display_and_login_version_drive_the_plan(kcfg, ref_spec):
     assert desired_state(kcfg, ref_spec)[1].conv_hash != before                         # rotation re-converges
 
 
+# FakePVE: just enough of the Proxmox client for lifecycle.py, remembering every call; zfs=True refuses rollbacks
+# past newer snapshots, like ZFS >w<
 class FakePVE:
     """Just enough of valor.pve.PVE for lifecycle.py."""
 
@@ -97,6 +107,8 @@ class FakePVE:
         self.vms[vmid]["status"] = "running"
 
 
+# Power order: shutdown = hosts first, router last; start = router first; reboot = shutdown + start; already-running
+# VMs are skipped; unknown hosts and actions fail OwO
 def test_power_order_router_first_up_last_down(cfg):
     pve = FakePVE(cfg)
     lifecycle.power(pve, "lab", "shutdown")
@@ -116,6 +128,8 @@ def test_power_order_router_first_up_last_down(cfg):
         lifecycle.power(pve, "lab", "suspend")
 
 
+# Snapshots: duplicates refused unless replacing; newest first; a reset blocked by newer snapshots (ZFS) until
+# delete_newer, then the router rolls back first; bad names refused; delete ^w^
 def test_snapshots_reset_and_zfs_rule(cfg):
     pve = FakePVE(cfg)
     lifecycle.snapshot(pve, "lab", lifecycle.CLEAN, "verified")

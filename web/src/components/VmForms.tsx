@@ -1,4 +1,8 @@
+// *fills in little forms* OwO web/src/components/VmForms.tsx: the map's forms for VMs and services! ^w^
+// Add a VM, add a service to a VM, change a VM's OS or size, and edit the whole draft spec as YAML. Every form only
+// produces map edits ("ops") for the range's DRAFT; nothing is built until the plan is approved *wags tail*
 import { FormEvent, useState } from "react";
+// put/ApiError, the map types, ErrorBox/Modal UwU
 import { ApiError, put } from "../api";
 import { Topology, TopoNode } from "../types";
 import { ErrorBox, Modal } from "./ui";
@@ -7,6 +11,7 @@ import { ErrorBox, Modal } from "./ui";
 // spec as YAML. Every form only produces map edits ("ops") for the range's draft; nothing is built until the plan
 // is approved.
 
+// CatalogRole / Catalog: what /api/catalog says about roles (ports, OS families, parameters) and OSes >w<
 export interface CatalogRole {
   name: string;
   description: string;
@@ -33,17 +38,20 @@ export interface Draft {
 /** The range as the map shows it: its draft (if any) and the topology to draw. */
 export interface View { draft: Draft | null; topology: Topology }
 
+// familyOf(): an OS's family (debian when unknown) OwO
 function familyOf(catalog: Catalog, os: string) {
   return catalog.os.find((entry) => entry.name === os)?.family ?? "debian";
 }
 
 /** The roles that support an OS (by its family). */
+// rolesFor(): the roles that support an OS's family ^w^
 function rolesFor(catalog: Catalog, os: string) {
   const family = familyOf(catalog, os);
   return catalog.roles.filter((role) => (role.families ?? ["debian"]).includes(family));
 }
 
 /** One input per parameter of a role; empty inputs show the default as a placeholder. */
+// RoleParams: one input per role parameter; empty inputs show the default as a placeholder UwU
 function RoleParams({ role, values, onChange }: {
   role: CatalogRole; values: Record<string, string>; onChange: (values: Record<string, string>) => void;
 }) {
@@ -51,6 +59,7 @@ function RoleParams({ role, values, onChange }: {
   if (!entries.length) return null;
   return (
     <div className="params">
+      {/* One labelled input per parameter (with its description and "(required)") */}
       {entries.map(([key, param]) => (
         <label className="field" key={key}>{role.name}: {key}{param.required ? " (required)" : ""}
           {param.description && <span className="hint">{param.description}</span>}
@@ -64,6 +73,8 @@ function RoleParams({ role, values, onChange }: {
 }
 
 /** Which other segments may reach the new services (the API adds router rules for the services' ports). */
+// AllowFrom: checkboxes for which OTHER segments may reach the new services (the API adds firewall rules for their
+// ports) >w<
 function AllowFrom({ segments, own, value, onChange }: {
   segments: string[]; own?: string; value: string[]; onChange: (segments: string[]) => void;
 }) {
@@ -72,6 +83,7 @@ function AllowFrom({ segments, own, value, onChange }: {
   return (
     <div className="field">Who may reach the new services <span className="hint">adds router rules for their ports; the VM's own segment always can</span>
       <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+        {/* One checkbox per other segment */}
         {others.map((segment) => (
           <label key={segment} className="checkbox">
             <input name="allow-from" type="checkbox" checked={value.includes(segment)}
@@ -84,6 +96,7 @@ function AllowFrom({ segments, own, value, onChange }: {
 }
 
 /** add_role edits for the chosen roles; empty parameters are left out (the role's default applies). */
+// roleOps(): one add_role edit per chosen role; empty parameters are left out so the role's defaults apply OwO
 function roleOps(host: string, selected: string[], params: Record<string, Record<string, string>>, allow: string[]): Op[] {
   return selected.map((role) => ({
     op: "add_role", host, role, allow_from: allow,
@@ -92,12 +105,14 @@ function roleOps(host: string, selected: string[], params: Record<string, Record
 }
 
 /** vCPU / memory / disk inputs, shared by the add and edit forms. */
+// SizeInputs: vCPU / memory (MiB) / disk (GiB) inputs, shared by the add and edit forms ^w^
 function SizeInputs({ size, minDisk, onChange }: {
   size: { cores: number; memory: number; disk: number }; minDisk: number;
   onChange: (size: { cores: number; memory: number; disk: number }) => void;
 }) {
   return (
     <div className="size-row">
+      {/* Each input updates one field of the size */}
       <label className="field">vCPU<input name="cores" type="number" min={1} max={16} value={size.cores} onChange={(e) => onChange({ ...size, cores: Number(e.target.value) })} /></label>
       <label className="field">MiB<input name="memory" type="number" min={512} step={512} value={size.memory} onChange={(e) => onChange({ ...size, memory: Number(e.target.value) })} /></label>
       <label className="field">GiB<input name="disk" type="number" min={minDisk} value={size.disk} onChange={(e) => onChange({ ...size, disk: Number(e.target.value) })} /></label>
@@ -105,10 +120,13 @@ function SizeInputs({ size, minDisk, onChange }: {
   );
 }
 
+// AddVmModal: the "Add a VM" form UwU
 export function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
   segments: string[]; segment?: string; catalog: Catalog; onClose: () => void; onSubmit: (ops: Op[]) => void;
 }) {
+  // Only OSes with a built template can be picked >w<
   const osList = catalog.os.filter((entry) => entry.template);       // only OSes with a built template
+  // Form state: name, segment, OS, size, chosen roles, their parameters, and who may reach them OwO
   const [name, setName] = useState("");
   const [vmSegment, setVmSegment] = useState(segment ?? segments[0] ?? "");
   const [os, setOs] = useState(catalog.default_os);
@@ -116,9 +134,11 @@ export function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
   const [roles, setRoles] = useState<string[]>([]);
   const [params, setParams] = useState<Record<string, Record<string, string>>>({});
   const [allow, setAllow] = useState<string[]>([]);
+  // Windows? Which roles fit this OS? Is the name valid (2-15 lowercase letters/digits/dashes)? ^w^
   const windows = familyOf(catalog, os) === "windows";
   const available = rolesFor(catalog, os);
   const valid = /^[a-z][a-z0-9-]{0,13}[a-z0-9]$/.test(name) && !!vmSegment;
+  // submit(): an add_host edit plus add_role edits for the roles that fit the OS UwU
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const chosen = roles.filter((role) => available.some((option) => option.name === role));
@@ -129,6 +149,7 @@ export function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
       <><button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn primary" form="addvm" disabled={!valid}>Add to the draft</button></>
     }>
+      {/* The form: name, segment, OS (changing it clears the roles), size */}
       <form id="addvm" className="stack" onSubmit={submit}>
         <div className="grid cols-2">
           <label className="field">Name <span className="hint">2-15 lowercase letters, digits, dashes</span>
@@ -146,9 +167,11 @@ export function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
           </label>
           <SizeInputs size={size} minDisk={8} onChange={setSize} />
         </div>
+        {/* A note for Windows, then the services */}
         {windows && <div className="muted small">Windows gets at least the memory and disk its template needs, whatever you enter here.</div>}
         <div className="field">Services
           <div className="role-pick">
+            {/* One checkbox per available role, with its description */}
             {available.map((role) => (
               <label key={role.name} className="checkbox" title={role.description}>
                 <input name="roles" type="checkbox" checked={roles.includes(role.name)}
@@ -158,6 +181,7 @@ export function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
             ))}
           </div>
         </div>
+        {/* Parameters of each chosen role, who may reach them, and a note about addresses and approval */}
         {roles.map((name) => {
           const role = available.find((option) => option.name === name);
           return role ? <RoleParams key={name} role={role} values={params[name] ?? {}} onChange={(values) => setParams({ ...params, [name]: values })} /> : null;
@@ -169,21 +193,25 @@ export function AddVmModal({ segments, segment, catalog, onClose, onSubmit }: {
   );
 }
 
+// AddServiceModal: add one service to an existing VM >w<
 export function AddServiceModal({ host, segments, catalog, onClose, onSubmit }: {
   host: TopoNode; segments: string[]; catalog: Catalog; onClose: () => void; onSubmit: (ops: Op[]) => void;
 }) {
+  // Node ids are "host:<name>"; only roles that fit the OS and aren't on the VM yet OwO
   const hostName = host.id.slice(5);                                  // node ids are "host:<name>"
   const available = rolesFor(catalog, host.os ?? catalog.default_os).filter((role) => !(host.roles ?? []).includes(role.name));
   const [roleName, setRoleName] = useState(available[0]?.name ?? "");
   const [params, setParams] = useState<Record<string, string>>({});
   const [allow, setAllow] = useState<string[]>([]);
   const role = available.find((option) => option.name === roleName);
+  // The VM's own segment (it can always reach its own services) ^w^
   const own = host.parent?.replace(/^seg:/, "");
   return (
     <Modal title={`Add a service to ${hostName}`} onClose={onClose} footer={
       <><button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn primary" disabled={!roleName} onClick={() => onSubmit(roleOps(hostName, [roleName], { [roleName]: params }, allow))}>Add to the draft</button></>
     }>
+      {/* No other service fits: say so. Otherwise pick a role, fill its parameters, and choose who may reach it */}
       {!available.length ? <div className="empty">No other service supports {host.os}.</div> : (
         <div className="stack">
           <label className="field">Service
@@ -200,18 +228,21 @@ export function AddServiceModal({ host, segments, catalog, onClose, onSubmit }: 
   );
 }
 
+// EditVmModal: change a VM's OS (a new VM!) or size UwU
 export function EditVmModal({ host, catalog, onClose, onSubmit }: {
   host: TopoNode; catalog: Catalog; onClose: () => void; onSubmit: (ops: Op[]) => void;
 }) {
   const hostName = host.id.slice(5);
   const [os, setOs] = useState(host.os ?? catalog.default_os);
   const [size, setSize] = useState({ cores: host.cores ?? 1, memory: host.memory ?? 1024, disk: host.disk ?? 10 });
+  // Only send the OS when it changed >w<
   const osChanged = os !== host.os;
   return (
     <Modal title={`Edit ${hostName}`} onClose={onClose} footer={
       <><button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn primary" onClick={() => onSubmit([{ op: "update_host", name: hostName, ...size, ...(osChanged ? { os } : {}) }])}>Add to the draft</button></>
     }>
+      {/* OS (built templates, plus the current OS), a warning when it changes, the size, and a note about restarts */}
       <div className="stack">
         <label className="field">Operating system
           <select name="os" value={os} onChange={(e) => setOs(e.target.value)}>
@@ -226,10 +257,12 @@ export function EditVmModal({ host, catalog, onClose, onSubmit }: {
   );
 }
 
+// YamlModal: edit the whole draft spec as YAML (for changes the forms don't cover) OwO
 /** The whole draft spec as YAML, for changes the map's forms don't cover. */
 export function YamlModal({ name, yaml, onClose, onSaved }: { name: string; yaml: string; onClose: () => void; onSaved: (view: View) => void }) {
   const [text, setText] = useState(yaml);
   const [err, setErr] = useState<ApiError | null>(null);
+  // save(): PUT the YAML as the draft; the server checks it ^w^
   const save = async () => {
     try { onSaved(await put<View>(`/api/ranges/${name}/draft`, { yaml: text })); } catch (e) { setErr(e as ApiError); }
   };
@@ -237,6 +270,7 @@ export function YamlModal({ name, yaml, onClose, onSaved }: { name: string; yaml
     <Modal title={`Draft spec of ${name}`} onClose={onClose} wide footer={
       <><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={save}>Save draft</button></>
     }>
+      {/* The YAML editor (no spellcheck), then any error UwU */}
       <textarea name="spec" className="mono" rows={24} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} style={{ width: "100%" }} />
       <ErrorBox error={err} />
     </Modal>

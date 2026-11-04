@@ -1,3 +1,8 @@
+# *dials up the AI on a tiny phone* OwO valor/ai/providers.py TALKS to AI models! ^w^
+# One request = one STREAMED answer, assembled into a Reply (text, reasoning, tool calls, token counts). Two kinds of
+# provider: any OpenAI-compatible server (LM Studio, vLLM, Ollama...) and OpenRouter. Local models are quirky, so
+# this file smooths things over: reasoning in <think> tags, tool calls written as plain text, a full context
+# window that looks like a cut-off answer, and every HTTP error turned into a clear message with advice *wags tail*
 """Talking to AI models: one streamed request, its answer as a Reply (text, reasoning, tool calls, token counts).
 
 Two kinds of provider: any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API, ...) and OpenRouter.
@@ -5,8 +10,11 @@ Local models' quirks are smoothed over here: reasoning inside <think> tags, tool
 context window that looks like a cut-off answer.
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# json (requests/events), re (patterns), secrets (call ids), time (overall time limit), dataclass/field (Reply),
+# urlparse (host names for messages) >w<
 import json
 import re
 import secrets
@@ -14,17 +22,29 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+# requests makes the HTTP calls OwO
 import requests
 
+# ValorError ^w^
 from ..errors import ValorError
 
+# PROVIDERS: the supported kinds; KIND_NAMES: their human names UwU
 PROVIDERS = ("openai", "openrouter")
 KIND_NAMES = {"openai": "An OpenAI-compatible server", "openrouter": "OpenRouter"}
 # max_tokens is a ceiling, not a cost (only generated tokens count): high enough that a large spec is never cut off
+# DEFAULTS: default settings: no provider, a 32,768-token answer ceiling, 400,000 tokens per user per day, and a
+# 300 s silence timeout >w<
 DEFAULTS = {"provider": "none", "model": "", "base_url": "", "api_key": "", "max_tokens": 32768,
             "daily_tokens_per_user": 400_000, "timeout": 300}
 
 
+# Reply: one model answer OwO
+#   text               what the model said
+#   input/output_tokens  how many tokens the request and the answer used
+#   truncated          stopped at a length limit
+#   reasoning          the model's thinking (when separate)
+#   context_full       the context window ran out (not max_tokens)
+#   tool_calls         [{id, name, input}]; input is None when the model wrote broken JSON
 @dataclass
 class Reply:
     text: str
@@ -36,6 +56,9 @@ class Reply:
     tool_calls: list = field(default_factory=list)   # [{id, name, input}]; input None when it was not valid JSON
 
 
+# CONTEXT_ERROR: recognises "context window too small" errors from various servers; CONTEXT_HINT: the advice for
+# it. MAX_TOTAL: the longest one answer may take in a web request (19 min, under the proxy's 20). TURN_MAX_TOTAL:
+# the longest in a background chat turn (1 h) ^w^
 CONTEXT_ERROR = re.compile(r"exceed\w*[_ ]context|context[_ ](size|length|window)|n_ctx", re.I)
 CONTEXT_HINT = ("Give the model a larger context window: in LM Studio load it with a Context Length of at least 32,768 - "
                 "and set that as the model's default, or LM Studio loads it with a small one after a restart.")
@@ -43,17 +66,22 @@ MAX_TOTAL = 1140             # seconds for one answer, under the web proxy's 20 
 TURN_MAX_TOTAL = 3600       # one answer in a background chat turn (no request waits on it)
 
 
+# Provider: the base class. `timeout` is how long the model may stay SILENT (slow thinkers are fine, a stuck server
+# is noticed) UwU
 class Provider:
     """Answers are streamed: `timeout` is how long the model may stay silent, so slow local models that think
     for minutes still work, while a stuck server is noticed."""
     name = "none"
 
+    # Keep the model, key, base URL (no trailing slash), answer ceiling and timeouts >w<
     def __init__(self, model: str, api_key: str = "", base_url: str = "", max_tokens: int = DEFAULTS["max_tokens"],
                  timeout: int = 300):
         self.model, self.api_key, self.base_url = model, api_key, base_url.rstrip("/")
         self.max_tokens, self.timeout = max_tokens, timeout
         self.max_total = MAX_TOTAL     # chat turns run in the background and allow longer
 
+    # complete: send one request and return the Reply; each provider kind implements it. The message format is
+    # VALOR's own neutral one (see the docstring) OwO
     def complete(self, system: str, messages: list[dict], tools: list[dict] | None = None,
                  on_delta=None) -> Reply:   # pragma: no cover - interface
         """messages use VALOR's neutral format: {role: user|assistant, content}, an assistant turn may carry
@@ -61,14 +89,18 @@ class Provider:
         tools: [{name, description, input_schema}]. on_delta(kind, text) streams "thinking", "text" and "tool"."""
         raise NotImplementedError
 
+    # context_length: the model's context window, when the provider can tell (None otherwise) ^w^
     def context_length(self) -> int | None:
         return None
 
+    # _events: POST a streaming request and yield each server-sent event's JSON UwU
     def _events(self, url: str, headers: dict, body: dict):
         """POST with stream=true; yields the JSON payload of every server-sent event."""
         where = urlparse(url).netloc
+        # (10, timeout): 10 s to connect, then `timeout` seconds between pieces of data >w<
         try:
             response = requests.post(url, headers=headers, json=body, timeout=(10, self.timeout), stream=True)
+        # Connection problems become ai_unreachable errors with practical hints (firewall, "serve on local network"...) OwO
         except requests.ConnectTimeout:
             raise ValorError("ai_unreachable", f"VALOR could not reach {where}: nothing answered (connection timed out)",
                              hint="Usually a firewall on the model server's computer drops the connection, or the "
@@ -82,14 +114,18 @@ class Provider:
             raise self._silent(where)
         except requests.RequestException as e:
             raise ValorError("ai_unreachable", f"the AI provider did not answer: {e.__class__.__name__}")
+        # HTTP errors become clear ValorErrors (see _check_status) ^w^
         self._check_status(response, url)
+        # Event streams are UTF-8 UwU
         response.encoding = "utf-8"     # event streams are UTF-8; without a charset requests would assume ISO-8859-1
         started = time.time()
         try:
+            # Read line by line; give up after max_total seconds overall >w<
             for line in response.iter_lines(decode_unicode=True):
                 if time.time() - started > self.max_total:
                     raise ValorError("ai_unreachable", f"{where} was still answering after {self.max_total // 60} minutes",
                                      hint="Lower 'Max tokens per answer' or use a faster model.")
+                # Only "data:" lines matter; "[DONE]" ends the stream; lines that aren't JSON are skipped OwO
                 if not line or not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
@@ -99,18 +135,23 @@ class Provider:
                     yield json.loads(data)
                 except ValueError:
                     continue
+        # A stall in the middle = "sent nothing for N s"; a dropped connection is reported as such ^w^
         except (requests.ReadTimeout, requests.ConnectionError) as e:
             if isinstance(e, requests.ConnectionError) and "Read timed out" not in str(e):
                 raise ValorError("ai_unreachable", f"{where} closed the connection in the middle of the answer")
             raise self._silent(where)
+        # Always close the HTTP response UwU
         finally:
             response.close()
 
+    # _silent: the error for a model that went quiet too long >w<
     def _silent(self, where: str) -> ValorError:
         return ValorError("ai_unreachable", f"{where} sent nothing for {self.timeout} s",
                           hint="The model may be loading or very slow: raise the timeout in Settings -> AI providers, "
                                "or use a smaller model.")
 
+    # _check_status: map HTTP errors to useful ValorErrors OwO: 404 (wrong URL or model), 401/403 (bad key), 429
+    # (rate limited), 400 with a context message (window too small), 402 (OpenRouter credits), anything else
     @staticmethod
     def _check_status(response, url: str) -> None:
         """Turn an HTTP error from the provider into a ValorError that says what to do about it."""
@@ -141,10 +182,13 @@ class Provider:
                          details={"status": status, "detail": detail})
 
 
+# OpenAICompatible: any server speaking the OpenAI chat completions API ^w^
 class OpenAICompatible(Provider):
     name = "openai"
     extra_headers: dict = {}
 
+    # complete: build the request: JSON headers (+ a bearer token when there's a key), the model, the answer
+    # ceiling, streaming with usage counts, the messages, and the tools in OpenAI's function format UwU
     def complete(self, system: str, messages: list[dict], tools: list[dict] | None = None, on_delta=None) -> Reply:
         if not self.base_url:
             raise ValorError("ai_not_configured", "the OpenAI-compatible provider needs a base URL")
@@ -157,8 +201,11 @@ class OpenAICompatible(Provider):
             body["tools"] = [{"type": "function", "function": {"name": tool["name"], "description": tool["description"],
                                                                "parameters": tool["input_schema"]}} for tool in tools]
         url = self.base_url + "/chat/completions"
+        # Send it and assemble the answer >w<
         try:
             return self._read(self._events(url, headers, body), on_delta)
+        # Older servers reject stream_options: retry without it (no token counts, but an answer). A server that rejects
+        # tools for this model gets a clear "pick a model with tool use" error OwO
         except ValorError as e:
             details = e.details if isinstance(e.details, dict) else {}
             detail = details.get("detail", "")
@@ -171,6 +218,7 @@ class OpenAICompatible(Provider):
                                       "with tool use, e.g. Qwen 3, Llama 3.1+ or Mistral Small, or use Plan mode.")
             raise
 
+    # context_length: ask LM Studio's REST API how big a context the model was LOADED with (not its maximum) ^w^
     def context_length(self) -> int | None:
         """The context window the server loaded the model with, when it says (LM Studio's REST API does)."""
         root = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
@@ -183,6 +231,7 @@ class OpenAICompatible(Provider):
         loaded = info.get("loaded_context_length")  # not max_context_length: the model's limit, not what is loaded
         return int(loaded) if isinstance(loaded, int) else None
 
+    # _read: feed every event into a _Stream and build the Reply UwU
     @staticmethod
     def _read(events, on_delta=None) -> Reply:
         """Assemble the streamed events of one answer into a Reply."""
@@ -192,10 +241,12 @@ class OpenAICompatible(Provider):
         return stream.reply()
 
 
+# _Stream: collects one streamed answer piece by piece >w<
 class _Stream:
     """The pieces of one streamed answer as they arrive: text, reasoning, tool calls (their arguments arrive in
     fragments), the finish reason and the token counts."""
 
+    # on_delta streams pieces to the live feed; the ThinkSplitter routes inline <think> text to "thinking" OwO
     def __init__(self, on_delta=None):
         self.on_delta = on_delta
         self.text: list[str] = []
@@ -205,9 +256,12 @@ class _Stream:
         self.calls: dict[int, dict] = {}            # index -> {id, name, args (JSON text so far)}
         self.splitter = ThinkSplitter(on_delta or (lambda kind, text: None))
 
+    # add: one event ^w^
     def add(self, event: dict) -> None:
+        # An error event mid-stream (OpenRouter, vLLM) raises UwU
         if event.get("error"):              # a failure after the stream started (OpenRouter, vLLM) arrives as an event
             _raise_stream_error(event["error"])
+        # Each choice's delta: text (also fed to the splitter), separate reasoning, tool call fragments, finish reason >w<
         for choice in event.get("choices") or []:
             delta = choice.get("delta") or {}
             piece = delta.get("content") or ""
@@ -221,11 +275,13 @@ class _Stream:
             for fragment in delta.get("tool_calls") or []:
                 self.add_tool_fragment(fragment)
             self.finish = choice.get("finish_reason") or self.finish
+        # Token counts arrive in a usage event (usually the last) OwO
         usage = event.get("usage") or {}
         if usage:
             self.input_tokens = int(usage.get("prompt_tokens", self.input_tokens))
             self.output_tokens = int(usage.get("completion_tokens", self.output_tokens))
 
+    # add_tool_fragment: tool calls arrive in pieces: the id and name once, the JSON arguments bit by bit ^w^
     def add_tool_fragment(self, fragment: dict) -> None:
         call = self.calls.setdefault(int(fragment.get("index", len(self.calls))), {"id": "", "name": "", "args": ""})
         function = fragment.get("function") or {}
@@ -236,6 +292,8 @@ class _Stream:
                 self.on_delta("tool", call["name"])
         call["args"] += function.get("arguments") or ""
 
+    # reply: assemble the Reply: split inline <think> text off, turn collected calls into tool calls (made-up ids
+    # when the server gave none), or look for tool calls written as text UwU
     def reply(self) -> Reply:
         content, inline_thinking = split_thinking("".join(self.text))
         tool_calls = [{"id": call["id"] or f"call_{secrets.token_hex(6)}", "name": call["name"],
@@ -247,6 +305,7 @@ class _Stream:
                      reasoning="".join(self.thinking) + inline_thinking, tool_calls=tool_calls)
 
 
+# _raise_stream_error: an error event: a context error gets the context advice, anything else a generic one >w<
 def _raise_stream_error(error) -> None:
     message = str(error.get("message") or error.get("code") or error) if isinstance(error, dict) else str(error)
     if CONTEXT_ERROR.search(message):       # LM Studio / llama.cpp: the prompt does not fit the loaded context
@@ -256,15 +315,19 @@ def _raise_stream_error(error) -> None:
                      hint="Usually temporary: send the message again, or pick another model or provider.")
 
 
+# OpenRouter: one key for many hosted models, through its OpenAI-compatible API, with an X-Title header so the
+# account's activity list shows "VALOR" OwO
 class OpenRouter(OpenAICompatible):
     """OpenRouter: one key for many hosted models, through its OpenAI-compatible API."""
     name = "openrouter"
     BASE_URL = "https://openrouter.ai/api/v1"
     extra_headers = {"X-Title": "VALOR"}                # the app name in the account's activity list
 
+    # The base URL is always OpenRouter's ^w^
     def __init__(self, model: str, api_key: str = "", base_url: str = "", **kw):
         super().__init__(model, api_key, self.BASE_URL, **kw)
 
+    # context_length: from OpenRouter's public model list UwU
     def context_length(self) -> int | None:
         """The model's context window from OpenRouter's public model list."""
         try:
@@ -277,6 +340,7 @@ class OpenRouter(OpenAICompatible):
         return int(length) if isinstance(length, int) else None
 
 
+# _args: a tool call's arguments as a dict ({} when empty, None when not valid JSON or not an object) >w<
 def _args(text: str) -> dict | None:
     """A tool call's arguments: a JSON object, {} when empty, None when the model wrote invalid JSON."""
     try:
@@ -286,9 +350,11 @@ def _args(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+# TOOL_CALL_TAG: <tool_call>{...}</tool_call>, how Qwen/Hermes-style models write tool calls as text OwO
 TOOL_CALL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 
 
+# text_tool_calls: pull such calls out of the text (arguments may be a JSON string or an object) ^w^
 def text_tool_calls(text: str) -> tuple[str, list[dict]]:
     """Tool calls a model wrote into its text (Qwen/Hermes <tool_call> tags) when the server did not parse them."""
     calls = []
@@ -306,6 +372,8 @@ def text_tool_calls(text: str) -> tuple[str, list[dict]]:
     return (TOOL_CALL_TAG.sub("", text).strip(), calls) if calls else (text, [])
 
 
+# openai_messages: VALOR's neutral messages -> OpenAI's format: a system message first, tool results as "tool"
+# messages, assistant tool calls in the function format, everything else as is UwU
 def openai_messages(system: str, messages: list[dict]) -> list[dict]:
     """VALOR's neutral message format (see Provider.complete) in the OpenAI chat format."""
     out = [{"role": "system", "content": system}]
@@ -323,19 +391,24 @@ def openai_messages(system: str, messages: list[dict]) -> list[dict]:
     return out
 
 
+# ThinkSplitter: streams text that may START with <think>...</think>: the thinking goes out as "thinking", the
+# rest as "text" >w<
 class ThinkSplitter:
     """Streams text that may start with inline <think>...</think> reasoning: reasoning goes out as "thinking"."""
 
+    # emit = where pieces go; buf = text held back; state goes start -> think -> text OwO
     def __init__(self, emit):
         self.emit, self.buf, self.state = emit, "", "start"      # start -> think -> text
 
     def feed(self, piece: str) -> None:
         if not piece:
             return
+        # After the thinking, text passes straight through ^w^
         if self.state == "text":
             self.emit("text", piece)
             return
         self.buf += piece
+        # At the start: wait while the text could still turn into "<think>"; anything else means there's no thinking UwU
         if self.state == "start":
             stripped = self.buf.lstrip()
             if "<think>".startswith(stripped) and len(stripped) < 7:
@@ -346,6 +419,8 @@ class ThinkSplitter:
                 self.buf = ""
                 return
             self.state, self.buf = "think", stripped[7:]
+        # Inside the thinking: on "</think>" switch to text; otherwise emit all but the last 8 chars (a "</think>" could
+        # be split across pieces) >w<
         if "</think>" in self.buf:
             thought, rest = self.buf.split("</think>", 1)
             if thought:
@@ -358,6 +433,7 @@ class ThinkSplitter:
             self.buf = self.buf[-8:]
 
 
+# provider_from: build the right provider object from saved settings and a decrypted key OwO
 def provider_from(settings: dict, api_key: str) -> Provider:
     kind = settings.get("provider", "none")
     args = dict(model=settings.get("model", ""), api_key=api_key, base_url=settings.get("base_url", ""),
@@ -371,15 +447,20 @@ def provider_from(settings: dict, api_key: str) -> Provider:
                      hint="An administrator can connect one in Settings -> AI providers.")
 
 
+# THINK: inline <think> blocks (an unclosed one runs to the end) ^w^
 THINK = re.compile(r"<think>(.*?)(?:</think>|$)", re.S)
 
 
+# split_thinking: (the answer without <think> blocks, the reasoning text) UwU
 def split_thinking(text: str) -> tuple[str, str]:
     """(answer, reasoning): models such as Qwen and DeepSeek put their reasoning inline in <think> tags."""
     found = THINK.findall(text)
     return THINK.sub("", text).strip() if found else text, "\n".join(found)
 
 
+# cut_off: explain why an answer stopped early. Stopping well before max_tokens (or with nothing at all) means the
+# CONTEXT ran out, so the advice is a bigger context window; otherwise raise "max tokens per answer" >w< *taps the
+# token counter*
 def cut_off(provider: Provider, r: Reply) -> ValorError:
     """Why an answer stopped early. Servers say "length" both for max_tokens and for a full context window (a local
     model loaded with a small context fills it with VALOR's prompt and stops at once), so tell them apart."""

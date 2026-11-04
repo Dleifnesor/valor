@@ -1,3 +1,6 @@
+# OwO *hands CI a tiny lab to play with* ci/github-actions.yml: an EXAMPLE pipeline for YOUR repo! ^w^
+# It builds a throwaway range from a spec, verifies it, and always tears it down: handy for testing software in a
+# fresh lab on every push. The original notes follow *wags tail*
 # Example pipeline: build a disposable range, verify it, always tear it down.
 # Copy to .github/workflows/valor-range.yml in the repository that holds your range specs (in ranges/).
 #
@@ -6,8 +9,10 @@
 #   runs as: it alone can read the Proxmox API token, so treat the runner like an administrator.
 # - Convention: the spec file name equals the range name (ranges/web2tier.yaml -> range "web2tier").
 # Non-zero exit codes fail the job: 1 invalid spec, 2 build failed, 3 verification failed, 4 engine busy.
+# The workflow's name UwU
 name: valor-range
 
+# Runs by hand (choose a range name) or when a spec under ranges/ changes >w<
 on:
   workflow_dispatch:
     inputs:
@@ -17,8 +22,10 @@ on:
   push:
     paths: ["ranges/**"]
 
+# Only one run at a time (the engine builds one range at a time anyway) OwO
 concurrency: valor-engine          # the engine runs one infrastructure job at a time anyway
 
+# One job on the self-hosted runner inside the VALOR VM, with the range name and the valor command ^w^
 jobs:
   range:
     runs-on: [self-hosted, valor]
@@ -26,11 +33,13 @@ jobs:
       RANGE: ${{ inputs.range || 'web2tier' }}
       VALOR: /opt/valor/bin/valor
     steps:
+      # Get the specs and copy them into VALOR's ranges folder UwU
       - uses: actions/checkout@v4
 
       - name: Publish the specs to VALOR (ranges made in the web UI stay)
         run: cp ranges/*.yaml /var/lib/valor/data/ranges/
 
+      # Validate, plan, then build and verify (a failing step fails the job via its exit code) >w<
       - name: Validate
         run: $VALOR validate "$RANGE.yaml"
 
@@ -40,9 +49,11 @@ jobs:
       - name: Apply and verify
         run: $VALOR apply "$RANGE.yaml" --verify
 
+      # Your own tests go here OwO
       - name: Your tests against the range go here
         run: echo "e.g. run integration tests through a role-provisioned test runner host"
 
+      # Always: add the build journal to the job summary, then destroy the range ^w^
       - name: Journal
         if: always()
         run: cat "/var/lib/valor/data/journals/$RANGE.md" >> "$GITHUB_STEP_SUMMARY" || true

@@ -1,3 +1,6 @@
+# OwO *sweeps clutter under the rug* .gitignore: files git should never track! ^w^
+# Python caches and build output, test caches, local evaluation results, a local virtualenv, and the web UI's
+# node_modules (web/dist IS tracked: the VALOR VM serves it) *wags tail*
 __pycache__/
 *.pyc
 *.egg-info/

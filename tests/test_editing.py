@@ -1,5 +1,7 @@
+# *scribbles on a test map* OwO tests/test_editing.py: tests for EDITING built ranges (summary in the docstring)! ^w^
 """Editing a built range: map edits into a draft, what the draft changes and the draft API."""
 
+# dataclasses, pytest, the drafts module, ValorError, spec helpers, and the web builder/db modules UwU
 import dataclasses
 
 import pytest
@@ -9,8 +11,10 @@ from valor.errors import ValorError
 from valor.spec import normalize, parse_spec
 from valor.web import builder, db
 
+# The web app fixture and helpers from test_web.py >w<
 from test_web import client, enroll, env  # noqa: F401  (the web app fixture and helpers)
 
+# SPEC: a small two-segment range (a YAML string) OwO
 SPEC = """apiVersion: valor/v1
 name: lab
 segments:
@@ -26,6 +30,9 @@ tests:
 """
 
 
+# Map edits: a new VM gets the next free address (.11, since .10 is taken), a same-segment service needs no rule, a
+# service reached from another segment adds a rule for its port, size changes apply, removing a VM removes its rules
+# and tests too, and bad edits fail with the right codes ^w^
 def test_map_edits():
     spec = parse_spec(SPEC)
     data = drafts.apply_ops(spec, [
@@ -52,6 +59,7 @@ def test_map_edits():
         assert e.value.code == code
 
 
+# What a draft changes: a new OS = replace, a new VM = create, a removed VM = remove, the router = update UwU
 def test_what_a_draft_changes():
     cur = normalize(parse_spec(SPEC), "ubuntu-24.04")
     d = drafts.apply_ops(parse_spec(SPEC), [{"op": "add_host", "segment": "lan", "name": "pc2"},
@@ -64,6 +72,7 @@ def test_what_a_draft_changes():
     assert ch["summary"] == {"replace": 1, "create": 1, "remove": 1, "update": 1}
 
 
+# _app(): the web app with the example range saved and the AI rate limit reset >w<
 def _app(env, tmp_path):
     app, wcfg = env
     cfg = dataclasses.replace(app.state.cfg, data_dir=str(tmp_path / "data"))
@@ -74,6 +83,9 @@ def _app(env, tmp_path):
     return app, wcfg, cfg
 
 
+# The draft API: viewers can look but not edit; an edit returns the draft's summary, diff and map (with the new VM's
+# address); the saved spec stays untouched; unknown roles, broken YAML and a renamed spec fail; discarding works; the
+# edit is audited once OwO
 def test_draft_api(env, tmp_path):
     app, wcfg, cfg = _app(env, tmp_path)
     with client(app) as op, client(app) as viewer:
@@ -98,12 +110,16 @@ def test_draft_api(env, tmp_path):
         assert db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='range.draft.edit'").fetchone()[0] == 1
 
 
+# WG: the same range with VPN access ^w^
 WG = SPEC + """access:
   wireguard:
     peers: [alice]
 """
 
 
+# Segment and rule edits: a new segment takes a free VLAN/network and stays out of the VPN's reach; renumbering moves
+# hosts (.10 stays .10); a segment with VMs needs with_hosts; removing a rule needs the right index AND ends; and a
+# new segment means the router is replaced UwU
 def test_segment_and_rule_edits():
     spec = parse_spec(WG)
     alloc = {"vlans": {100, 101}, "nets": [__import__("ipaddress").IPv4Network("10.100.0.0/24")], "vlan_range": (100, 3999)}
@@ -136,6 +152,8 @@ def test_segment_and_rule_edits():
     assert acts["rtr"] == "replace"                                                         # a NIC per segment
 
 
+# The segment API: suggest-segment avoids used VLANs; adding a segment and a rule shows on the map; a same-segment
+# rule is refused >w<
 def test_segment_api(env, tmp_path):
     app, wcfg, cfg = _app(env, tmp_path)
     with client(app) as op:

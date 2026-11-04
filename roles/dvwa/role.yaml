@@ -1,9 +1,15 @@
+# *waves a "vulnerable on purpose!" flag* OwO roles/dvwa/role.yaml: metadata for dvwa, the Damn Vulnerable Web
+# Application for security training. Keep it in an isolated segment! ^w^
 description: >
   DVWA (Damn Vulnerable Web Application) - deliberately vulnerable PHP/MySQL app for security training (container;
   log in as admin / password, then "Create / Reset Database"); keep it in an isolated segment
+# Linux only (it runs as a container) UwU
 families: [debian, rhel]
+# The published port comes from the `port` param >w<
 ports_param: port
+# params: one setting OwO
 params:
+  # port: the TCP port it is published on (default 80) *nuzzles*
   port:
     default: 80
     description: TCP port it is published on

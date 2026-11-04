@@ -1,4 +1,9 @@
+// *grabs the verification report* OwO web/src/components/Verification.tsx: a range's VERIFICATION section! ^w^
+// What the last verification found: the connectivity and isolation tests, the security baseline on each host, and how
+// that maps onto compliance framework requirements. Before the first verification it lists the tests that WILL run
+// *wags tail*
 import { when } from "../hooks";
+// when (dates), StateBadge, and the range detail type UwU
 import { StateBadge } from "./ui";
 import type { Detail } from "../pages/RangeDetail";
 
@@ -7,12 +12,14 @@ import type { Detail } from "../pages/RangeDetail";
 // first verification it lists the tests that will run.
 
 /** The tests a verification runs (from the spec, plus the automatic isolation tests). */
+// Tests: the planned tests: name, from, to, protocol/port, expected result, and where the test comes from >w<
 function Tests({ data }: { data: Detail }) {
   return (
     <div className="table-wrap">
       <table>
         <thead><tr><th>Test</th><th>From</th><th>To</th><th>Check</th><th>Expect</th><th>Source</th></tr></thead>
         <tbody>
+          {/* One row per test */}
           {data.tests.map((test) => (
             <tr key={test.name}>
               <td>{test.name}</td><td>{test.from}</td><td>{test.to}</td>
@@ -28,24 +35,30 @@ function Tests({ data }: { data: Detail }) {
 }
 
 /** The last verification: connectivity tests, the security baseline per host, and the compliance mapping. */
+// Verification: the section OwO
 export function Verification({ data }: { data: Detail }) {
   const result = data.verify;
+  // Never verified: the planned tests ^w^
   if (!result) {
     return (
       <div className="card-body stack">
+        {/* A note, then the list */}
         <div className="muted">Not verified yet. These are the tests the verification runs after a build:</div>
         <Tests data={data} />
       </div>
     );
   }
   // the baseline table: one row per control (in first-seen order), one column per host
+  // Collect the controls (rows) and hosts (columns) for the baseline table UwU
   const hosts = Object.keys(result.baseline || {});
   const controls: { control: string; title: string; area: string }[] = [];
   for (const rows of Object.values(result.baseline || {})) {
     for (const row of rows) if (!controls.find((known) => known.control === row.control)) controls.push(row);
   }
+  // The results >w<
   return (
     <div className="card-body stack">
+      {/* Summary: passed/failed, tests, isolation, baseline, and when */}
       <div className="row">
         <StateBadge state={result.ok ? "ok" : "failed"} label={result.ok ? "passed" : "failed"} />
         <span>tests {result.summary.tests_passed}/{result.summary.tests_total}</span>
@@ -53,7 +66,9 @@ export function Verification({ data }: { data: Detail }) {
         <span>· baseline {result.summary.baseline_passed}/{result.summary.baseline_total}</span>
         <span className="muted">· {when(result.finished)}</span>
       </div>
+      {/* The baseline claim (e.g. "aligned with... not a certification") */}
       {result.summary.baseline_claim && <div className="muted small">Baseline results are {result.summary.baseline_claim}.</div>}
+      {/* Every test: name, from, target, expected, observed (with detail), pass/fail */}
       <div className="table-wrap">
         <table>
           <thead><tr><th>Test</th><th>From</th><th>Target</th><th>Expect</th><th>Observed</th><th></th></tr></thead>
@@ -68,6 +83,7 @@ export function Verification({ data }: { data: Detail }) {
           </tbody>
         </table>
       </div>
+      {/* The baseline table: one row per control, one column per host (– = doesn't apply) */}
       {hosts.length > 0 && (
         <div className="table-wrap">
           <table>
@@ -86,6 +102,7 @@ export function Verification({ data }: { data: Detail }) {
           </table>
         </div>
       )}
+      {/* The compliance report, then all tests with their source (folded) */}
       {result.compliance && <Compliance report={result.compliance} />}
       <details className="check-notes">
         <summary>All {data.tests.length} tests with where they come from (the spec or automatic)</summary>
@@ -95,6 +112,7 @@ export function Verification({ data }: { data: Detail }) {
   );
 }
 
+// Evidence / Requirement / ComplianceReport: the compliance report's shape OwO
 interface Evidence { kind: "control" | "design"; title: string; pass: boolean; host?: string; control?: string; check?: string; detail?: string }
 interface Requirement { id: string; title: string; status: "pass" | "partial" | "fail"; evidence: Evidence[]; no_evidence_on?: string[] }
 export interface ComplianceReport {
@@ -103,17 +121,23 @@ export interface ComplianceReport {
     failed: number; not_covered: { id: string; title: string }[] }>;
 }
 
+// STATUS_BADGE: badge colors for requirement statuses ^w^
 const STATUS_BADGE = { pass: "ok", partial: "warn", fail: "bad" } as const;
 
 /** Verification evidence per framework requirement (baseline controls on each host + design checks). */
+// Compliance: per framework (folded unless there's only one): pass/partial/fail/not-covered counts, then each
+// requirement with its evidence, then what VALOR doesn't cover UwU
 function Compliance({ report }: { report: ComplianceReport | { error: string } }) {
   if ("error" in report) return <div className="alert warn small">Compliance report unavailable: {report.error}</div>;
   return (
     <div className="stack">
+      {/* Heading and the claim */}
       <h3 style={{ margin: "8px 0 0" }}>Compliance frameworks</h3>
       <div className="muted small">Results are {report.claim}.</div>
+      {/* One fold per framework */}
       {Object.entries(report.frameworks).map(([id, framework]) => (
         <details key={id} className="framework" open={Object.keys(report.frameworks).length === 1}>
+          {/* The fold's summary: title and counts */}
           <summary>
             <b>{framework.title}</b>
             <span className="badge ok">{framework.passed} pass</span>
@@ -121,11 +145,13 @@ function Compliance({ report }: { report: ComplianceReport | { error: string } }
             {framework.failed > 0 && <span className="badge bad">{framework.failed} fail</span>}
             {framework.not_covered.length > 0 && <span className="badge">{framework.not_covered.length} not covered</span>}
           </summary>
+          {/* About it, then the requirement table */}
           <div className="muted small">{framework.about}</div>
           <div className="table-wrap">
             <table className="compliance">
               <thead><tr><th>Requirement</th><th>Status</th><th>Evidence</th></tr></thead>
               <tbody>
+                {/* One row per requirement: id and title, status, evidence (and hosts without evidence) */}
                 {framework.requirements.map((requirement) => (
                   <tr key={requirement.id}>
                     <td><span className="mono">{requirement.id}</span> <span className="muted">{requirement.title}</span></td>
@@ -139,6 +165,7 @@ function Compliance({ report }: { report: ComplianceReport | { error: string } }
               </tbody>
             </table>
           </div>
+          {/* What VALOR doesn't cover (organizational, or outside a lab) */}
           {framework.not_covered.length > 0 && (
             <details className="check-notes">
               <summary>Not covered by VALOR ({framework.not_covered.length}) - organizational or outside a lab build</summary>
@@ -152,6 +179,7 @@ function Compliance({ report }: { report: ComplianceReport | { error: string } }
 }
 
 /** A requirement's evidence, one line per control (its hosts grouped) or design check. */
+// Evidences: a requirement's evidence, one line per control (its hosts grouped, failing ones marked) or design check >w<
 function Evidences({ items }: { items: Evidence[] }) {
   const groups = new Map<string, { title: string; pass: boolean; hosts: string[]; detail?: string }>();
   for (const item of items) {
@@ -161,8 +189,10 @@ function Evidences({ items }: { items: Evidence[] }) {
     if (item.host) group.hosts.push(item.pass ? item.host : `${item.host} (fail)`);
     groups.set(key, group);
   }
+  // The list OwO
   return (
     <ul className="evidence">
+      {/* ✓/✗, the control's title, the hosts and any detail */}
       {[...groups.values()].map((group, i) => (
         <li key={i} className={group.pass ? "" : "bad"}>
           {group.pass ? "✓" : "✗"} {group.title}

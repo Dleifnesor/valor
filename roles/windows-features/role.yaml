@@ -1,11 +1,18 @@
+# *flips Windows switches* OwO roles/windows-features/role.yaml: metadata for windows-features, the generic way to
+# add Windows roles/features and capabilities, start services and open ports ^w^
 description: >
   Windows Server roles and features (Install-WindowsFeature, e.g. DNS, DHCP, FS-FileServer, Web-Server, RSAT-AD-Tools)
   or, on Windows 11, optional features; plus Windows capabilities (e.g. OpenSSH.Server~~~~0.0.1.0), services to start
   and ports to open
+# category: generic UwU
 category: generic
+# Windows only >w<
 families: [windows]
+# The ports it serves come from the `ports` param OwO
 ports_param: ports
+# params: all optional ^w^
 params:
+  # features: feature names, space separated (reboots when one needs it) *nuzzles*
   features:
     raw: true
     pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$'
@@ -13,16 +20,19 @@ params:
     description: >
       Feature names, space separated - Get-WindowsFeature names on Windows Server, Get-WindowsOptionalFeature names on
       Windows 11; reboots when a feature needs it
+  # capabilities: Add-WindowsCapability names (downloaded during the build) UwU
   capabilities:
     raw: true
     pattern: '^[A-Za-z0-9][A-Za-z0-9._~-]{0,120}$'
     default: ""
     description: Windows capabilities (Add-WindowsCapability names), downloaded from Windows Update during the build
+  # services: services to set to Automatic and start >w<
   services:
     raw: true
     pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$'
     default: ""
     description: Services to set to Automatic and start (e.g. sshd after OpenSSH.Server)
+  # ports: TCP ports to open inbound and wait for OwO
   ports:
     raw: true
     pattern: '^[0-9]{1,5}$'

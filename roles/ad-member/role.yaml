@@ -1,14 +1,22 @@
+# *knocks on the domain's door* OwO roles/ad-member/role.yaml: metadata for ad-member, which JOINS a Windows host
+# to an existing Active Directory domain ^w^
 description: Join a Windows host to an Active Directory domain
+# Windows only UwU
 families: [windows]
+# wait_for: this host is built after the hosts named in `dc` and `dc2`, so the domain controllers are ready >w<
 wait_for: [dc, dc2]
+# params: the settings a spec can give this role OwO
 params:
+  # domain (required): the DNS name of the domain to join ^w^
   domain:
     raw: true
     pattern: '^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$'
     required: true
     description: DNS name of the domain
+  # dc (required): a domain controller host; its address becomes this host's DNS server (AD needs DC DNS!) UwU
   dc:
     required: true
     description: Host name of a domain controller (its DNS server is used)
+  # dc2: an optional second domain controller, used as the second DNS server *nuzzles*
   dc2:
     description: Host name of a second domain controller (second DNS server)

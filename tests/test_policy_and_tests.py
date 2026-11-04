@@ -1,9 +1,14 @@
+# *sniffs every firewall rule* OwO tests/test_policy_and_tests.py: tests for the ROUTER FIREWALL and the automatic
+# connectivity tests! ^w^ pytest runs every function whose name starts with test_; `assert` lines must hold *wags tail*
 from valor.netpolicy import render
 from valor.spec import effective_tests
 
+# IFMAP: which router interface each segment of the example range uses UwU
 IFMAP = {"dmz": "eth1", "lan": "eth2"}
 
 
+# The final policy: forward drops by default, allows exactly the DMZ -> LAN database flow, gives the DMZ (only) internet
+# but never to private addresses, masquerades the uplink, and exposes nothing on the router itself >w<
 def test_final_policy(ref_spec):
     r = render(ref_spec, IFMAP, "eth0", build_egress=False, spec_id="x")
     fwd = r.split("chain forward")[1].split("chain output")[0]
@@ -17,11 +22,14 @@ def test_final_policy(ref_spec):
     assert "policy drop" in inp and "tcp dport" not in inp  # nothing exposed on the router
 
 
+# The BUILD variant gives every segment (even the LAN) temporary internet OwO
 def test_build_policy_opens_egress_for_all(ref_spec):
     r = render(ref_spec, IFMAP, "eth0", build_egress=True, spec_id="x")
     assert 'iifname "eth2" oifname "eth0"' in r and "temporary build egress" in r
 
 
+# The automatic tests for the example range: the allowed flow open, SSH blocked both ways, internet only from the DMZ;
+# exactly six tests ^w^
 def test_auto_tests_for_reference(ref_spec):
     tests = {(t["from"], t["to"], t["port"], t["expect"]) for t in effective_tests(ref_spec)}
     assert ("web", "db", 5432, "open") in tests
@@ -33,6 +41,8 @@ def test_auto_tests_for_reference(ref_spec):
     assert len(tests) == 6
 
 
+# The router script SAVES only the final rules (a reboot loads those); build rules go to /run with a revert timer;
+# without build rules the old revert timer is stopped UwU
 def test_build_egress_is_temporary_and_reverts():
     from valor.netpolicy import REVERT_AFTER, router_script
     final, build = "table inet valor { # FINAL\n}\n", "table inet valor { # BUILD\n}\n"
@@ -44,6 +54,8 @@ def test_build_egress_is_temporary_and_reverts():
     assert "systemctl stop valor-build-revert.timer" in plain and "BUILD" not in plain
 
 
+# Verify retries an "open" test that came back closed (the service may still be starting) but never retries a
+# "closed" one. Fakes count the probes: the port-80 service answers on the 2nd try; 81 never does >w<
 def test_verify_looks_again_before_calling_an_open_port_closed(cfg, ref_spec, monkeypatch):
     """A service on a VM the build just (re)started may not listen yet: open tests are retried, closed ones not."""
     from valor import verify as V

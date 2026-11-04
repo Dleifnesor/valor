@@ -1,14 +1,21 @@
+# *delivers letters* OwO roles/mail-server/role.yaml: metadata for mail-server (Postfix), which accepts mail for
+# the range's domain and delivers it to local mailboxes ^w^
 description: >
   Mail server (Postfix) accepting mail for the range's domain from range hosts and delivering it to local mailboxes
   (/var/mail/<user>)
+# Linux only UwU
 families: [debian, rhel]
+# Serves SMTP on port 25 >w<
 ports: [25]
+# params: all optional OwO
 params:
+  # domain: the mail domain (default <range>.lab), checked against a dotted-name pattern ^w^
   domain:
     raw: true
     pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
     default: ""
     description: Mail domain (default <range name>.lab)
+  # allow_from: hosts or segments that may send mail through it (default every private network) *wags tail*
   allow_from:
     default: ""
     description: Hosts or segments that may send mail through it (default every private network)

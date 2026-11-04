@@ -1,4 +1,8 @@
+// *looks in the mirror* OwO web/src/pages/Account.tsx is YOUR account page! ^w^
+// It shows your details, lets local accounts change their password, and lets anyone make fresh MFA recovery codes
+// (after typing their password again) *wags tail*
 import { FormEvent, useState } from "react";
+// post + ApiError (the API), Me (who's signed in), when (dates), Card/ErrorBox (UI pieces) UwU
 import { ApiError, post } from "../api";
 import { Me } from "../types";
 import { when } from "../hooks";
@@ -6,8 +10,11 @@ import { Card, ErrorBox } from "../components/ui";
 
 // The signed-in person's own account: their details, a new password (local accounts) and new recovery codes.
 
+// Account: `me` = the signed-in session; onChanged = tell the app about the updated session (after a password
+// change) >w<
 export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) => void }) {
   const user = me.user;
+  // State: current + new password, a success message, the last error, the password for new codes, and the new codes OwO
   const [cur, setCur] = useState("");
   const [next, setNext] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -15,6 +22,7 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) =>
   const [pw2, setPw2] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
 
+  // change(): change the password; the server signs out your OTHER sessions ^w^
   const change = async (e: FormEvent) => {
     e.preventDefault();
     setErr(null); setMsg(null);
@@ -24,6 +32,7 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) =>
       setMsg("Password changed. Other sessions were signed out.");
     } catch (x) { setErr(x as ApiError); }
   };
+  // regen(): make new recovery codes (the old ones stop working) UwU
   const regen = async (e: FormEvent) => {
     e.preventDefault();
     setErr(null);
@@ -33,8 +42,10 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) =>
     } catch (x) { setErr(x as ApiError); }
   };
 
+  // Two columns: the profile on the left, the forms on the right >w<
   return (
     <div className="grid cols-2" style={{ alignItems: "start" }}>
+      {/* The profile: a definition list of your account's facts OwO */}
       <Card title="Profile">
         <dl className="kv">
           <dt>Username</dt><dd>{user.username}</dd>
@@ -46,9 +57,12 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) =>
           <dt>Last sign-in</dt><dd>{when(user.last_login_at)}</dd>
         </dl>
       </Card>
+      {/* The right column ^w^ */}
       <div className="stack">
+        {/* Only local accounts change their password here (directory accounts do it in the directory) UwU */}
         {user.source === "local" && (
           <Card title="Change password">
+            {/* The form: current password, new password (12+ chars), and the button (disabled until both look OK) >w< */}
             <form className="stack" onSubmit={change}>
               <label className="field">Current password<input name="current-password" type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} required /></label>
               <label className="field">New password <span className="hint">12 characters or more</span>
@@ -58,6 +72,7 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) =>
             </form>
           </Card>
         )}
+        {/* Recovery codes: freshly made codes are shown ONCE; otherwise the form to make new ones OwO */}
         <Card title="Recovery codes">
           {codes ? (
             <div className="stack">
@@ -72,6 +87,7 @@ export function Account({ me, onChanged }: { me: Me; onChanged: (session: Me) =>
             </form>
           )}
         </Card>
+        {/* The success message and any error ^w^ *wags tail* */}
         {msg && <div className="alert ok">{msg}</div>}
         <ErrorBox error={err} />
       </div>

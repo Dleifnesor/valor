@@ -1,21 +1,31 @@
 #!/usr/bin/env bash
+# *polishes the little padlock* OwO appliance/valor-tls manages the web UI's HTTPS CERTIFICATE! ^w^
+# Installed as /opt/valor/bin/valor-tls. Setup runs `ensure`; a daily timer runs `renew`. With VALOR's own CA it
+# creates the CA once and (re)issues the server certificate when needed; with your own certificate it only warns
+# before it expires. The original header below has the details *wags tail*
 # valor-tls: the web UI's certificate.
 #   valor-tls ensure valor-ca|own HOSTNAME DOMAIN   (setup)     valor-tls renew   (daily timer)
 #
 # valor-ca: VALOR keeps its own CA (EC P-256, 10 years) and issues the server certificate from it (397 days,
 # the IP addresses and names of this VM). The certificate is reissued 30 days before it expires and whenever the
 # VM's addresses change. own: your certificate is used as is; VALOR only warns before it expires.
+# Strict mode; umask 077 = every file it creates is private unless made public on purpose UwU
 set -euo pipefail
 umask 077
+# D = the TLS folder; WEB = the web root (where the public CA certificate is offered for download) >w<
 D=/etc/valor/tls
 WEB=/opt/valor/web
 
+# settings(): load the remembered mode/host/domain (for renew) OwO
 settings() { [[ -f $D/settings ]] && source "$D/settings" || true; }
 
+# addresses(): this VM's global IP addresses, one per line ^w^
 addresses() {
   ip -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | sort -u
 }
 
+# ensure_ca(): make VALOR's CA once: an EC P-256 key and a 10-year self-signed CA certificate (may only sign
+# server certificates: pathlen 0) UwU
 ensure_ca() {
   [[ -f $D/ca.key && -f $D/ca.crt ]] && return 0
   openssl ecparam -name prime256v1 -genkey -noout -out "$D/ca.key"
@@ -27,6 +37,8 @@ ensure_ca() {
   echo "created VALOR CA"
 }
 
+# needs_new(): return 0 ("yes, issue a new one") when there's no certificate, it expires within 30 days, an address
+# of this VM is missing from it (compared in both IPv6 spellings), or the host name is missing >w<
 needs_new() {
   [[ -f $D/server.crt && -f $D/server.key ]] || return 0
   openssl x509 -in "$D/server.crt" -noout -checkend $((30 * 86400)) >/dev/null || return 0
@@ -38,6 +50,8 @@ needs_new() {
   return 1
 }
 
+# issue(): a new server certificate: a fresh key, a request, and a 397-day certificate signed by the CA for the host
+# name (and FQDN) and every address; then install key + full chain and say what it covers OwO
 issue() {
   local tmp; tmp=$(mktemp -d)
   local sans="DNS:$HOST_NAME"
@@ -62,14 +76,17 @@ EOF
   echo "issued server certificate for $sans"
 }
 
+# publish_ca(): offer the CA certificate at /ca.crt so browsers can be told to trust it ^w^
 publish_ca() {
   if [[ -f $D/ca.crt && -d $WEB ]]; then install -m 0644 "$D/ca.crt" "$WEB/ca.crt"; fi
 }
 
+# reload_nginx(): reload nginx (after a config test) if it runs UwU
 reload_nginx() {
   if systemctl is-active -q nginx; then nginx -t -q && systemctl reload nginx; fi
 }
 
+# The command: `ensure MODE HOST DOMAIN` remembers the settings; `renew` loads them; anything else = usage >w<
 case "${1:-}" in
   ensure)
     MODE=$2; HOST_NAME=$3; DOMAIN=${4:-}
@@ -82,10 +99,12 @@ case "${1:-}" in
     echo "usage: valor-tls ensure valor-ca|own HOSTNAME DOMAIN | renew" >&2; exit 2 ;;
 esac
 
+# VALOR's CA: make sure the CA exists and is published, then issue a new certificate if needed (and reload nginx) OwO
 if [[ $MODE == valor-ca ]]; then
   ensure_ca
   publish_ca
   if needs_new; then issue; reload_nginx; else echo "server certificate is current"; fi
+# Your own certificate: it must be installed; no CA download is offered; warn when it expires within 14 days ^w^
 else
   [[ -f $D/server.crt && -f $D/server.key ]] || { echo "TLS_MODE=own but no certificate installed" >&2; exit 1; }
   rm -f "$WEB/ca.crt"

@@ -1,7 +1,13 @@
+# *adjusts tiny keyboard* OwO roles/dev-tools/role.yaml: metadata for dev-tools, developer workstation basics
+# (git, build tools, Python venvs, tmux, vim) ^w^
 description: Developer workstation basics (git, build tools, Python virtual environments, tmux, vim)
+# Linux only UwU
 families: [debian, rhel]
+# Serves no ports >w<
 ports: []
+# params: one optional setting OwO
 params:
+  # extra_packages: more packages to install, space separated *wags tail*
   extra_packages:
     raw: true
     pattern: '^[a-z0-9][a-z0-9.+-]+$'

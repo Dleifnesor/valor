@@ -1,3 +1,7 @@
+# *adjusts tiny reading glasses* OwO baselines/frameworks/frameworks.yaml: the compliance MAP! valor/compliance.py
+# reads it (as parsed YAML) to turn VALOR's evidence (baseline controls on each host, plus checks of the range's
+# design) into a report per framework ^w^ *wags tail*
+# The notes below come from the original authors and explain the rules UwU
 # Compliance frameworks VALOR can build toward, and which of their requirements VALOR's evidence supports.
 #
 # - `controls` maps baseline control ids (baselines/*.yaml) to requirement ids per framework family.
@@ -10,17 +14,22 @@
 #   NIST SP 800-53 ids are Rev. 5; `low` lists the ids selected for the Low baseline in SP 800-53B.
 #   CIS is reported by theme only (no benchmark section numbers).
 
+# *lines up the frameworks* frameworks: every framework a spec's `compliance:` may name. Each has a title, a short
+# "about", the requirement `family` its ids come from, and the baseline `profile` VALOR applies for it >w<
 frameworks:
+  # NIST 800-171 (CUI protection, assessed by CMMC Level 2) uses the stricter linux-moderate profile OwO
   nist-800-171:
     title: NIST SP 800-171 Rev. 2
     about: Protecting Controlled Unclassified Information (CUI) in nonfederal systems; CMMC Level 2 assesses it
     family: nist-800-171
     profile: linux-moderate
+  # NIST 800-53 Moderate: federal systems, moderate impact ^w^
   nist-800-53-moderate:
     title: NIST SP 800-53 Rev. 5 - Moderate baseline
     about: Security and privacy controls for federal information systems, moderate-impact baseline (SP 800-53B)
     family: nist-800-53
     profile: linux-moderate
+  # NIST 800-53 Low: same family; `only` limits the report to the ids in the Low baseline UwU
   nist-800-53-low:
     title: NIST SP 800-53 Rev. 5 - Low baseline
     about: The low-impact baseline (SP 800-53B); VALOR applies the moderate profile, which exceeds it
@@ -28,22 +37,28 @@ frameworks:
     profile: linux-moderate
     only: [AC-2, AC-7, AC-8, AC-17, AU-2, AU-4, AU-6, AU-8, AU-9, AU-12, CM-6, CM-7, IA-2, IA-5, IA-5(1),
            SC-7, SI-2, SI-3]
+  # PCI DSS: protecting payment card data *nuzzles*
   pci-dss:
     title: PCI DSS v4.0.1
     about: Payment card industry data security standard - protecting cardholder data environments (CDE)
     family: pci-dss
     profile: linux-moderate
+  # HIPAA: protecting electronic health information >w<
   hipaa:
     title: HIPAA Security Rule (45 CFR 164.308, 164.312)
     about: Administrative and technical safeguards for electronic protected health information (ePHI)
     family: hipaa
     profile: linux-moderate
+  # CIS Level 1: the lighter ubuntu-l1 profile, reported by theme only OwO
   cis-l1:
     title: CIS Benchmarks Level 1 (themes)
     about: Baseline hardening themes of the CIS Benchmarks; reported by theme, without benchmark section numbers
     family: cis
     profile: ubuntu-l1
 
+# *reads the rulebook aloud* requirements: each family's requirement ids and their short titles, which the
+# report shows next to the evidence. Ids are quoted when YAML would otherwise read them as numbers ^w^
+# "(not covered)" marks requirements VALOR can never prove in a lab (like MFA or FIPS crypto) UwU
 requirements:
   nist-800-171:
     "3.1.1": Limit system access to authorized users, processes and devices
@@ -71,6 +86,7 @@ requirements:
     "3.13.11": Employ FIPS-validated cryptography to protect the confidentiality of CUI (not covered)
     "3.14.1": Identify, report and correct system flaws in a timely manner
     "3.14.2": Provide protection from malicious code at designated locations
+  # NIST 800-53 control ids (enhancements in parentheses, like AC-6(9)) >w<
   nist-800-53:
     AC-2: Account management
     AC-6: Least privilege
@@ -98,6 +114,7 @@ requirements:
     SI-2: Flaw remediation
     SI-3: Malicious code protection
     SI-16: Memory protection
+  # PCI DSS v4.0.1 requirement ids OwO
   pci-dss:
     "1.3.1": Inbound traffic to the CDE is restricted to only traffic that is necessary
     "1.3.2": Outbound traffic from the CDE is restricted to only traffic that is necessary
@@ -117,6 +134,7 @@ requirements:
     "10.3.2": Audit log files are protected to prevent modification by individuals
     "10.3.3": Audit log files are promptly backed up to a secure, central, internal log server
     "10.6.1": System clocks and time are synchronized using time-synchronization technology
+  # HIPAA Security Rule sections ^w^
   hipaa:
     "164.308(a)(5)(ii)(B)": Protection from malicious software
     "164.308(a)(5)(ii)(C)": Log-in monitoring
@@ -128,6 +146,8 @@ requirements:
     "164.312(e)(1)": Transmission security
     "164.312(e)(2)(i)": Integrity controls (in transmission)
 
+# *connects the dots* controls: each baseline control id (from baselines/*.yaml) -> the requirement ids it is
+# evidence for, per family. A family missing from a line means that control proves nothing for it UwU
 # baseline control id -> requirement ids per framework family
 controls:
   # ubuntu-l1 / linux-moderate
@@ -168,19 +188,24 @@ controls:
   audit-policy: {nist-800-171: ["3.1.7", "3.3.1", "3.3.2"], nist-800-53: [AU-2, AU-12, AC-6(9)], pci-dss: ["10.2.1", "10.2.1.2"], hipaa: ["164.312(b)"]}
   security-log-size: {nist-800-171: ["3.3.1"], nist-800-53: [AU-4]}
 
+# *looks at the big picture* design: checks of the range's DESIGN instead of a host's settings. Each has a title
+# (shown in the report) and requirement ids per family >w<
 # checks of the range's design -> requirement ids
 design:
+  # deny-by-default: the router only allows the policy's flows, proven by the isolation tests OwO
   deny-by-default:
     title: Segments are separated by the range router, which denies traffic by default and allows only the policy's flows (isolation tests pass)
     nist-800-171: ["3.13.1", "3.13.6"]
     nist-800-53: [SC-7, SC-7(5)]
     pci-dss: ["1.3.1"]
     hipaa: ["164.312(a)(1)"]
+  # scope-no-internet: the segments in compliance.scope can't reach the internet ^w^
   scope-no-internet:
     title: The segments holding the regulated data (compliance.scope) have no internet access
     nist-800-171: ["3.13.1"]
     nist-800-53: [SC-7]
     pci-dss: ["1.3.2"]
+  # central-logging: every other Linux host sends its logs to a syslog-server *wags tail*
   central-logging:
     title: A central log server (syslog-server) receives the logs of every other Linux host (syslog-client)
     nist-800-171: ["3.3.1"]

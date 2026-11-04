@@ -1,9 +1,15 @@
+# *sips juice* OwO roles/juice-shop/role.yaml: metadata for juice-shop, OWASP's deliberately insecure web shop for
+# security training. Keep it in an isolated segment! ^w^
 description: >
   OWASP Juice Shop - a deliberately insecure web shop for security training (container); keep it in an isolated
   segment
+# Linux only (a container) UwU
 families: [debian, rhel]
+# The published port comes from the `port` param >w<
 ports_param: port
+# params: one setting OwO
 params:
+  # port: the TCP port it is published on (default 3000) *nuzzles*
   port:
     default: 3000
     description: TCP port it is published on

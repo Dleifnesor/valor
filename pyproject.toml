@@ -1,7 +1,10 @@
+# OwO *labels the package box* pyproject.toml: VALOR as a Python package! ^w^
+# Used for development and the tests (the VALOR VM itself installs from appliance/requirements.lock) *wags tail*
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# Name, version (kept equal to valor.__version__), description, Python 3.11+, and the engine's dependencies UwU
 [project]
 name = "valor"
 version = "0.2.0.dev0"
@@ -9,20 +12,24 @@ description = "V.A.L.O.R. - declarative, verified test ranges on Proxmox VE, wit
 requires-python = ">=3.11"
 dependencies = ["proxmoxer>=2.0", "requests>=2.31", "pydantic>=2.6", "PyYAML>=6.0"]
 
+# Extras: "web" for the web service, "dev" for the tests >w<
 [project.optional-dependencies]
 web = ["fastapi>=0.115", "uvicorn>=0.30", "websockets>=13", "argon2-cffi>=23.1", "cryptography>=42", "segno>=1.6", "ldap3>=2.9"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
+# The two commands: `valor` (the CLI) and `valor-web` (services and admin commands) OwO
 [project.scripts]
 valor = "valor.cli:main"
 valor-web = "valor.web.cli:main"
 
+# Which packages to include, and the spec reference file that goes with them ^w^
 [tool.setuptools]
 packages = ["valor", "valor.ai", "valor.agent", "valor.web", "valor.web.chats"]
 
 [tool.setuptools.package-data]
 valor = ["spec-reference.md"]
 
+# pytest: tests live in tests/; hide a noisy deprecation warning from ldap3 UwU
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning:ldap3.*"]

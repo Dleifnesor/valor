@@ -1,17 +1,22 @@
+# OwO *does the same for GitLab* ci/gitlab-ci.yml: an EXAMPLE GitLab pipeline! ^w^
+# Build a throwaway range, verify it, always tear it down. The original notes follow *wags tail*
 # Example GitLab pipeline: build a disposable range, verify it, always tear it down.
 # Requires a shell runner inside the VALOR VM (tag "valor") running as the `valor` user, the account the engine runs
 # as (it alone can read the Proxmox API token: treat the runner like an administrator).
 # Spec file name == range name (ranges/web2tier.yaml -> range "web2tier").
+# Which range, and where the valor command is UwU
 variables:
   RANGE: web2tier
   VALOR: /opt/valor/bin/valor
 
+# Three stages, on the runner tagged "valor", one job at a time (resource_group) >w<
 stages: [validate, build, teardown]
 
 default:
   tags: [valor]
   resource_group: valor-engine          # one infrastructure job at a time
 
+# Copy the specs in, validate and plan OwO
 publish-and-validate:
   stage: validate
   script:
@@ -19,6 +24,7 @@ publish-and-validate:
     - $VALOR validate "$RANGE.yaml"
     - $VALOR plan "$RANGE.yaml"
 
+# Build and verify; keep the journal as an artifact even when it fails ^w^
 apply-and-verify:
   stage: build
   script:
@@ -29,6 +35,7 @@ apply-and-verify:
     when: always
     paths: [journal.md]
 
+# Always destroy the range at the end UwU
 destroy:
   stage: teardown
   when: always

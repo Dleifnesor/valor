@@ -1,7 +1,13 @@
+# *sharpens claws* OwO roles/attacker-tools/role.yaml: metadata for attacker-tools, a penetration-testing toolbox
+# (nmap, netcat, tcpdump, curl, dig) for an attacker host ^w^
 description: Penetration-testing toolbox for an attacker host (nmap, netcat, tcpdump, curl, dig)
+# Linux only: Debian family and RHEL family UwU
 families: [debian, rhel]
+# ports: [] means it serves nothing, so allow_from in the editor adds no policy rules for it >w<
 ports: []
+# params: one optional setting OwO
 params:
+  # extra_packages: more packages, space separated; raw, and each one must look like a package name *pounces*
   extra_packages:
     raw: true
     pattern: '^[a-z0-9][a-z0-9.+-]+$'

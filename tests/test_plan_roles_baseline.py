@@ -1,5 +1,8 @@
+# *tests the planner, roles and hardening* OwO tests/test_plan_roles_baseline.py: tests for PLANS, ROLES, BASELINES
+# and friends! ^w^ *wags tail*
 import copy
 import subprocess
+# copy, subprocess (bash -n), Path, pytest, and the modules under test UwU
 from pathlib import Path
 
 import pytest
@@ -10,15 +13,19 @@ from valor.errors import ValorError
 from valor.plan import _classify, desired_state
 from valor.roles import build_script, load_role, role_env
 
+# The repo root >w<
 ROOT = Path(__file__).resolve().parent.parent
 
 
+# vm_for(): a fake existing VM matching a desired state (optionally not converged, stopped, or from another spec) OwO
 def vm_for(d, conv=True, status="running", spec="S"):
     meta = {"host": d.host, "hw_spec": copy.deepcopy(d.hw), "hw": d.hw_hash, "conv": d.conv_hash if conv else None,
             "spec": spec}
     return VMState(4000, f"x-{d.host}", status, ["valor"], meta)
 
 
+# Desired state: router first (uplink by DHCP, one NIC per segment), each host on its VLAN with its address and
+# gateway, and the fingerprints are deterministic ^w^
 def test_desired_state(cfg, ref_spec):
     ds = desired_state(cfg, ref_spec)
     assert [d.host for d in ds] == ["rtr", "web", "db"]
@@ -28,6 +35,8 @@ def test_desired_state(cfg, ref_spec):
     assert desired_state(cfg, ref_spec)[1].conv_hash == ds[1].conv_hash    # deterministic
 
 
+# _classify(): create / keep / restamp / converge / start / update (memory) / replace (another VLAN, or a smaller
+# disk: disks never shrink) UwU
 def test_classify(cfg, ref_spec):
     d = desired_state(cfg, ref_spec)[1]
     assert _classify(d, None)[0] == "create"
@@ -46,11 +55,14 @@ def test_classify(cfg, ref_spec):
     assert _classify(d, v, "S")[0] == "replace"            # disks never shrink
 
 
+# VM metadata survives a round trip through the notes >w<
 def test_metadata_roundtrip():
     meta = {"range": "r", "host": "web", "conv": "abc", "hw_spec": {"nics": []}}
     assert parse_meta(render_description(meta, "123")) == meta
 
 
+# A role's environment: host and segment names become addresses, defaults fill in, unknown params fail, and the full
+# script passes `bash -n` OwO
 def test_role_env_and_script(ref_spec):
     role = load_role(ROOT / "roles", "postgresql")
     db = ref_spec.host("db")
@@ -63,6 +75,8 @@ def test_role_env_and_script(ref_spec):
     assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
 
 
+# Names that look like hosts/segments stay NAMES where the role means a name (a real bug once), and values a role
+# would reject fail at spec-check time ^w^
 def test_names_are_not_turned_into_addresses(ref_spec):
     """A share or database named like a host or segment stays a name (a share 'cui' in a segment 'cui' became
     '10.171.0.0/24'); names the role would reject fail the spec check, not the build."""
@@ -81,6 +95,8 @@ def test_names_are_not_turned_into_addresses(ref_spec):
         assert e.value.code == "role_param_invalid", role
 
 
+# The ubuntu-l1 bundle: 10 controls, router-only/non-router controls placed right, no pipefail, subshell bodies,
+# valid bash in every mode, and results parsed (with "fixed" when it went fail -> pass) UwU
 def test_baseline_bundle():
     b = load_baseline(ROOT / "baselines", "ubuntu-l1")
     assert len(b.controls) == 10
@@ -94,6 +110,8 @@ def test_baseline_bundle():
     assert [(r["control"], r["fixed"]) for r in rows] == [("ssh-root-login", True), ("tmp-sticky-bit", False)]
 
 
+# Attaching an ISO plans an in-place update WITHOUT a reboot, older specs keep their hashes, and path-like ISO names
+# are refused >w<
 def test_iso_attachment_plans_without_reboot(cfg):
     from valor.plan import _classify, desired_state
     from valor.spec import canonical, normalize, parse_spec
@@ -117,6 +135,8 @@ hosts:
         parse_spec(base.replace("address: 10.66.0.10}", "address: 10.66.0.10, iso: ../../etc/passwd}"))
 
 
+# `install: iso` hosts: only they carry the install marker; the kickstart has the static network, locked root, the
+# guest agent, the marker, extra repos and NO secrets; the OEMDRV ISO is built OwO
 def test_install_from_iso_plan_and_kickstart(cfg, tmp_path):
     from valor import kickstart
     from valor.plan import desired_state
@@ -146,6 +166,7 @@ hosts:
     assert out.stat().st_size > 10_000 and b"OEMDRV" in out.read_bytes()[:40_000]
 
 
+# `nested: true`: hash-compatible for older specs, and turning it on is an update that needs a reboot ^w^
 def test_nested_virtualization_option(cfg):
     from valor.cluster import VMState
     from valor.plan import _classify, desired_state
@@ -166,6 +187,8 @@ hosts:
     assert action == "update" and "reboot required" in reasons
 
 
+# The ISO 9660 writer: whole sectors, the CD001 and label bytes in the right place, 8.3 names enforced, and (if
+# isoinfo is installed) the files read back exactly UwU
 def test_iso9660_writer(tmp_path):
     import shutil
     import subprocess
@@ -183,6 +206,8 @@ def test_iso9660_writer(tmp_path):
         assert data == b"a" * 5000
 
 
+# apt_settle stops apt-daily and waits for the lock before every `apt-get update` in roles, baselines and the router
+# (stub commands record what happens) >w<
 def test_apt_settles_before_every_update(tmp_path):
     """A clone's overdue apt-daily refresh holds the package-list lock at boot (apt-get update does not wait):
     VALOR stops it and waits for other holders before its own update - in roles, baselines and on the router."""
@@ -208,6 +233,8 @@ def test_apt_settles_before_every_update(tmp_path):
         assert "apt_settle()" in script, where
 
 
+# nginx as a reverse proxy (addresses resolved, bad ports refused), and the classic "10.340.0.0" octet mistake gets
+# a helpful message OwO
 def test_nginx_reverse_proxy_and_address_errors(ref_spec):
     role = load_role(ROOT / "roles", "nginx")
     env = role_env(ref_spec, ref_spec.host("web"), role, {"proxy_to": "db", "proxy_port": 8080})
@@ -225,6 +252,7 @@ def test_nginx_reverse_proxy_and_address_errors(ref_spec):
     assert "not 10.340.0.0/24" in msgs["segments.0.cidr"] and "0-255" in msgs["hosts.0.address"]
 
 
+# write_file with unchanged content must not end a `set -e` script (a real bug once) ^w^
 def test_write_file_with_unchanged_content_does_not_end_a_script(tmp_path):
     """A model-written custom script re-run on a host it already fixed: write_file found nothing to change, returned 1
     and set -e ended the script ("role 'custom-script' failed (exit 1)" with no message)."""

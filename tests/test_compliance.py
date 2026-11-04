@@ -1,5 +1,8 @@
+# *checks the compliance homework* OwO tests/test_compliance.py: tests for COMPLIANCE frameworks (summary in the
+# docstring)! ^w^
 """Compliance frameworks: profile inheritance, the framework mapping, design checks, validation and the report."""
 
+# Path, pytest, yaml, and the modules under test UwU
 from pathlib import Path
 
 import pytest
@@ -10,11 +13,15 @@ from valor.baseline import baseline_for, load_baseline
 from valor.errors import ValorError
 from valor.spec import FRAMEWORKS, canonical, normalize, parse_spec
 
+# ValidatePVE: a fake Proxmox client from test_windows.py >w<
 from test_windows import ValidatePVE
 
+# The repo and its baselines folder OwO
 ROOT = Path(__file__).resolve().parent.parent
 BASELINES = ROOT / "baselines"
 
+# SPEC: a range template with {placeholders} for the baseline and the compliance section (doubled braces are literal
+# braces for str.format): a DMZ, a regulated "cui" segment, a log server, a file server and a Windows DC ^w^
 SPEC = """
 name: cui
 baseline: {baseline}
@@ -38,10 +45,13 @@ hosts:
 """
 
 
+# spec_of(): fill in the template and parse it UwU
 def spec_of(baseline="linux-moderate", comp="compliance: {frameworks: [nist-800-171, pci-dss], scope: [cui]}"):
     return normalize(parse_spec(SPEC.format(baseline=baseline, compliance=comp)), "ubuntu-24.04")
 
 
+# Profiles: linux-moderate extends ubuntu-l1 (and adds lockout, password quality, audit rules, time sync) with a
+# Windows twin; editing the PARENT changes the child's digest (hosts re-converge); a profile extending itself fails >w<
 def test_profiles_extend_and_digests_follow_the_parent(tmp_path):
     l1, mod = load_baseline(BASELINES, "ubuntu-l1"), load_baseline(BASELINES, "linux-moderate")
     ids = [c.id for c in mod.controls]
@@ -62,6 +72,7 @@ def test_profiles_extend_and_digests_follow_the_parent(tmp_path):
         load_baseline(tmp_path, "loop")
 
 
+# Windows hosts get the profile's Windows twin; "none" means none OwO
 def test_windows_hosts_get_the_profiles_windows_counterpart():
     assert baseline_for(BASELINES, "linux-moderate", "windows").id == "windows-moderate"
     assert baseline_for(BASELINES, "ubuntu-l1", "windows").id == "windows-l1"
@@ -69,6 +80,8 @@ def test_windows_hosts_get_the_profiles_windows_counterpart():
     assert baseline_for(BASELINES, "none", "windows") is None
 
 
+# The framework mapping only names real controls and requirement ids, every framework's profile exists, and the
+# required profile is the weakest that covers all chosen frameworks ^w^
 def test_mapping_is_consistent_with_the_baselines():
     m = compliance.mapping(BASELINES)
     controls = {c.id for name in ("linux-moderate", "windows-moderate")
@@ -88,6 +101,8 @@ def test_mapping_is_consistent_with_the_baselines():
     assert compliance.required_profile(BASELINES, ["cis-l1", "hipaa"]) == "linux-moderate"
 
 
+# The compliance field: parsed; older specs keep their hash; unknown/duplicate frameworks and unknown scope segments
+# fail UwU
 def test_spec_field_and_hash_stability():
     s = spec_of()
     assert s.compliance.frameworks == ["nist-800-171", "pci-dss"] and s.compliance.scope == ["cui"]
@@ -101,9 +116,13 @@ def test_spec_field_and_hash_stability():
     assert "unknown segment 'nowhere'" in str(e.value.details)
 
 
+# FAMILIES: each host's OS family >w<
 FAMILIES = {"web": "debian", "files": "debian", "logs": "rhel", "dc": "windows"}
 
 
+# Design checks: deny-by-default and scope-off-internet pass; central logging fails (the file server doesn't forward;
+# the Windows DC isn't expected to); with test results, deny-by-default follows the isolation tests; a regulated DMZ
+# fails OwO
 def test_design_checks():
     checks = {d["id"]: d for d in compliance.design_checks(spec_of(), None, FAMILIES)}
     assert checks["deny-by-default"]["pass"] and checks["scope-no-internet"]["pass"]
@@ -116,6 +135,7 @@ def test_design_checks():
     assert not {x["id"]: x for x in compliance.design_checks(leak, None, FAMILIES)}["scope-no-internet"]["pass"]
 
 
+# Plan-time warnings name the affected requirement ids, warn about a missing scope, and stay quiet without frameworks ^w^
 def test_design_warnings_name_the_requirements():
     warning = compliance.design_warnings(BASELINES, spec_of(), FAMILIES)
     assert len(warning) == 1 and "nist-800-171 3.3.1" in warning[0]["message"] and "pci-dss 10.3.3" in warning[0]["message"]
@@ -124,11 +144,14 @@ def test_design_warnings_name_the_requirements():
     assert compliance.design_warnings(BASELINES, spec_of(comp=""), FAMILIES) == []
 
 
+# rows(): fake baseline results (a theme for ssh controls; listed ones fail) UwU
 def rows(*controls, fail=()):
     return [{"control": c, "title": c, "theme": "CIS Level 1 - SSH" if c.startswith("ssh") else None,
              "after": "fail" if c in fail else "pass"} for c in controls]
 
 
+# The report: the claim sentence; fail (a host failed), partial (a host has no evidence), pass via design evidence;
+# what's not covered; natural order; the 800-53 Low subset; CIS by theme; and no report without frameworks >w<
 def test_report_statuses_and_coverage():
     s = spec_of(comp="compliance: {frameworks: [nist-800-171, nist-800-53-low, cis-l1], scope: [cui]}")
     base = {"rtr": rows("ssh-root-login"),
@@ -153,10 +176,13 @@ def test_report_statuses_and_coverage():
     assert compliance.report(BASELINES, spec_of(comp=""), base, tests, FAMILIES) is None
 
 
+# nist_title(): a requirement's title from the mapping file OwO
 def nist_title(rid):
     return yaml.safe_load((BASELINES / "frameworks" / "frameworks.yaml").read_text())["requirements"]["nist-800-171"][rid]
 
 
+# Validation demands the framework's profile, accepts it when set, and refuses a Windows profile as the range
+# baseline; the logging gap shows as a warning ^w^
 @pytest.mark.parametrize("baseline, comp, error", [
     ("ubuntu-l1", "compliance: {frameworks: [nist-800-171], scope: [cui]}", "needs baseline linux-moderate"),
     ("linux-moderate", "compliance: {frameworks: [nist-800-171], scope: [cui]}", None),

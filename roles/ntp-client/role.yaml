@@ -1,9 +1,15 @@
+# *checks its tiny watch* OwO roles/ntp-client/role.yaml: metadata for ntp-client, which takes this host's time
+# from the range's time server ^w^
 description: >
   Take this host's time from the range's time server (pair with ntp-server; allow udp/123 to it). On Windows the
   setting overrides the domain hierarchy.
+# Runs on Debian, RHEL and Windows UwU
 families: [debian, rhel, windows]
+# Serves nothing >w<
 ports: []
+# params: one required setting OwO
 params:
+  # server: the host with the ntp-server role (turned into its address) *nuzzles*
   server:
     required: true
     description: Host name of the time server (a host with the ntp-server role)

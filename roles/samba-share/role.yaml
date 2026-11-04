@@ -1,17 +1,25 @@
+# *shares its toys* OwO roles/samba-share/role.yaml: metadata for samba-share, a Windows-compatible (SMB) file
+# share served by Samba ^w^
 description: >
   Windows-compatible file share (Samba/SMB) at /srv/share/<share>, for the user 'share' (random password stored on
   the host in /root/.valor-samba-share) or, with guest, for anyone
+# Linux only UwU
 families: [debian, rhel]
+# Serves SMB on port 445 >w<
 ports: [445]
+# params: all optional OwO
 params:
+  # share: the share's name ^w^
   share:
     raw: true
     pattern: '^[A-Za-z0-9_-]{1,32}$'
     default: share
     description: Share name
+  # guest: allow access without a password UwU
   guest:
     default: false
     description: Allow access without a password
+  # writable: allow writing to the share *nuzzles*
   writable:
     default: true
     description: Allow writing to the share

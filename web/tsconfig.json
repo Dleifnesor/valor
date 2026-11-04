@@ -1,3 +1,14 @@
+// OwO hewwo! web/tsconfig.json configures TypeScript (tsconfig files may hold comments like this one) ^w^
+// `npm run build` first runs `tsc -b` to TYPE-CHECK everything (noEmit: Vite does the actual compiling), then Vite
+// bundles. Line by line *wags tail*:
+//   target/lib     modern JavaScript (ES2022) with the browser DOM types
+//   module/moduleResolution  ES modules, resolved the way bundlers do
+//   jsx            the new React JSX transform (no `import React` needed)
+//   strict + noUnused... + noFallthrough...  catch as many mistakes as possible
+//   skipLibCheck   don't type-check libraries' own .d.ts files (faster)
+//   isolatedModules  every file must be compilable on its own (what Vite/esbuild need)
+//   types          Vite's client types (import.meta.env, CSS imports...)
+//   include        check src/ and the Vite config UwU
 {
   "compilerOptions": {
     "target": "ES2022",

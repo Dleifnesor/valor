@@ -1,3 +1,6 @@
+# *sorts operating systems into neat drawers* OwO templates/catalog.toml: every OS VALOR knows! ^w^
+# The engine reads it (OS families, sizes, installer ISOs) and the installer reads it (where to download and how to
+# verify). Each [table] is one OS name, used as `os:` in specs. The original notes follow *wags tail*
 # VALOR operating-system catalog.
 #
 # Each entry is an official cloud image that the installer (`./install.sh --template <os>`) turns into a
@@ -9,6 +12,8 @@
 # family: roles and baselines are written for the 'debian' family (apt) for now.
 # Checksum lists are verified against the signing key shipped in templates/keys/ (fingerprint checked too).
 
+# Ubuntu 24.04: the default OS (the VALOR VM and the routers use it too). The checksum list is GPG-signed; VALOR checks
+# that signature against the key in keys/ with exactly this fingerprint UwU
 ["ubuntu-24.04"]
 family = "debian"
 description = "Ubuntu 24.04 LTS (Noble Numbat), official cloud image"
@@ -19,6 +24,7 @@ checksum_type = "sha256"
 signing_key_file = "keys/ubuntu-cloud-images.asc"
 signing_key_fingerprint = "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"   # UEC Image Automatic Signing Key
 
+# Ubuntu 26.04, same verification >w<
 ["ubuntu-26.04"]
 family = "debian"
 description = "Ubuntu 26.04 LTS (Resolute Raccoon), official cloud image"
@@ -29,6 +35,7 @@ checksum_type = "sha256"
 signing_key_file = "keys/ubuntu-cloud-images.asc"
 signing_key_fingerprint = "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81"
 
+# Debian 13 and 12: checksum lists over HTTPS (SHA-512) OwO
 ["debian-13"]
 family = "debian"
 description = "Debian 13 (trixie), official generic cloud image"
@@ -43,6 +50,8 @@ image_url = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-gen
 checksums_url = "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
 checksum_type = "sha512"
 
+# Rocky / Alma 10: need an x86-64-v3 CPU (AVX2-class), and can also be installed from their minimal ISO with a
+# kickstart (`install: iso`) ^w^
 ["rocky-10"]
 family = "rhel"
 description = "Rocky Linux 10, official GenericCloud image"
@@ -61,6 +70,7 @@ image_url = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLin
 checksums_url = "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM"
 checksum_type = "sha256"
 
+# Kali: the newest file matching a pattern in the checksum list; the disk image comes inside a .tar.xz UwU
 ["kali"]
 family = "debian"
 description = "Kali Linux (rolling), official generic cloud image"
@@ -70,6 +80,8 @@ image_base = "https://kali.download/cloud-images/current/"
 image_pattern = 'kali-linux-\d+\.\d+[a-z]?-cloud-genericcloud-amd64\.tar\.xz'
 archive = "tar.xz"                 # contains a raw disk image
 
+# Windows templates: built from evaluation ISOs (see templates/isos.toml); `edition` picks the image inside
+# install.wim; default_* are the minimum size a Windows host gets >w< *closes the drawers*
 # Windows: built from installer ISOs in the ISO library (unattended setup + VirtIO guest tools + sysprep).
 # `iso` names an ISO catalog entry (templates/isos.toml); `edition` is a pattern for the image name in install.wim.
 ["windows-server-2025"]

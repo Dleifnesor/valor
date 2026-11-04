@@ -1,21 +1,29 @@
 #cloud-config
+# OwO *preps a fresh template with tiny paws* templates/vendor-data.yaml: cloud-init "vendor-data" for TEMPLATES! ^w^
+# (The first line MUST stay "#cloud-config": that's how cloud-init recognises the file.) It's used once while a Linux
+# template is built, never by range VMs. The original notes follow *wags tail*
 # VALOR template preparation (used once while a template is built, never by range VMs).
 # Installs and enables the QEMU guest agent - the engine's only management channel into range VMs - bakes in
 # current updates, cleans cloud-init state and powers off so the VM can become a template.
 # Works on apt (Ubuntu, Debian, Kali) and dnf (Rocky, Alma) systems.
+# Update the package lists, upgrade everything, and install the QEMU guest agent UwU
 package_update: true
 package_upgrade: true
 packages:
   - qemu-guest-agent
+# Commands run at the end of the first boot, in order >w<
 runcmd:
   # RHEL-family agents ship with guest-exec blocked, and SELinux confines what the agent may run to a few helper
   # scripts. VALOR manages VMs through the agent (as root either way), so only the agent's SELinux domain is made
   # permissive; the rest of the system stays enforcing.
   - [sh, -c, "if [ -f /etc/sysconfig/qemu-ga ]; then sed -i -E 's/^(BLACKLIST_RPC|BLOCK_RPCS|FILTER_RPC_ARGS)=.*/\\1=/' /etc/sysconfig/qemu-ga; fi"]
   - [sh, -c, "if command -v semodule >/dev/null 2>&1 && [ \"$(getenforce 2>/dev/null)\" != Disabled ]; then printf '(typepermissive virt_qemu_ga_t)\\n' > /root/valor_qga.cil && semodule -i /root/valor_qga.cil; rm -f /root/valor_qga.cil; fi"]
+  # Enable the agent, clean the package caches (apt or dnf), and wipe cloud-init's state and the machine id, so every
+  # clone boots as a brand-new machine OwO
   - [systemctl, enable, qemu-guest-agent]
   - [sh, -c, "if command -v apt-get >/dev/null 2>&1; then apt-get clean && rm -rf /var/lib/apt/lists/*; else dnf clean all; fi"]
   - [cloud-init, clean, --logs, --machine-id]
+# Then power off (VALOR waits for that) and the VM becomes a template ^w^
 power_state:
   mode: poweroff
   message: VALOR template prepared

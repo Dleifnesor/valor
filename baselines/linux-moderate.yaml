@@ -1,22 +1,35 @@
+# *puts on a bigger hard hat* OwO baselines/linux-moderate.yaml: the STRICTER Linux profile used for compliance
+# frameworks (NIST 800-171/800-53, PCI DSS, HIPAA). It extends ubuntu-l1, so hosts get all of those controls plus
+# the ones below ^w^
 id: linux-moderate
 title: >
   Linux hardening for compliance frameworks (NIST SP 800-171, NIST SP 800-53 Low/Moderate, PCI DSS, HIPAA) -
   ubuntu-l1 plus account lockout, password policy, notices, idle-session timeout, audit rules and time sync
 # Results are reported as "aligned with" the frameworks' requirements - never as an assessment or certification.
 # Which requirement each control supports is in baselines/frameworks/frameworks.yaml.
+# "aligned with", never certified UwU
 claim: aligned-with
+# Debian-like and RHEL-like hosts >w<
 families: [debian, rhel]
+# extends: start from ubuntu-l1's controls (the digest covers the parent too, so editing it re-converges these
+# hosts) OwO
 extends: ubuntu-l1
+# windows: the profile Windows hosts of the same range get ^w^
 windows: windows-moderate
+# *adds more rules* the extra controls UwU
 controls:
+  # *hangs a sign on the door* everyone sees an "authorized use only" notice before logging in >w<
   - id: login-banner
     area: Access
     title: Authorized-use notice shown before SSH and console logins
     reference: "OpenSSH sshd_config(5): Banner; issue(5)"
     applies_to: all
+    # check: the notice is in /etc/issue.net (SSH) and /etc/issue (console), and sshd shows /etc/issue.net as its
+    # banner OwO
     check: |
       grep -q 'Authorized use only' /etc/issue.net && grep -q 'Authorized use only' /etc/issue && \
         sshd -T 2>/dev/null | grep -qx 'banner /etc/issue.net'
+    # fix: write both files and point sshd's Banner at issue.net (in VALOR's drop-in file) ^w^
     fix: |
       msg='Authorized use only. Activity on this system is monitored and recorded; using it means you consent.'
       printf '%s\n' "$msg" > /etc/issue.net; printf '%s\n\n' "$msg" > /etc/issue
@@ -24,11 +37,14 @@ controls:
       grep -v -i '^Banner ' "$f" > "$f.new"; echo 'Banner /etc/issue.net' >> "$f.new"; mv "$f.new" "$f"; chmod 600 "$f"
       sshd -t && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; }
 
+  # *locks the door after too many wrong keys* 5 failed logins lock an account for 30 minutes UwU
   - id: account-lockout
     area: Accounts
     title: Accounts locked for 30 minutes after 5 failed logins (pam_faillock)
     reference: "faillock.conf(5), pam_faillock(8); authselect(8) with-faillock on RHEL-family systems"
     applies_to: all
+    # check: faillock.conf has deny between 1 and 5 and unlock_time 0 (forever) or at least 1800 s, and PAM really
+    # uses pam_faillock (authselect files on RHEL, common-auth on Debian) >w<
     check: |
       conf=/etc/security/faillock.conf
       deny=$(sed -n 's/^[[:space:]]*deny[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$conf" 2>/dev/null | tail -1)
@@ -40,6 +56,8 @@ controls:
       else
         grep -q '^auth.*pam_faillock.so.*preauth' /etc/pam.d/common-auth && grep -q '^auth.*pam_faillock.so.*authfail' /etc/pam.d/common-auth
       fi
+    # fix: write faillock.conf, then RHEL: turn on authselect's with-faillock feature; Debian: add two pam-auth-update
+    # profiles (count failures before the password, lock after a failure) and enable them OwO
     fix: |
       printf '# Managed by VALOR\ndeny = 5\nfail_interval = 900\nunlock_time = 1800\n' > /etc/security/faillock.conf
       if [ $VALOR_FAMILY = rhel ]; then
@@ -53,16 +71,20 @@ controls:
         pam-auth-update --package --enable valor-faillock valor-faillock-notify
       fi
 
+  # *makes passwords chonky* new passwords need 14+ characters, all four character kinds, and 8 changed
+  # characters ^w^
   - id: password-quality
     area: Accounts
     title: New passwords need 14+ characters, all four character classes and 8 changed characters (pam_pwquality)
     reference: "pwquality.conf(5), pam_pwquality(8)"
     applies_to: all
+    # check: VALOR's pwquality settings are in place and PAM's password stack uses pam_pwquality UwU
     check: |
       f=/etc/security/pwquality.conf.d/60-valor.conf
       grep -qx 'minlen = 14' "$f" && grep -qx 'minclass = 4' "$f" && grep -qx 'difok = 8' "$f" || exit 1
       if [ $VALOR_FAMILY = rhel ]; then grep -q '^password.*pam_pwquality.so' /etc/pam.d/system-auth
       else grep -q '^password.*pam_pwquality.so' /etc/pam.d/common-password; fi
+    # fix: install the pwquality PAM module, write the settings, and (Debian) enable it with pam-auth-update >w<
     fix: |
       [ $VALOR_FAMILY = rhel ] && pkg=libpwquality || pkg=libpam-pwquality
       installed $pkg || pkg_install $pkg
@@ -70,15 +92,18 @@ controls:
       printf '# Managed by VALOR\nminlen = 14\nminclass = 4\ndifok = 8\nmaxrepeat = 3\n' > /etc/security/pwquality.conf.d/60-valor.conf
       [ $VALOR_FAMILY = rhel ] || pam-auth-update --package --enable pwquality
 
+  # *remembers old passwords* the last 24 passwords can't be used again OwO
   - id: password-history
     area: Accounts
     title: The last 24 passwords cannot be reused (pam_pwhistory)
     reference: "pam_pwhistory(8), pwhistory.conf(5); authselect(8) with-pwhistory on RHEL-family systems"
     applies_to: all
+    # check: remember = 24 is set and PAM uses pam_pwhistory ^w^
     check: |
       grep -qx 'remember = 24' /etc/security/pwhistory.conf 2>/dev/null || exit 1
       if [ $VALOR_FAMILY = rhel ]; then grep -q '^password.*pam_pwhistory.so' /etc/pam.d/system-auth
       else grep -q '^password.*pam_pwhistory.so' /etc/pam.d/common-password; fi
+    # fix: write pwhistory.conf, then authselect's with-pwhistory (RHEL) or a pam-auth-update profile (Debian) UwU
     fix: |
       printf '# Managed by VALOR\nremember = 24\n' > /etc/security/pwhistory.conf
       if [ $VALOR_FAMILY = rhel ]; then
@@ -90,13 +115,16 @@ controls:
         pam-auth-update --package --enable valor-pwhistory
       fi
 
+  # *yawns* idle shells end after 15 minutes >w<
   - id: shell-timeout
     area: Access
     title: Idle interactive shells end after 15 minutes (TMOUT)
     reference: "bash(1): TMOUT"
     applies_to: all
+    # check: the profile script exists and a login shell really has TMOUT=900 OwO
     check: |
       [ -f /etc/profile.d/60-valor-tmout.sh ] && [ "$(bash -lc 'echo $TMOUT' 2>/dev/null | tail -1)" = 900 ]
+    # fix: a profile script that sets TMOUT=900 read-only (unless something already made it read-only) ^w^
     fix: |
       cat > /etc/profile.d/60-valor-tmout.sh <<'EOF'
       # Managed by VALOR: end idle interactive shells after 15 minutes
@@ -104,15 +132,19 @@ controls:
       EOF
       chmod 0644 /etc/profile.d/60-valor-tmout.sh
 
+  # *keeps a diary of important events* account, sudo, privileged-command and clock changes are audited UwU
   - id: audit-rules
     area: Auditing
     title: Changes to accounts and sudo rules, privileged commands and clock changes are audited
     reference: "audit.rules(7), auditctl(8), augenrules(8)"
     applies_to: all
+    # check: the kernel's loaded audit rules include all four VALOR keys >w<
     check: |
       r=$(auditctl -l 2>/dev/null)
       echo "$r" | grep -q 'valor-identity' && echo "$r" | grep -q 'valor-privilege' && \
         echo "$r" | grep -q 'valor-privileged-exec' && echo "$r" | grep -q 'valor-time-change'
+    # fix: write the rules file (watch the account and sudoers files; log commands run with raised privileges and
+    # clock changes), then load the rules OwO
     fix: |
       cat > /etc/audit/rules.d/60-valor.rules <<'EOF'
       ## Managed by VALOR: identity, privilege and clock events
@@ -128,56 +160,69 @@ controls:
       chmod 0640 /etc/audit/rules.d/60-valor.rules
       augenrules --load >/dev/null 2>&1 || service auditd reload
 
+  # *guards the diary* only root (and its group) may read the audit logs ^w^
   - id: audit-log-protection
     area: Auditing
     title: Audit logs readable only by root (and its group), the directory not open to others
     reference: "auditd.conf(5): log_file, log_group"
     applies_to: all
+    # check: root owns the folder, the folder gives others nothing, and the log files aren't writable by the group or
+    # readable by others UwU
     check: |
       d=/var/log/audit
       [ -d "$d" ] && [ "$(stat -c %U "$d")" = root ] || exit 1
       [ -z "$(find "$d" -maxdepth 0 -perm /0027)" ] && [ -z "$(find "$d" -maxdepth 1 -type f -perm /0137)" ]
+    # fix: fix the owner and modes >w<
     fix: |
       chown root /var/log/audit
       chmod 0750 /var/log/audit
       find /var/log/audit -maxdepth 1 -type f -exec chmod g-wx,o-rwx {} +
 
+  # *checks the clock tower* a time service keeps the clock right (audit timestamps depend on it) OwO
   - id: time-sync
     area: Time
     title: Clock synchronized by a time service (chrony or systemd-timesyncd)
     reference: "chronyd(8), systemd-timesyncd.service(8)"
     applies_to: all
+    # check: chronyd, chrony or systemd-timesyncd is active ^w^
     check: |
       systemctl is-active -q chronyd || systemctl is-active -q chrony || systemctl is-active -q systemd-timesyncd
+    # fix: start whichever time service is installed, else install chrony UwU
     fix: |
       for s in chronyd chrony systemd-timesyncd; do
         systemctl cat "$s.service" >/dev/null 2>&1 && systemctl enable --now "$s" >/dev/null 2>&1 && exit 0
       done
       pkg_install chrony && { systemctl enable --now chronyd 2>/dev/null || systemctl enable --now chrony; }
 
+  # *watches the sudo users* sudo logs every command to its own file and runs it in a pseudo-terminal >w<
   - id: sudo-logging
     area: Auditing
     title: sudo commands logged to /var/log/sudo.log and run in a pseudo-terminal
     reference: "sudoers(5): logfile, use_pty"
     applies_to: all
+    # check: both Defaults lines are in /etc/sudoers.d OwO
     check: |
       grep -rqsx 'Defaults logfile="/var/log/sudo.log"' /etc/sudoers.d/ && grep -rqsx 'Defaults use_pty' /etc/sudoers.d/
+    # fix: write them in a sudoers drop-in, and remove it again if visudo says it is broken (never lock out sudo!) ^w^
     fix: |
       printf '# Managed by VALOR\nDefaults logfile="/var/log/sudo.log"\nDefaults use_pty\n' > /etc/sudoers.d/60-valor
       chmod 0440 /etc/sudoers.d/60-valor
       visudo -cqf /etc/sudoers.d/60-valor || { rm -f /etc/sudoers.d/60-valor; exit 1; }
 
+  # *turns off the noisy toys* avahi, printing (CUPS) and rpcbind are off: a server doesn't need them UwU
   - id: unneeded-services
     area: Services
     title: Network services a server does not need are off (avahi, CUPS printing, rpcbind)
     reference: "systemctl(1): disable, mask"
     applies_to: all
+    # check: none of them is active or enabled >w<
     check: |
       for s in avahi-daemon cups rpcbind; do
         systemctl is-active -q "$s" && exit 1
         systemctl is-enabled -q "$s" 2>/dev/null && exit 1
       done
       exit 0
+    # fix: disable, stop and mask each one that exists OwO
     fix: |
       for s in avahi-daemon cups rpcbind; do
         systemctl cat "$s.service" >/dev/null 2>&1 || continue

@@ -1,3 +1,7 @@
+# *fills in the installer's questionnaire* OwO installer/answers.py: the INSTALL SETTINGS! ^w^
+# Defaults worked out from the discovered facts, interactive editing, validation, and answers files (TOML with any
+# subset of the settings; anything missing gets the detected default). `--save-answers` exports the final settings so
+# the same install can be repeated exactly *wags tail*
 """Install settings: defaults derived from the discovered facts, interactive editing, validation, answers files.
 
 An answers file (TOML) holds any subset of the settings; everything missing gets the detected default. The
@@ -5,22 +9,28 @@ installer writes the final settings into its install record, and `--save-answers
 install can be repeated exactly (on this cluster or, with the node-specific values edited, on another).
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# ipaddress, re, tomllib, dataclass helpers, Path >w<
 import ipaddress
 import re
 import tomllib
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+# ui (prompts) and the discovered Facts OwO
 from . import ui
 from .discover import Facts
 
+# Patterns: instance ids (2-12 lowercase letters/digits), host names (DNS labels), admin usernames. BLOCK: each
+# installation owns 1000 VM ids (ranges, templates and the VALOR VM) ^w^
 ID_RE = re.compile(r"^[a-z][a-z0-9]{1,11}$")
 HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{1,63}$")
 BLOCK = 1000           # VMIDs per installation: ranges, templates and the VALOR VM itself
 
+# SECTIONS: how settings are grouped in an answers file UwU
 SECTIONS = {
     "valor": ["id", "instance_name"],
     "vm": ["vm_storage", "vm_cores", "vm_memory", "vm_disk", "vm_bridge", "vm_vlan", "vm_ip", "vm_gateway", "vm_dns",
@@ -33,6 +43,16 @@ SECTIONS = {
 }
 
 
+# Answers: every install setting with its default >w<
+#   id / instance_name                          the instance id (prefixes everything) and the UI's name
+#   vm_*                                        the VALOR VM: storage, size, bridge, VLAN, IP (dhcp or CIDR), gateway, DNS,
+#                                               host name, domain
+#   range_storage / range_bridge / uplink       where range disks go, the isolated bridge ("new" = create one), uplink
+#   vmid_start / vlan_min / vlan_max            the id block and the VLAN range for ranges
+#   reserved_networks / nameservers / internet_probe   networks ranges must avoid, range DNS, the egress test target
+#   templates / snippets_storage                OSes to build now, where the cloud-init snippet goes
+#   iso_storage / iso_storages                  the ISO library
+#   allowed_networks / tls / tls_cert / tls_key / admin_user   who may reach the UI, the certificate, the first admin
 @dataclass
 class Answers:
     id: str = "valor"
@@ -67,6 +87,8 @@ class Answers:
     tls_key: str = ""
     admin_user: str = "admin"
 
+    # Names derived from the id: the three pools, the API user, and the id sub-blocks (ranges x000-x899, templates
+    # x900-x989, the VALOR VM x999) OwO
     # ---- Derived names ----
 
     @property
@@ -97,6 +119,7 @@ class Answers:
     def vmid_templates(self) -> tuple[int, int]:
         return self.vmid_start + 900, self.vmid_start + 989
 
+    # to_toml(): the settings as an answers file (Python can read TOML but not write it, so it's written by hand) ^w^
     def to_toml(self) -> str:
         """The settings as an answers file (the standard library reads TOML but cannot write it)."""
         lines = ["# VALOR answers file. Use it with: ./install.sh --answers <this file>",
@@ -110,6 +133,7 @@ class Answers:
         return "\n".join(lines)
 
 
+# _toml_value(): one value in TOML syntax (strings escaped) UwU
 def _toml_value(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -121,6 +145,8 @@ def _toml_value(value) -> str:
     return f'"{text}"'
 
 
+# load_file(): read an answers file into a flat dict; sections must be tables, and an UNKNOWN setting is an error (a
+# typo would otherwise be silently replaced by a default) >w<
 def load_file(path: str | Path) -> dict:
     with open(path, "rb") as fh:
         raw = tomllib.load(fh)
@@ -136,8 +162,10 @@ def load_file(path: str | Path) -> dict:
     return flat
 
 
+# ---- Defaults OwO
 # ---- Defaults --------------------------------------------------------------------------------------------------
 
+# first_free_bridge(): vmbr100, vmbr101... the first name no bridge or interface uses ^w^
 def first_free_bridge(facts: Facts) -> str:
     """vmbr100, vmbr101, ...: the first name no bridge or interface uses yet."""
     names = {bridge.name for bridge in facts.bridges} | facts.interfaces
@@ -147,6 +175,7 @@ def first_free_bridge(facts: Facts) -> str:
     return f"vmbr{number}"
 
 
+# free_vmid_block(): the first block of 1000 ids (from 4000 up) that no VM uses UwU
 def free_vmid_block(facts: Facts, start: int = 4000) -> int:
     """The first block of BLOCK VMIDs (from `start`, in steps of BLOCK) that no VM uses."""
     block = start
@@ -155,6 +184,8 @@ def free_vmid_block(facts: Facts, start: int = 4000) -> int:
     return block
 
 
+# default_storage(): the active VM storage with the most free space that supports linked clones (one with "valor" in
+# its name wins) >w<
 def default_storage(facts: Facts) -> str:
     """The storage with the most free space that can hold linked clones (any VM storage if none can)."""
     candidates = [s for s in facts.storages if s.images and s.active and s.linked_clones]
@@ -166,6 +197,8 @@ def default_storage(facts: Facts) -> str:
     return max(named or candidates, key=lambda s: s.avail).id
 
 
+# default_iso_storages(): the ISO storage to download to (shared first, then the most free space) and every ISO
+# storage OwO
 def default_iso_storages(facts: Facts) -> tuple[str, list[str]]:
     isos = [s for s in facts.storages if "iso" in s.content and s.active]
     if not isos:
@@ -174,6 +207,7 @@ def default_iso_storages(facts: Facts) -> tuple[str, list[str]]:
     return target.id, [s.id for s in isos]
 
 
+# default_snippets(): a file-based storage that already holds snippets, else "local", else any directory storage ^w^
 def default_snippets(facts: Facts) -> str:
     have = [s for s in facts.storages if "snippets" in s.content and s.active and s.file_based and s.path]
     if have:
@@ -184,6 +218,9 @@ def default_snippets(facts: Facts) -> str:
     return dirs[0].id if dirs else ""
 
 
+# defaults(): the settings: an earlier run's recorded answers, overridden by the given ones, and every empty setting
+# filled from this node (storage, bridge, VLAN, id block, reserved and allowed networks, snippets, ISO storages, DNS,
+# domain, and a name with the cluster's name) UwU
 def defaults(facts: Facts, given: dict | None = None) -> Answers:
     """The settings: what an earlier run of this installation recorded, overridden by `given` (answers file /
     flags), and every setting still empty filled with what this node suggests."""
@@ -219,6 +256,8 @@ def defaults(facts: Facts, given: dict | None = None) -> Answers:
     return settings
 
 
+# resolve_bridge(): (bridge name, must it be created?): a bridge an earlier run created, a new free one, or the one
+# given >w<
 def resolve_bridge(settings: Answers, facts: Facts) -> tuple[str, bool]:
     """(bridge name, must be created)."""
     recorded = (facts.record or {}).get("objects", {}).get("bridge")
@@ -229,8 +268,10 @@ def resolve_bridge(settings: Answers, facts: Facts) -> tuple[str, bool]:
     return settings.range_bridge, False
 
 
+# ---- Validation OwO
 # ---- Validation ------------------------------------------------------------------------------------------------
 
+# _cidr(): is this a network? ^w^
 def _cidr(value: str) -> bool:
     try:
         ipaddress.ip_network(value, strict=False)
@@ -239,6 +280,7 @@ def _cidr(value: str) -> bool:
         return False
 
 
+# problems(): EVERYTHING wrong with the settings on this node, as "setting: what to fix" lines (empty = good to go) UwU
 def problems(settings: Answers, facts: Facts, catalog: dict) -> list[str]:
     """Everything wrong with the settings on this node, as "setting: what to fix" lines (empty: good to go)."""
     return (_id_problems(settings) + _storage_problems(settings, facts) + _bridge_problems(settings, facts)
@@ -246,12 +288,15 @@ def problems(settings: Answers, facts: Facts, catalog: dict) -> list[str]:
             + _template_problems(settings, facts, catalog) + _web_problems(settings))
 
 
+# _id_problems(): the id's format >w<
 def _id_problems(settings: Answers) -> list[str]:
     if not ID_RE.match(settings.id):
         return ["id: 2-12 lowercase letters/digits, starting with a letter"]
     return []
 
 
+# _storage_problems(): the storages must exist, hold VM disks and be active; range storage must support linked
+# clones OwO
 def _storage_problems(settings: Answers, facts: Facts) -> list[str]:
     out = []
     for key in ("vm_storage", "range_storage"):
@@ -269,6 +314,8 @@ def _storage_problems(settings: Answers, facts: Facts) -> list[str]:
     return out
 
 
+# _bridge_problems(): the management bridge must exist; an existing range bridge must be VLAN-aware, have NO physical
+# ports (range traffic must never leave the node) and differ from the management bridge ^w^
 def _bridge_problems(settings: Answers, facts: Facts) -> list[str]:
     """The range bridge must be VLAN-aware and have no physical port: range traffic never leaves the node."""
     out = []
@@ -289,6 +336,8 @@ def _bridge_problems(settings: Answers, facts: Facts) -> list[str]:
     return out
 
 
+# _vm_problems(): sizes in range, a valid VLAN, a static IP with a gateway in its network, a valid host name, and the
+# one supported uplink UwU
 def _vm_problems(settings: Answers) -> list[str]:
     out = []
     if not 1 <= settings.vm_cores <= 64:
@@ -315,6 +364,8 @@ def _vm_problems(settings: Answers) -> list[str]:
     return out
 
 
+# _vmid_problems(): the id block must start at a multiple of 100 and be free (this installation's own VMs, found by
+# pool, don't count) >w<
 def _vmid_problems(settings: Answers, facts: Facts) -> list[str]:
     """VALOR's block of VMIDs must be free (VMs of this same installation, found by pool, don't count)."""
     first, last = settings.vmid_start, settings.vmid_start + BLOCK - 1
@@ -327,6 +378,7 @@ def _vmid_problems(settings: Answers, facts: Facts) -> list[str]:
     return []
 
 
+# _network_problems(): valid VLAN range, networks, DNS servers, at least one allowed network, and the probe's format OwO
 def _network_problems(settings: Answers) -> list[str]:
     out = []
     if not (2 <= settings.vlan_min <= settings.vlan_max <= 4094):
@@ -347,6 +399,8 @@ def _network_problems(settings: Answers) -> list[str]:
     return out
 
 
+# _template_problems(): known OSes; ubuntu-24.04 must exist or be built; a directory-type snippet storage; valid ISO
+# storages ^w^
 def _template_problems(settings: Answers, facts: Facts, catalog: dict) -> list[str]:
     out = []
     unknown = [name for name in settings.templates if name not in catalog]
@@ -367,6 +421,7 @@ def _template_problems(settings: Answers, facts: Facts, catalog: dict) -> list[s
     return out
 
 
+# _web_problems(): a known TLS mode (with certificate files for "own"), and a valid admin username UwU
 def _web_problems(settings: Answers) -> list[str]:
     out = []
     if settings.tls not in ("valor-ca", "own"):
@@ -380,6 +435,7 @@ def _web_problems(settings: Answers) -> list[str]:
     return out
 
 
+# _template_on_node(): this installation's templates of an OS on this node >w<
 def _template_on_node(facts: Facts, settings: Answers, os_name: str):
     tag = "os-" + os_name.replace(".", "-")
     for template in facts.valor_templates:
@@ -388,8 +444,10 @@ def _template_on_node(facts: Facts, settings: Answers, os_name: str):
             yield template
 
 
+# ---- Interactive editing OwO
 # ---- Interactive editing ---------------------------------------------------------------------------------------
 
+# _number() / _list(): ask for a number, or a comma-separated list ^w^
 def _number(question: str, current: int) -> int:
     return int(ui.ask(question, str(current), lambda value: None if value.isdigit() else "a number"))
 
@@ -399,14 +457,18 @@ def _list(question: str, current: list[str]) -> list[str]:
     return ui.ask(question, ",".join(current)).replace(" ", "").split(",")
 
 
+# edit(): walk through every setting (Enter keeps the current value): the VALOR VM, the ranges, the web UI, and the
+# templates UwU
 def edit(settings: Answers, facts: Facts, catalog: dict) -> Answers:
     """Walk through every setting; Enter keeps the current value."""
+    # Choices for storages (with free space and linked-clone support) and bridges (with address and comment) >w<
     images = [s for s in facts.storages if s.images and s.active]
     storage_options = [(s.id, f"{s.type}, {s.avail_gib:.0f} GiB free{'' if s.linked_clones else ', no linked clones'}")
                        for s in images]
     bridge_options = [(b.name, (b.cidr or "no address") + (f" - {b.comments}" if b.comments else ""))
                       for b in facts.bridges]
 
+    # The VALOR VM's settings OwO
     ui.say()
     ui.say(ui.bold("  VALOR VM"))
     settings.vm_storage = ui.choose("Storage for the VALOR VM's disk", storage_options, settings.vm_storage)
@@ -423,6 +485,7 @@ def edit(settings: Answers, facts: Facts, catalog: dict) -> Answers:
         settings.vm_dns = _list("DNS servers (comma-separated)", settings.vm_dns)
     settings.vm_hostname = ui.ask("Hostname", settings.vm_hostname)
 
+    # The ranges' settings (a new isolated bridge, or an existing port-less VLAN-aware one) ^w^
     ui.say()
     ui.say(ui.bold("  Ranges"))
     settings.range_storage = ui.choose("Storage for range VMs and templates", storage_options, settings.range_storage)
@@ -434,6 +497,7 @@ def edit(settings: Answers, facts: Facts, catalog: dict) -> Answers:
     settings.vmid_start = _number(f"First VMID of VALOR's block of {BLOCK}", settings.vmid_start)
     settings.reserved_networks = _list("Networks ranges must never use or reach (comma-separated)",
                                        settings.reserved_networks)
+    # The web UI's settings, then the templates UwU *submits the questionnaire*
     ui.say()
     ui.say(ui.bold("  Web UI"))
     settings.allowed_networks = _list("Networks allowed to open the web UI: your LAN and VPN subnets (comma-separated)",

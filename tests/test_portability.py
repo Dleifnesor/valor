@@ -1,5 +1,8 @@
+# *perks ears up* OwO tests/test_portability.py: VALOR must work on ANY Proxmox cluster, not just the one it was
+# built on! These tests check the engine never quietly depends on our dev cluster's addresses or quirks ^w^
 """Engine behaviour that must not depend on the development cluster."""
 
+# ipaddress for real network maths, pytest, and the engine pieces under test UwU *wags tail*
 import ipaddress
 
 import pytest
@@ -13,32 +16,42 @@ from valor.pve import PVE
 from valor.web import topology
 
 
+# *sniffs the private ranges* With no extra networks (or ones already inside RFC 1918) the private set stays the
+# standard PRIVATE_V4 list >w<
 def test_private_set_unchanged_without_new_networks():
     assert private_set(()) == PRIVATE_V4
     assert private_set(("192.168.1.0/24", "10.10.10.0/24")) == PRIVATE_V4      # already covered
 
 
+# A LAN that uses PUBLIC addresses (some universities do!) gets added to the private set. Nested networks collapse
+# so nothing overlaps, and IPv6 entries are left out of this IPv4 list OwO
 def test_private_set_adds_public_lan_without_overlaps():
     out = private_set(("128.32.0.0/16", "128.32.5.0/24", "fd00::/8"))
     nets = [ipaddress.IPv4Network(n) for n in out]
     assert ipaddress.IPv4Network("128.32.0.0/16") in nets and "fd00::/8" not in out
+    # *pounces on every pair* no two networks in the result may overlap ^w^
     for i, a in enumerate(nets):
         for b in nets[i + 1:]:
             assert not a.overlaps(b)
 
 
+# Reserved networks passed to render() really show up in the router's firewall rules UwU
 def test_reserved_networks_reach_the_router_policy(cfg, ref_spec):
     rules = render(ref_spec, {"dmz": "eth1", "lan": "eth2"}, "eth0", build_egress=False, spec_id="x",
                    reserved=("128.32.0.0/16",))
     assert "128.32.0.0/16" in rules
 
 
+# *tilts head* An engine with no API token file must refuse to start with "not_configured" instead of crashing
+# later >w<
 def test_unconfigured_engine_refuses_to_run(tmp_path):
     with pytest.raises(ValorError) as e:
         PVE(Config(token_file=str(tmp_path / "t.json")))
     assert e.value.code == "not_configured"
 
 
+# Custom internet probe ("host:port" split into a tuple) and an uplink VLAN that lands on the router's first NIC
+# OwO
 def test_probe_and_uplink_vlan(cfg, ref_spec):
     c = Config(**{**cfg.__dict__, "internet_probe": "9.9.9.9:53", "uplink_vlan": 20})
     assert c.probe == ("9.9.9.9", 53)
@@ -46,6 +59,7 @@ def test_probe_and_uplink_vlan(cfg, ref_spec):
     assert rtr.nics[0] == {"bridge": "vmbr0", "vlan": 20, "ip": "dhcp", "gw": None}
 
 
+# FakePVE: just enough of PVE for templates(): the config and a canned resource list *nuzzles*
 class FakePVE:
     def __init__(self, cfg, resources):
         self.cfg, self._r = cfg, resources
@@ -54,6 +68,8 @@ class FakePVE:
         return self._r
 
 
+# Templates are found by their tags (in any order). One on the range's own node wins, one in another pool counts
+# as missing, and one with no visible pool is allowed (we can see it, so we may use it) ^w^
 def test_templates_found_by_tag_prefer_range_node(cfg):
     res = [
         {"vmid": 9000, "template": 1, "type": "qemu", "node": "pve2", "pool": "valor-templates",
@@ -70,6 +86,8 @@ def test_templates_found_by_tag_prefer_range_node(cfg):
     assert t["debian-12"]["vmid"] == 7001             # pool hidden (no Pool.Audit): visible means allowed
 
 
+# *draws a map* The topology overlay marks each node keep/create/update/remove from the plan, counts the changes,
+# and every edge points at nodes that really exist UwU
 def test_topology_overlay(cfg, ref_spec):
     plan = {"actions": [{"host": "rtr", "action": "keep"}, {"host": "web", "action": "create"},
                         {"host": "db", "action": "converge", "reasons": ["roles changed"]},
@@ -84,6 +102,8 @@ def test_topology_overlay(cfg, ref_spec):
     assert all(e["source"] in by and e["target"] in by for e in g["edges"])
 
 
+# *paws at the guest agent* AgentAPI: a fake agent endpoint that fails with the given Proxmox messages first, then
+# answers {"pid": 7}, counting every call >w<
 class AgentAPI:
     """Agent requests that fail the way Proxmox reports them (proxmoxer puts the reason in .content)."""
 
@@ -98,6 +118,9 @@ class AgentAPI:
         return {"pid": 7}
 
 
+# *bounces through the table* Each row is (failures, resend allowed?, expected calls, succeeds?). "Agent not
+# running" means nothing was sent, so retry; a timed-out guest-exec MAY have run, so never send it twice; a
+# guest-file-open is safe to resend; retries stop after AGENT_RETRIES; real errors are never retried OwO
 @pytest.mark.parametrize("failures, resend, calls, ok", [
     (["QEMU guest agent is not running"] * 2, False, 3, True),     # ping timed out: nothing was sent, retry
     (["VM 5024 qga command 'guest-exec' failed - got timeout"], False, 1, False),   # may have run: never twice
@@ -106,6 +129,7 @@ class AgentAPI:
     (["can't open file"], True, 1, False),                        # real errors are not retried
 ])
 def test_agent_requests_survive_a_busy_guest(cfg, failures, resend, calls, ok):
+    # A PVE built without __init__ (no real connection), with wait_agent recording each wait ^w^
     from valor import pve as P
     pve = PVE.__new__(PVE)
     pve.cfg, waits = cfg, []
@@ -116,9 +140,13 @@ def test_agent_requests_survive_a_busy_guest(cfg, failures, resend, calls, ok):
     else:
         with pytest.raises(ValorError):
             pve.agent_call(5024, "write file in VM 5024", api, resend=resend, file="x")
+    # Exactly the expected calls, one agent wait between each pair, and the retry limit is still 3 UwU
     assert api.calls == calls and len(waits) == calls - 1 and P.AGENT_RETRIES == 3
 
 
+# *pretends to be a slow Windows box* BusyWindows: ps() on a guest whose agent misses Proxmox's 5 second start
+# limit but still runs the script. It records the runs, the PID-file reads, the cleanup and which PID got
+# followed >w<
 class BusyWindows(PVE):
     """ps() against a guest whose agent misses Proxmox's 5 s limit for starting the script, but runs it."""
 
@@ -146,21 +174,26 @@ class BusyWindows(PVE):
         return ExecResult(0, "VALOR-OK", "")
 
 
+# *holds breath* A script whose start timed out is FOLLOWED by the PID it wrote, never started a second time OwO
 def test_a_timed_out_script_is_followed_not_started_twice(cfg, monkeypatch):
     from valor import pve as P
+    # No real sleeping in tests, nya~ ^w^
     monkeypatch.setattr(P.time, "sleep", lambda s: None)
     w = BusyWindows(cfg, "VM 5024 qga command 'guest-exec' failed - got timeout")
     res = w.ps(5024, "Write-Output 'VALOR-OK'")
     assert res.out == "VALOR-OK" and w.followed == 1868 and len(w.runs) == 1        # never run a second time
+    # The script writes its own PID first, switches output to UTF-8, and both temp files get deleted afterwards UwU
     assert w.script.startswith("\ufeffSet-Content -LiteralPath 'C:\\Windows\\Temp\\valor-") and "$PID" in w.script.split("\r\n")[0]
     assert "UTF8Encoding" in w.script.split("\r\n")[1]                              # UTF-8 in (BOM) and out
     assert w.deleted[0].endswith(".ps1") and w.deleted[1].endswith(".ps1.pid")       # both files cleaned up
 
+    # Any other error: no recovery attempt, no PID-file reads >w<
     other = BusyWindows(cfg, "VM 5024 is not running")
     with pytest.raises(ValorError) as e:
         other.ps(5024, "x")
     assert e.value.code == "proxmox_api" and other.reads == 0                      # other errors: no recovery
 
+    # *whimpers* the PID file never shows up: give up with "agent_exec_lost", still only ONE run OwO
     monkeypatch.setattr(P, "PS_START_WAIT", 0)
     lost = BusyWindows(cfg, "got timeout", pid_after=99)
     with pytest.raises(ValorError) as e:
@@ -169,6 +202,8 @@ def test_a_timed_out_script_is_followed_not_started_twice(cfg, monkeypatch):
 
 
 
+# *ears droop* When the guest agent restarts mid-command, the build runs the (idempotent) script once more instead
+# of failing. Found on a real range (hr-nist171)! ^w^
 def test_a_script_the_agent_lost_runs_again(cfg):
     """hr-nist171 (2026-10-25): qemu-guest-agent restarted during the baseline on ntp and Proxmox answered 'PID ...
     does not exist'. The build runs the (idempotent) script once more instead of failing."""
@@ -180,6 +215,7 @@ def test_a_script_the_agent_lost_runs_again(cfg):
     pve.vm = lambda vmid: SimpleNamespace(agent=lambda name: SimpleNamespace(get=None))
     pve.wait_agent = lambda vmid, timeout=300: waits.append(vmid)
 
+    # gone(): Proxmox saying the PID no longer exists, which exec_wait must turn into "agent_exec_lost" UwU
     def gone(*a, **k):
         raise ValorError("proxmox_api", "read command status in VM 5028: HTTP 500 Internal Server Error",
                          details={"content": "Agent error: PID ld does not exist"})
@@ -188,6 +224,7 @@ def test_a_script_the_agent_lost_runs_again(cfg):
         pve.exec_wait(5028, 4711)
     assert e.value.code == "agent_exec_lost" and "restarted" in e.value.message
 
+    # *counts on paws* flaky(lost) makes a run() that is lost `lost` times, then finishes "done" >w<
     runs = []
 
     def flaky(lost):
@@ -197,12 +234,14 @@ def test_a_script_the_agent_lost_runs_again(cfg):
                 raise ValorError("agent_exec_lost", "the guest agent of VM 5028 restarted while a command ran")
             return ExecResult(0, "done", "")
         return run
+    # Lost once: runs again and succeeds (with one agent wait); lost twice: the build fails OwO
     assert A.run_again_if_lost(pve, 5028, flaky(1)).out == "done" and len(runs) == 2 and waits == [5028]
     runs.clear()
     with pytest.raises(ValorError):                                    # lost twice: the build fails (and is fixed)
         A.run_again_if_lost(pve, 5028, flaky(2))
     runs.clear()
 
+    # Any other error is raised right away, without a second run ^w^
     def broken():
         runs.append(1)
         raise ValorError("proxmox_api", "VM 5028 is not running")
@@ -210,6 +249,8 @@ def test_a_script_the_agent_lost_runs_again(cfg):
         A.run_again_if_lost(pve, 5028, broken)
     assert len(runs) == 1                                              # other errors are not retried
 
+# *squints at the bytes* AgentWire: the guest agent as Proxmox's API shows it, where text goes in and out as one
+# character per byte (Latin-1). Characters above 255 make Proxmox fail, just like the real thing UwU
 class AgentWire:
     """The guest agent as Proxmox's API presents it: text in and out is one character per byte (Latin-1)."""
 
@@ -244,6 +285,9 @@ class AgentWire:
         return {"content": self.files[file].decode("latin-1")}
 
 
+# *purrs in UTF-8* Guest text survives both ways: command output, scripts, file writes and reads keep "café" and
+# "●" intact. Non-ASCII in command ARGUMENTS is refused before sending (it would wedge the agent), and output that
+# isn't UTF-8 comes back exactly as it arrived >w<
 def test_guest_text_is_utf8_both_ways(cfg):
     from types import SimpleNamespace
     from valor.pve import from_agent

@@ -1,19 +1,28 @@
+# *sniffs the green logo* OwO roles/nginx/role.yaml: metadata for nginx, a web server with a tiny page or, with
+# proxy_to, a reverse proxy that forwards everything to another host ^w^
 description: >
   nginx web server with a minimal site naming the host and range - or, with proxy_to, a reverse proxy that forwards
   every request to another host (add the policy rule from this host to that host's port)
+# Linux only UwU
 families: [debian, rhel]
+# Serves port 80 >w<
 ports: [80]
+# params: all optional OwO
 params:
+  # port: the TCP port nginx listens on ^w^
   port:
     default: 80
     description: TCP port nginx listens on
+  # server_name: the site's server_name, used as written ("_" catches every name) UwU
   server_name:
     raw: true
     default: "_"
     description: server_name of the site (default catch-all)
+  # proxy_to: a host name or address to forward every request to (empty serves the page) *wags tail*
   proxy_to:
     default: ""
     description: Host name (or IPv4 address) to reverse-proxy every request to, e.g. app (default - serve the page)
+  # proxy_port: the port of the proxied host (plain HTTP), digits only >w<
   proxy_port:
     raw: true
     pattern: '^[0-9]{1,5}$'

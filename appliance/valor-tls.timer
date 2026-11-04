@@ -1,11 +1,15 @@
+# OwO *sets a tiny alarm clock* appliance/valor-tls.timer: runs valor-tls.service every day! ^w^
 [Unit]
 Description=VALOR: check the web certificate daily
 
+# 2 minutes after boot, then every day, at a random moment within an hour (so many VMs don't all renew at once), and
+# it catches up after downtime (Persistent) *wags tail*
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=1d
 RandomizedDelaySec=1h
 Persistent=true
 
+# Part of the system's timers UwU
 [Install]
 WantedBy=timers.target

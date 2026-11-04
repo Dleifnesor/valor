@@ -1,17 +1,25 @@
+# *answers every "who is that?"* OwO roles/dns-server/role.yaml: metadata for dns-server, a BIND server with a
+# zone naming every host of the range, that also forwards other queries ^w^
 description: >
   DNS server (BIND) with a zone naming every host of the range, answering and forwarding queries for range clients.
   Clients use UDP and TCP 53: allow both in the policy.
+# Linux only UwU
 families: [debian, rhel]
+# Serves port 53 >w<
 ports: [53]
+# params: all optional OwO
 params:
+  # zone: the DNS zone (default <range>.lab); the pattern checks it's a valid dotted lower-case name ^w^
   zone:
     raw: true
     pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
     default: ""
     description: The range's DNS zone (default <range name>.lab); every host gets <host>.<zone>
+  # allow_from: hosts or segments allowed to query (default every private network) UwU
   allow_from:
     default: ""
     description: Hosts or segments that may query (default every private network)
+  # forwarders: upstream resolvers for names outside the zone *wags tail*
   forwarders:
     default: ""
     description: Upstream resolvers for other names, addresses or host names (default VALOR's nameservers)

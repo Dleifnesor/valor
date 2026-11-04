@@ -1,17 +1,26 @@
+# *guards the database* OwO roles/mariadb/role.yaml: metadata for mariadb, a MySQL-compatible server with one
+# database and one user, reachable from the listed clients ^w^
 description: MariaDB (MySQL-compatible) server with one database and user, reachable from the listed clients
+# Linux only UwU
 families: [debian, rhel]
+# Serves port 3306 >w<
 ports: [3306]
+# params: all optional OwO
 params:
+  # allow_from: hosts or segments that may connect; names are turned into addresses (hosts /32, segments their
+  # network) ^w^
   allow_from:
     default: ""
     description: >
       Hosts or segments allowed to connect (spec names; hosts become /32, segments their network).
       Remember the router policy must also allow the traffic.
+  # database: the database to create; the pattern allows lower-case letters, digits and underscores UwU
   database:
     raw: true
     pattern: '^[a-z_][a-z0-9_]{0,40}$'
     default: app
     description: Database to create (owned by 'user')
+  # user: the user to create; its random password is kept on the host in /root *nuzzles*
   user:
     raw: true
     pattern: '^[a-z_][a-z0-9_]{0,30}$'

@@ -1,11 +1,17 @@
+# *sniffs around the whole Proxmox node* OwO installer/discover.py DISCOVERS the node and cluster! ^w^
+# It only READS: Proxmox version, nodes, storages, bridges, networks, DNS, VMs, pools, users, roles... Every fact VALOR
+# needs comes from here, so nothing about a particular cluster is ever hard-coded. Parsing is kept apart from running
+# commands, so tests can feed it captured output *wags tail*
 """Read-only discovery of the Proxmox VE node and cluster the installer runs on.
 
 Every fact VALOR needs comes from here, so nothing about a particular cluster is ever hard-coded.
 Parsing is split from the commands so it can be tested with captured output.
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# ipaddress, json, re, socket (the host name), dataclass/field, Path >w<
 import ipaddress
 import json
 import re
@@ -13,14 +19,18 @@ import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# RECORD_DIR (to find an existing record) and the command helpers OwO
 from . import RECORD_DIR
 from .sh import pvesh, run
 
 # Storage types whose disks support linked clones (qcow2 on file storages, thin/snapshot-capable block storages).
+# FILE_TYPES: file-based storage types (they keep disks as files, e.g. qcow2) ^w^
 LINKED_CLONE_TYPES = {"zfspool", "lvmthin", "rbd", "dir", "nfs", "cifs", "glusterfs", "btrfs"}
 FILE_TYPES = {"dir", "nfs", "cifs", "glusterfs", "btrfs", "cephfs"}
 
 
+# Storage: one storage: id, type, content kinds, free/total bytes, shared, active, its path; plus handy questions:
+# does it hold VM disks? support linked clones? is it file-based? how many GiB are free? UwU
 @dataclass
 class Storage:
     id: str
@@ -49,6 +59,7 @@ class Storage:
         return self.avail / 2**30
 
 
+# Bridge: one network bridge: name, VLAN-aware, its ports, address, gateway, active, comment >w<
 @dataclass
 class Bridge:
     name: str
@@ -60,6 +71,13 @@ class Bridge:
     comments: str = ""
 
 
+# Facts: everything discovered, in one object OwO
+#   version, node, its IP, cluster and nodes; CPU threads and flags; memory; storages and bridges
+#   the management bridge/VLAN/network/gateway (where the node's default route goes)
+#   networks the node is on (VALOR reserves them), DNS servers and search domain
+#   used VM ids and their pools; pools, users, roles and every known privilege
+#   existing VALOR templates, pending network changes, internet reachability, an existing install record, and every
+#   interface name
 @dataclass
 class Facts:
     pve_version: str
@@ -92,6 +110,7 @@ class Facts:
     record: dict | None = None
     interfaces: set[str] = field(default_factory=set)      # every network interface name on the node
 
+    # version_tuple: "9.0.3" -> (9, 0). has_aes: does the CPU have AES-NI? ^w^
     @property
     def version_tuple(self) -> tuple[int, int]:
         m = re.match(r"(\d+)\.(\d+)", self.pve_version)
@@ -101,6 +120,7 @@ class Facts:
     def has_aes(self) -> bool:
         return "aes" in self.cpu_flags
 
+    # storage() / bridge(): find one by name UwU
     def storage(self, sid: str) -> Storage | None:
         return next((s for s in self.storages if s.id == sid), None)
 
@@ -108,7 +128,9 @@ class Facts:
         return next((b for b in self.bridges if b.name == name), None)
 
 
+# ---- Parsing (pure functions, testable) >w<
 # ---------------------------------------------------------------------- parsing (pure)
+# parse_storages(): combine the node's storage list with the storage configs (enabled ones only), sorted by id OwO
 def parse_storages(node_list: list[dict], configs: dict[str, dict]) -> list[Storage]:
     out = []
     for s in node_list:
@@ -122,6 +144,7 @@ def parse_storages(node_list: list[dict], configs: dict[str, dict]) -> list[Stor
     return sorted(out, key=lambda s: s.id)
 
 
+# parse_bridges(): Linux and OVS bridges, short names first ^w^
 def parse_bridges(net: list[dict]) -> list[Bridge]:
     out = []
     for i in net:
@@ -133,6 +156,8 @@ def parse_bridges(net: list[dict]) -> list[Bridge]:
     return sorted(out, key=lambda b: (len(b.name), b.name))
 
 
+# parse_mgmt(): where the node's default route goes: the bridge (a VLAN interface like vmbr0.20 means bridge vmbr0,
+# VLAN 20), the node's IP, its network and the gateway UwU
 def parse_mgmt(default_routes: list[dict], links: list[dict], addrs: list[dict]) -> tuple[str, int, str, str, str]:
     """(bridge, vlan, node_ip, network, gateway) from `ip -j route show default`, `ip -j -d link`, `ip -j -4 addr`."""
     if not default_routes:
@@ -153,6 +178,7 @@ def parse_mgmt(default_routes: list[dict], links: list[dict], addrs: list[dict])
     return bridge, vlan, str(iface.ip), str(iface.network), gateway
 
 
+# parse_networks(): every network the node is on or routes to, merged (VALOR keeps ranges away from them) >w<
 def parse_networks(addrs: list[dict], routes: list[dict]) -> list[str]:
     """IPv4 networks this node is attached to or routes to (except default/loopback/link-local): VALOR reserves
     them, so no range segment overlaps them and no range can reach them."""
@@ -175,6 +201,7 @@ def parse_networks(addrs: list[dict], routes: list[dict]) -> list[str]:
     return [str(n) for n in collapsed]
 
 
+# parse_resolv(): DNS servers (not 127.x local resolvers) and the search domain from resolv.conf OwO
 def parse_resolv(text: str) -> tuple[list[str], str]:
     ns, search = [], ""
     for line in text.splitlines():
@@ -186,6 +213,7 @@ def parse_resolv(text: str) -> tuple[list[str], str]:
     return ns, search
 
 
+# parse_cpu_flags(): the CPU feature flags from /proc/cpuinfo ^w^
 def parse_cpu_flags(cpuinfo: str) -> set[str]:
     for line in cpuinfo.splitlines():
         if line.startswith("flags"):
@@ -193,11 +221,15 @@ def parse_cpu_flags(cpuinfo: str) -> set[str]:
     return set()
 
 
+# ---- Collecting (runs commands) UwU
 # ---------------------------------------------------------------------- collection
+# _ipj(): run `ip -j ...` and parse its JSON >w<
 def _ipj(*args: str) -> list[dict]:
     return json.loads(run(["ip", "-j", *args]).stdout or "[]")
 
 
+# check_internet(): can the node reach Ubuntu's cloud images AND PyPI? (The VALOR VM installs Python packages from
+# PyPI) OwO
 def check_internet() -> tuple[bool, str]:
     res = run(["curl", "-fsSI", "--max-time", "20", "-o", "/dev/null", "-w", "%{http_code}",
                "https://cloud-images.ubuntu.com/"], check=False)
@@ -209,8 +241,10 @@ def check_internet() -> tuple[bool, str]:
     return False, f"cloud-images.ubuntu.com not reachable (curl exit {res.returncode})"
 
 
+# collect(): ask the node everything ^w^
 def collect(instance: str, check_net: bool = True) -> Facts:
     """Ask this node (pvesh, ip, /etc and /proc) everything the installer needs to know."""
+    # Version and cluster status: this node, the cluster's name, every node UwU
     version = pvesh("get", "/version")
     status = pvesh("get", "/cluster/status")
     this_node = next((entry for entry in status if entry.get("type") == "node" and entry.get("local")), None)
@@ -218,6 +252,7 @@ def collect(instance: str, check_net: bool = True) -> Facts:
     cluster = next((entry.get("name") for entry in status if entry.get("type") == "cluster"), None)
     nodes = [{"name": entry["name"], "ip": entry.get("ip"), "online": bool(entry.get("online"))}
              for entry in status if entry.get("type") == "node"]
+    # Node status, storages, bridges, the management network, other networks, DNS >w<
     node_status = pvesh("get", f"/nodes/{node}/status")
     configs = {config["storage"]: config for config in pvesh("get", "/storage")}
     storages = parse_storages(pvesh("get", f"/nodes/{node}/storage"), configs)
@@ -228,6 +263,7 @@ def collect(instance: str, check_net: bool = True) -> Facts:
     networks = parse_networks(addrs, _ipj("-4", "route"))
     resolv = Path("/etc/resolv.conf")
     nameservers, search = parse_resolv(resolv.read_text() if resolv.exists() else "")
+    # VMs, roles, and every privilege this Proxmox knows (the Administrator role has them all) OwO
     resources = pvesh("get", "/cluster/resources", type="vm")
     roles = {role["roleid"]: set(filter(None, (role.get("privs") or "").split(",")))
              for role in pvesh("get", "/access/roles")}
@@ -235,6 +271,7 @@ def collect(instance: str, check_net: bool = True) -> Facts:
     admin = pvesh("get", "/access/roles/Administrator") or {}
     privileges = set(admin.keys()) if isinstance(admin, dict) else set()
     record_file = RECORD_DIR / f"{instance}.json"
+    # Build the Facts ^w^
     facts = Facts(
         pve_version=version.get("version", "0.0"), node=node, node_ip=node_ip, cluster_name=cluster, nodes=nodes,
         cpu_threads=int(node_status.get("cpuinfo", {}).get("cpus", 0)),
@@ -253,6 +290,7 @@ def collect(instance: str, check_net: bool = True) -> Facts:
         pending_network_changes=Path("/etc/network/interfaces.new").exists(),
         record=json.loads(record_file.read_text()) if record_file.exists() else None,
     )
+    # Every interface name, and (unless skipped) the internet check UwU *finishes the sniff tour*
     facts.interfaces = {link["ifname"] for link in _ipj("link")}
     if check_net:
         facts.internet = check_internet()

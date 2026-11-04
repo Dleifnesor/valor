@@ -1,3 +1,8 @@
+# *hands out the smallest possible keys* OwO installer/identity.py: VALOR's LEAST-PRIVILEGE Proxmox identity! ^w^
+# Roles, an API user that can only use tokens, a privilege-separated token, pools and the permissions (ACLs) tying them
+# together. The token may only touch VMs in VALOR's range pool, clone templates, use VALOR's storage and bridges, and
+# read node status. The VALOR VM itself sits in a pool the token has NO rights on, so the AI-driven engine can never
+# touch VALOR *wags tail*
 """The least-privilege Proxmox identity: roles, a token-only user, a privilege-separated token, pools and ACLs.
 
 The token may act on VMs in VALOR's range pool, clone from the template pool, allocate disks on the range storage,
@@ -5,19 +10,25 @@ attach NICs to the two bridges and read node status - nothing else. The VALOR VM
 has no rights on, so the AI-driven engine can never touch VALOR itself.
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# json (the token file), ssl/urllib (checking the token against the local API) >w<
 import json
 import ssl
 import urllib.error
 import urllib.request
 
+# ui, the answers, the discovered facts, the record, and the command helpers OwO
 from . import ui
 from .answers import Answers
 from .discover import Facts
 from .record import Record
 from .sh import CommandError, pvesh
 
+# ENGINE_PRIVS: what the engine may do to range VMs (create, clone, configure, power, console, snapshots). The guest
+# agent privileges differ: Proxmox 9 has VM.GuestAgent.*, Proxmox 8 bundles them into VM.Monitor. TOKEN: the token's
+# name ^w^
 ENGINE_PRIVS = ["Pool.Audit", "VM.Allocate", "VM.Audit", "VM.Clone", "VM.Config.CDROM", "VM.Config.CPU",
                 "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.HWType", "VM.Config.Memory", "VM.Config.Network",
                 "VM.Config.Options", "VM.PowerMgmt", "VM.Console", "VM.Snapshot", "VM.Snapshot.Rollback"]
@@ -26,9 +37,12 @@ AGENT_PRIVS_8 = ["VM.Monitor"]          # PVE 8: guest agent access is part of V
 TOKEN = "appliance"
 
 
+# roles(): VALOR's roles and their privileges, limited to privileges this Proxmox version knows UwU
 def roles(facts: Facts) -> dict[str, list[str]]:
     """VALOR's roles with their privileges, limited to the privileges this Proxmox version knows."""
     agent = AGENT_PRIVS_9 if "VM.GuestAgent.Unrestricted" in facts.privileges else AGENT_PRIVS_8
+    # ValorEngine (range VMs), ValorTemplateUser (clone templates), ValorStorage (disks), ValorNodeAudit (read node
+    # status), ValorISO/ValorISOReader (the ISO library), ValorDownload (let Proxmox fetch URLs) >w<
     want = {
         "ValorEngine": ENGINE_PRIVS + agent,
         "ValorTemplateUser": ["VM.Audit", "VM.Clone"],
@@ -40,6 +54,7 @@ def roles(facts: Facts) -> dict[str, list[str]]:
         "ValorISOReader": ["Datastore.Audit"],
         "ValorDownload": ["Sys.AccessNetwork"],                              # Proxmox fetches a URL for VALOR
     }
+    # Drop (and warn about) privileges this Proxmox doesn't know OwO
     if facts.privileges:
         for name, privs in want.items():
             missing = [priv for priv in privs if priv not in facts.privileges]
@@ -49,6 +64,7 @@ def roles(facts: Facts) -> dict[str, list[str]]:
     return want
 
 
+# acls(): (path, role) for every permission: the COMPLETE list of what VALOR may do ^w^
 def acls(settings: Answers, facts: Facts, bridge: str) -> list[tuple[str, str]]:
     """(path, role) for every permission the user and its token get - the complete list of what VALOR may do."""
     paths = [(f"/pool/{settings.pool_ranges}", "ValorEngine"),
@@ -56,9 +72,11 @@ def acls(settings: Answers, facts: Facts, bridge: str) -> list[tuple[str, str]]:
              (f"/storage/{settings.range_storage}", "ValorStorage"),
              (f"/sdn/zones/localnetwork/{bridge}", "PVESDNUser"),
              (f"/nodes/{facts.node}", "ValorNodeAudit")]
+    # The uplink bridge too, unless it's the same bridge UwU
     uplink = f"/sdn/zones/localnetwork/{settings.vm_bridge}"
     if uplink not in [path for path, _ in paths]:
         paths.append((uplink, "PVESDNUser"))
+    # The ISO storage (and downloads on the node), and read-only access to other ISO storages >w<
     if settings.iso_storage:
         paths.append((f"/storage/{settings.iso_storage}", "ValorISO"))
         paths.append((f"/nodes/{facts.node}", "ValorDownload"))
@@ -68,6 +86,7 @@ def acls(settings: Answers, facts: Facts, bridge: str) -> list[tuple[str, str]]:
     return paths
 
 
+# plan(): what ensure() would do, for --dry-run OwO
 def plan(settings: Answers, facts: Facts, bridge: str) -> list[str]:
     """What ensure() would do, for --dry-run."""
     out = []
@@ -90,6 +109,7 @@ def plan(settings: Answers, facts: Facts, bridge: str) -> list[str]:
     return out
 
 
+# ensure_roles(): create missing roles and update changed ones (also on --upgrade); remember which VALOR created ^w^
 def ensure_roles(facts: Facts, rec: Record) -> None:
     """Create or update VALOR's roles to this version's privileges (also run by --upgrade)."""
     created_roles = rec.objects.get("roles_created", [])
@@ -105,6 +125,7 @@ def ensure_roles(facts: Facts, rec: Record) -> None:
     rec.set("roles_created", sorted(set(created_roles)))
 
 
+# grant(): give every ACL to the user AND its token (a privilege-separated token needs both) UwU
 def grant(settings: Answers, facts: Facts, rec: Record, bridge: str, token_id: str) -> None:
     """Grant every ACL to the user and to its token (a privilege-separated token needs both)."""
     granted = []
@@ -116,10 +137,12 @@ def grant(settings: Answers, facts: Facts, rec: Record, bridge: str, token_id: s
     ui.ok(f"{len(granted)} permissions granted to the user and the token")
 
 
+# ensure(): create/refresh everything and return the new token (its secret goes ONLY into the VALOR VM) >w<
 def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
     """Create/refresh everything; returns {"token_id", "secret"} (the secret goes only into the VALOR VM)."""
     ensure_roles(facts, rec)
 
+    # The API user: create it (no password at all), or reuse ours; refuse a same-named user VALOR didn't make OwO
     if settings.user not in facts.users:
         pvesh("create", "/access/users", userid=settings.user,
               comment=f"VALOR {settings.id}: engine API user (token only, no password)")
@@ -131,6 +154,7 @@ def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
     else:
         rec.objects.setdefault("user_created", False)
 
+    # The three pools: ranges, OS templates, and the VALOR VM ^w^
     pools_created = rec.objects.get("pools_created", [])
     pools = ((settings.pool_ranges, "ranges"), (settings.pool_templates, "OS templates"),
              (settings.pool_system, "the VALOR VM"))
@@ -141,6 +165,7 @@ def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
             ui.ok(f"pool {pool}")
     rec.set("pools_created", sorted(set(pools_created)))
 
+    # A fresh token every run (Proxmox only shows a secret when it's created) UwU
     # A fresh token every run: Proxmox shows a token's secret only when it is created.
     tokens = {token["tokenid"] for token in (pvesh("get", f"/access/users/{settings.user}/token") or [])}
     if TOKEN in tokens:
@@ -155,6 +180,8 @@ def ensure(settings: Answers, facts: Facts, rec: Record, bridge: str) -> dict:
     return {"token_id": token_id, "secret": secret}
 
 
+# token_cannot_touch(): ask the LOCAL API, as the token, for a VM's config: True when the answer is 403 Forbidden (the
+# check that VALOR can't touch its own VM) >w<
 def token_cannot_touch(node: str, vmid: int, token: dict) -> bool:
     """True when the token gets HTTP 403 for the given VM (checked against the local API)."""
     context = ssl.create_default_context()
@@ -169,6 +196,8 @@ def token_cannot_touch(node: str, vmid: int, token: dict) -> bool:
         return e.code == 403
 
 
+# remove(): uninstall: revoke the ACLs, delete the token, the user (if VALOR made it) and VALOR's roles no other ACL
+# uses. Every step tolerates "already gone" OwO
 def remove(rec: Record, purge_user: bool = True) -> None:
     """Uninstall: revoke the ACLs, delete the token, the user (if VALOR made it) and VALOR's roles no other ACL
     uses. Every step tolerates "already gone", so a half-finished uninstall can run again."""
@@ -201,6 +230,8 @@ def remove(rec: Record, purge_user: bool = True) -> None:
                 pass
 
 
+# api_endpoint(): how the VALOR VM reaches and verifies the Proxmox API: by IP with the cluster's CA, or by name with
+# a public CA ^w^
 def api_endpoint(facts: Facts) -> tuple[str, str | None]:
     """How the VALOR VM reaches and verifies the Proxmox API: (host, CA PEM to trust or None for system CAs)."""
     import socket
@@ -219,5 +250,6 @@ def api_endpoint(facts: Facts) -> tuple[str, str | None]:
                      "matches); see docs/INSTALL.md, 'custom API certificates'")
 
 
+# json_token(): the token file's contents UwU *locks the key box*
 def json_token(token: dict) -> str:
     return json.dumps({"token_id": token["token_id"], "secret": token["secret"]})

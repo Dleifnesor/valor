@@ -1,3 +1,8 @@
+# *builds VALOR's own little house* OwO installer/appliance.py: the VALOR VM itself! ^w^
+# Create it from the Ubuntu template, then PROVISION it over the guest agent: copy in a release payload (engine, web
+# service, built UI, roles, baselines, catalogs) plus this installation's settings, and run appliance/setup.sh inside.
+# Secrets (API token, the first admin's password) travel only over the agent channel and are wiped from the staging
+# area when setup finishes *wags tail*
 """The VALOR VM: create it from the Ubuntu template, then provision it over the guest agent.
 
 Provisioning copies a release payload (engine, web service, built UI, roles, baselines, catalog) and the
@@ -5,8 +10,10 @@ installation's settings into the VM and runs appliance/setup.sh there. Secrets (
 travel only over the agent channel and are deleted from the staging area when setup finishes.
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# io/tarfile (the payload), json, secrets/string (a one-time password), ssl/urllib (the health check), time, Path >w<
 import io
 import json
 import secrets
@@ -17,6 +24,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+# SOURCE/VERSION, the guest agent helpers, ui; answers, facts, the record, command helpers, and cpu_type OwO
 from . import SOURCE, VERSION, guest, ui
 from .answers import Answers
 from .discover import Facts
@@ -24,11 +32,14 @@ from .record import Record
 from .sh import CommandError, pvesh, run
 from .templates import cpu_type
 
+# STAGE: the staging folder inside the VM. PAYLOAD_DIRS/FILES: what goes into the VM (no tests, no dev tools) ^w^
 STAGE = "/var/lib/valor-install"
 PAYLOAD_DIRS = ["valor", "appliance", "roles", "baselines", "templates", "examples"]
 PAYLOAD_FILES = ["pyproject.toml", "README.md"]
 
 
+# payload(): a tar.gz of everything the VM needs (the web UI must be built), owned by root, without __pycache__, plus a
+# VERSION file UwU
 def payload() -> bytes:
     """tar.gz of everything the VM needs (no tests, no dev tooling, no node_modules)."""
     dist = SOURCE / "web" / "dist" / "index.html"
@@ -58,6 +69,7 @@ def payload() -> bytes:
     return buf.getvalue()
 
 
+# _toml(): one value in TOML syntax (true/false, numbers, lists; text as a JSON string, which TOML accepts) >w<
 def _toml(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -68,6 +80,9 @@ def _toml(value) -> str:
     return json.dumps(str(value))          # a JSON string is a valid TOML basic string
 
 
+# config_toml(): /etc/valor/config.toml for the VM: how to reach Proxmox, what the engine may use (pools, storage,
+# bridges, VM ids, VLANs, the memory limit, reserved networks, ISO storages), paths, guest defaults and the web
+# settings. Written with a "re-run the installer instead of editing" header OwO
 def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_pem: str | None, vm_ip: str) -> str:
     """/etc/valor/config.toml for the VALOR VM: what the engine may use on this cluster (read by valor/config.py and
     valor/web/config.py)."""
@@ -101,6 +116,8 @@ def config_toml(settings: Answers, facts: Facts, bridge: str, api_host: str, ca_
     return "\n".join(lines)
 
 
+# appliance_env(): the settings file setup.sh reads: mode, version, who may reach the UI, who may SSH in (break-glass:
+# the Proxmox nodes), TLS mode, host name, domain, first admin, and the Proxmox host ^w^
 def appliance_env(settings: Answers, facts: Facts, mode: str, api_host: str) -> str:
     """Settings for setup.sh (values were validated by the installer: CIDRs, IPs, DNS labels)."""
     ssh_from = sorted({node["ip"] for node in facts.nodes if node.get("ip")} | {facts.node_ip})    # break-glass SSH
@@ -119,16 +136,21 @@ def appliance_env(settings: Answers, facts: Facts, mode: str, api_host: str) -> 
     return "".join(f'{key}="{value}"\n' for key, value in env.items())
 
 
+# new_password(): the first admin's one-time password: 4 groups of 6 letters/digits (changed at the first sign-in) UwU
 def new_password() -> str:
     """The first admin's one-time password: 4 groups of 6 letters/digits (changed at the first sign-in)."""
     alphabet = string.ascii_letters + string.digits
     return "-".join("".join(secrets.choice(alphabet) for _ in range(6)) for _ in range(4))
 
 
+# _qm(): run `qm ...` and return its output >w<
 def _qm(*args: str) -> str:
     return run(["qm", *args]).stdout
 
 
+# create(): make the VALOR VM: a FULL clone of the Ubuntu template (so it never depends on a template), in the
+# system pool, with its size, CPU, network, cloud-init user and break-glass SSH key, autostart, tags and a
+# description. An existing VALOR VM (a resumed install) is kept; a foreign VM with that id stops the install OwO
 def create(settings: Answers, facts: Facts, rec: Record, template: int) -> int:
     """Clone the Ubuntu template into the VALOR VM (a full clone: it must not depend on a template) and set its
     size, network, cloud-init user and break-glass SSH key. An existing VALOR VM (a resumed install) is kept."""
@@ -162,6 +184,7 @@ def create(settings: Answers, facts: Facts, rec: Record, template: int) -> int:
     return vmid
 
 
+# rec_key(): the break-glass SSH key for the VALOR VM, created once and kept cluster-wide, root-only ^w^
 def rec_key(settings: Answers) -> Path:
     """Break-glass SSH key for the VALOR VM, kept cluster-wide and root-only."""
     from . import RECORD_DIR
@@ -179,6 +202,8 @@ def rec_key(settings: Answers) -> Path:
     return key
 
 
+# boot(): start the VM if needed and wait until it's usable: the guest agent answers, cloud-init finished, and it has
+# an IPv4 address. Returns that address UwU
 def boot(facts: Facts, vmid: int) -> str:
     """Start the VM if needed and wait until it is usable (guest agent, cloud-init done, an IPv4 address)."""
     if "running" not in _qm("status", str(vmid)):
@@ -198,6 +223,8 @@ def boot(facts: Facts, vmid: int) -> str:
     return ip
 
 
+# provision(): copy the payload and the files (config, secrets) in, unpack, and run setup.sh in the background,
+# showing its "[time] step" lines as they appear; fail with the log's last lines if it fails (40 minutes max) >w<
 def provision(settings: Answers, facts: Facts, vmid: int, mode: str, files: dict[str, str | bytes]) -> None:
     """files: staging-relative name -> content (config, secrets). Runs setup.sh and streams its log."""
     node = facts.node
@@ -234,9 +261,11 @@ def provision(settings: Answers, facts: Facts, vmid: int, mode: str, files: dict
     raise SystemExit("appliance setup did not finish within 40 minutes; see /var/log/valor-setup.log in the VM")
 
 
+# JOBS_DIR: where the VM keeps engine jobs OwO
 JOBS_DIR = "/var/lib/valor/state/jobs"
 
 
+# busy_jobs(): jobs running or queued in the VM (an upgrade waits for them) ^w^
 def busy_jobs(facts: Facts, vmid: int) -> list[str]:
     """Jobs running or queued in the VALOR VM (an upgrade restarts the worker, which first finishes its job)."""
     code, out, _ = guest.script(facts.node, vmid, f"""
@@ -248,6 +277,7 @@ true
     return out.split() if code == 0 else []
 
 
+# wait_jobs(): wait (checking every 30 s) until no jobs are busy UwU
 def wait_jobs(facts: Facts, vmid: int, timeout: float = 3 * 3600) -> None:
     end = time.time() + timeout
     while time.time() < end:
@@ -259,10 +289,12 @@ def wait_jobs(facts: Facts, vmid: int, timeout: float = 3 * 3600) -> None:
     raise SystemExit("VALOR jobs are still running; try the upgrade again later")
 
 
+# ca_pem(): VALOR's own CA certificate from the VM >w<
 def ca_pem(facts: Facts, vmid: int) -> str:
     return guest.read_file(facts.node, vmid, "/etc/valor/tls/ca.crt")
 
 
+# health(): does the web UI answer /api/health over HTTPS with a certificate that verifies? OwO
 def health(ip: str, ca: str | None) -> bool:
     """Does the web UI answer over HTTPS with a certificate that verifies (against VALOR's own CA when given)?"""
     context = ssl.create_default_context(cadata=ca) if ca else ssl.create_default_context()
@@ -274,6 +306,7 @@ def health(ip: str, ca: str | None) -> bool:
         return False
 
 
+# fingerprint(): a certificate's SHA-256 fingerprint as "AB:CD:..." like browsers show it ^w^
 def fingerprint(pem: str) -> str:
     der = ssl.PEM_cert_to_DER_cert(pem)
     import hashlib
@@ -281,6 +314,7 @@ def fingerprint(pem: str) -> str:
     return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))      # AB:CD:EF... as browsers show it
 
 
+# destroy(): delete the VALOR VM (uninstall), but NEVER a VM without the valor-appliance tag UwU
 def destroy(vmid: int) -> None:
     try:
         config = _qm("config", str(vmid))
@@ -294,6 +328,7 @@ def destroy(vmid: int) -> None:
     ui.ok(f"VALOR VM {vmid} removed")
 
 
+# pool_vms(): the VMs in a pool (empty when the pool is gone) >w< *locks up the little house*
 def pool_vms(pool: str) -> list[dict]:
     try:
         members = (pvesh("get", f"/pools/{pool}") or {}).get("members", [])

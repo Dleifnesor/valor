@@ -1,12 +1,22 @@
+# *puts on a tiny crown* OwO roles/ad-dc/role.yaml: metadata for the ad-dc role, which turns a Windows Server into
+# the FIRST domain controller of a brand-new Active Directory forest (AD DS + DNS) ^w^
+# VALOR reads this file as parsed YAML: description, OS families, ports and the params a spec may set
 description: Active Directory domain controller that creates a new forest (AD DS + DNS)
+# Windows only UwU
 families: [windows]
+# The ports a domain controller serves: DNS, Kerberos, RPC, LDAP, SMB, LDAPS and the global catalog >w<
 ports: [53, 88, 135, 389, 445, 464, 636, 3268, 3269]
+# params: the settings a spec can give this role OwO
 params:
+  # domain (required): the new domain's DNS name; `raw` means it is used exactly as written, and it must match the
+  # pattern (labels separated by dots, at least two labels) *wags tail*
   domain:
     raw: true
     pattern: '^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$'
     required: true
     description: DNS name of the new domain, e.g. corp.lab
+  # netbios: the old-style short domain name (up to 15 upper-case characters); left out, it is the domain's first
+  # label in upper case ^w^
   netbios:
     raw: true
     pattern: '^[A-Z0-9-]{1,15}$'

@@ -1,4 +1,9 @@
+// *holds up the plan for approval* OwO web/src/components/PlanModal.tsx shows THE PLAN before a build! ^w^
+// On the map and as a table: what each VM will go through. "Approve and build" starts exactly this plan (the server
+// plans again and compares hashes). With `draft`, it's the plan for the range's draft, and approving makes the draft
+// the range's spec. Custom scripts are shown in full and must be acknowledged first *wags tail*
 import { useState } from "react";
+// post/ApiError, the plan types, openTask (show the started job), ErrorBox/Modal, and the map UwU
 import { ApiError, post } from "../api";
 import { Change, Plan, Topology } from "../types";
 import { openTask } from "../hooks";
@@ -9,6 +14,8 @@ import { CHANGE_LABEL, TopologyMap } from "./Topology";
 // recomputes it and compares hashes). With `draft`, the plan is for the range's draft and approving makes the
 // draft the range's spec.
 
+// PlanResponse: what POST /api/ranges/<name>/plan returns: ok or errors, warnings, the plan and its hash, the map,
+// and the custom scripts it would run >w<
 export interface PlanResponse {
   ok: boolean;
   errors?: { location: string; message: string; hint?: string }[];
@@ -19,11 +26,14 @@ export interface PlanResponse {
   scripts?: { host: string; os?: string; script: string; ports?: string }[];
 }
 
+// PlanModal: `name` = the range; `res` = the plan response; `draft` = plan for the draft OwO
 export function PlanModal({ name, res, onClose, draft }: { name: string; res: PlanResponse; onClose: () => void; draft?: boolean }) {
+  // State: starting, the last error, and "I read the scripts" ^w^
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
   const [ack, setAck] = useState(false);
   const scripts = res.ok ? res.scripts ?? [] : [];
+  // approve(): send the plan hash; on success close and open the started job's task viewer UwU
   const approve = async () => {
     setBusy(true);
     setErr(null);
@@ -36,12 +46,15 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
       setBusy(false);
     }
   };
+  // changeOf: each VM's change color, read from the map nodes ("host:web" -> "web") >w<
   const plan = res.plan;
   const changeOf: Record<string, Change | undefined> = {};
   for (const node of res.topology.nodes) {
     if (node.id === "rtr") changeOf.rtr = node.change;
     else if (node.id.startsWith("host:")) changeOf[node.id.slice(5)] = node.change;
   }
+  // The dialog; the footer has Close and (when there are changes) Approve, disabled while starting or until the
+  // scripts are acknowledged OwO
   return (
     <Modal title={draft ? `Plan for the changes to ${name}` : `Plan for ${name}`} onClose={onClose} wide footer={
       <>
@@ -53,12 +66,14 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
         )}
       </>
     }>
+      {/* The spec can't be built: list the problems */}
       {!res.ok && (
         <div className="alert error">
           The spec can't be built on this cluster yet:
           <ul>{res.errors?.map((error, i) => <li key={i}>{error.location}: {error.message}{error.hint ? ` (${error.hint})` : ""}</li>)}</ul>
         </div>
       )}
+      {/* Warnings, "nothing to do", or the change counts */}
       {res.warnings?.map((warning, i) => <div key={i} className="alert warn">{warning.message}</div>)}
       {plan && !plan.changes && <div className="alert ok">Nothing to do: the range already matches its spec.</div>}
       {plan && plan.changes && (
@@ -67,7 +82,9 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
           <span className="muted">Approving runs exactly this plan; if anything changes before it starts, VALOR asks again.</span>
         </div>
       )}
+      {/* The map with change colors */}
       <div className="card" style={{ overflow: "hidden" }}><TopologyMap topology={res.topology} /></div>
+      {/* One row per VM: name and id, the action (colored), and why */}
       {plan && (
         <div className="table-wrap">
           <table>
@@ -87,6 +104,7 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
           </table>
         </div>
       )}
+      {/* Custom scripts this plan runs as root/SYSTEM, shown in full, with the acknowledgement checkbox */}
       {scripts.length > 0 && plan?.changes && (
         <div className="card scripts-review">
           <h3>Custom scripts this plan runs</h3>
@@ -104,6 +122,7 @@ export function PlanModal({ name, res, onClose, draft }: { name: string; res: Pl
             I have read the custom scripts and want to run them</label>
         </div>
       )}
+      {/* Any error from approving */}
       <ErrorBox error={err} />
     </Modal>
   );

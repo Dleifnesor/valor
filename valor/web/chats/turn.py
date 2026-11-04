@@ -1,3 +1,9 @@
+# *settles in to chat with the AI* OwO valor/web/chats/turn.py: one TURN of a chat, written in the background! ^w^
+# When you send a message, a thread writes the assistant's answer while your browser polls it. The answer's
+# meta.steps is a LIVE FEED of what the model does: thinking, text, every tool call with its output, VALOR's checks
+# and spec edits. Code mode stops at every action that changes something until you approve or deny it (unless you
+# allowed all). The model's side of the turn (frozen system prompt, history, tool calls and results) is saved with
+# the message, so a turn resumes exactly where it stopped *wags tail* (the map of this file is in the docstring)
 """The background turn of a chat: the model's answer is written by a thread while the browser polls it.
 
 The assistant message's `meta.steps` is a live feed of what the model does - its reasoning (when the provider
@@ -12,14 +18,18 @@ message, so a turn resumes exactly where it stopped.
     Turn                     one answer: the chat builder, a range's Plan mode, or the agent loop (Question/Code)
 """
 
+# Lazy type hints UwU
 from __future__ import annotations
 
+# json (meta), logging, re (spec names), threading (turn threads, stop flags), time >w<
 import json
 import logging
 import re
 import threading
 import time
 
+# agent (the tools), ai (providers, prompts, the build loop), drafts, state, cluster helpers, ValorError, make_plan,
+# PVE, spec helpers, validate_cluster, db, editing (the map view), builder helpers, range helpers, and autofix OwO
 from ... import agent, ai, drafts, state
 from ...cluster import load_catalog, range_vms
 from ...errors import ValorError
@@ -34,18 +44,24 @@ from . import autofix
 
 log = logging.getLogger("valor.chats")
 
+# MAX_ROUNDS: at most 40 model calls per turn. WRAP_UP: a fix turn is nudged to finish 8 calls before the end.
+# FLUSH: feed writes at most every 0.4 s while streaming. _active: answer id -> its thread's stop flag, guarded by
+# _lock ^w^
 MAX_ROUNDS = 40                 # model calls per turn in the agent loop
 WRAP_UP = 8                     # a fix turn is told to finish this many model calls before it runs out
 FLUSH = 0.4                     # seconds between feed writes while the model streams
 _active: dict[int, threading.Event] = {}          # assistant message id -> stop flag of the thread running it
 _lock = threading.Lock()
 
+# UNFINISHED: tool statuses that are still "in flight" (cancelled when a turn ends early) UwU
 # Tool steps still in flight; when a turn ends early they are marked cancelled.
 UNFINISHED = ("pending", "queued", "approved", "running")
 
 
 # ---- Starting, resuming and stopping a turn ----------------------------------------------------------------
 
+# start: save the person's message and an empty "running" answer, register a stop flag (under the lock, in the
+# same step), and start the thread. Returns (message id, answer id) >w<
 def start(app, conn, chat_id: int, username: str, mode: str, text: str) -> tuple[int, int]:
     """A message to the assistant and its answer, which a thread writes in the background. Returns both ids."""
     now = time.time()
@@ -60,6 +76,7 @@ def start(app, conn, chat_id: int, username: str, mode: str, text: str) -> tuple
     return user_msg_id, answer_id
 
 
+# resume: all pending tool calls were decided: mark the answer running again and continue in a new thread OwO
 def resume(app, conn, chat_id: int, msg_id: int, username: str, meta: dict) -> None:
     """Every pending action of a waiting answer is decided (meta holds the decisions): go on in the background."""
     with _lock:
@@ -69,6 +86,7 @@ def resume(app, conn, chat_id: int, msg_id: int, username: str, meta: dict) -> N
     spawn(app, chat_id, msg_id, username, True, stop_flag)
 
 
+# stop: ask the answer's thread to stop after its current step (False = no thread is running it) ^w^
 def stop(msg_id: int) -> bool:
     """Ask the thread writing this answer to stop after its current step. False when no thread is writing it."""
     stop_flag = _active.get(msg_id)
@@ -77,6 +95,8 @@ def stop(msg_id: int) -> bool:
     return stop_flag is not None
 
 
+# mark_interrupted: an answer still "running" whose thread is gone (VALOR restarted) becomes failed. The careful
+# locking (explained in the docstring) means this can never hit a turn that's really alive UwU
 def mark_interrupted(conn, row) -> None:
     """A turn still marked running whose thread is gone (VALOR restarted): mark it failed. A thread is registered
     under _lock in the same step that marks its message running and writes its final status before it unregisters,
@@ -91,6 +111,7 @@ def mark_interrupted(conn, row) -> None:
                          "WHERE id = ? AND status = 'running'", (json.dumps(meta), row["id"]))
 
 
+# spawn: start the thread (daemon: it won't block shutdown), named after the answer >w<
 def spawn(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag: threading.Event) -> None:
     """Start the turn's thread; the caller registered stop_flag in _active when it marked the message running."""
     thread = threading.Thread(target=run, args=(app, chat_id, msg_id, username, resume, stop_flag), daemon=True,
@@ -98,15 +119,18 @@ def spawn(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag
     thread.start()
 
 
+# Stopped: raised inside the turn when the person pressed Stop OwO
 class Stopped(Exception):
     """The person pressed Stop: the turn ends at the next step."""
 
 
 # ---- The live feed -------------------------------------------------------------------------------------------
 
+# Feed: the answer as the browser sees it ^w^
 class Feed:
     """The assistant message as the browser sees it: steps appended and streamed, written at most every FLUSH s."""
 
+    # Load the saved meta (a resumed turn continues its feed); count existing steps for the next id UwU
     def __init__(self, conn, msg_id: int, stop: threading.Event):
         self.conn, self.id, self.stop = conn, msg_id, stop
         row = conn.execute("SELECT meta FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
@@ -119,6 +143,7 @@ class Feed:
     def steps(self) -> list[dict]:
         return self.meta["steps"]
 
+    # add: append a finished step (closing any streaming step first) and write it at once >w<
     def add(self, step: dict) -> dict:
         self.close()
         self.count += 1
@@ -129,6 +154,7 @@ class Feed:
         self.flush(True)
         return step
 
+    # close: end the open streaming text/thinking steps (the next streamed piece starts a new step) OwO
     def close(self) -> None:
         """End the streaming text / thinking steps (the next piece starts a new one)."""
         for step in self.steps:
@@ -136,6 +162,8 @@ class Feed:
                 step["open"] = False
                 step["ended"] = time.time()
 
+    # delta: one streamed piece: stop if asked; a "tool" piece shows "preparing <tool>"; text/thinking is appended to
+    # the open step of the same kind or starts a new one; then a throttled write ^w^
     def delta(self, kind: str, text: str) -> None:
         """A streamed piece from the provider: "thinking", "text", or "tool" (the model started writing a call)."""
         if self.stop.is_set():
@@ -153,6 +181,8 @@ class Feed:
                 self.steps.append({"id": f"s{self.count}", "type": kind, "text": text, "open": True, "ts": time.time()})
         self.flush()
 
+    # flush: write meta (and status/content when given). Throttled to one write per FLUSH s unless forced. Every write
+    # bumps `version`, which tells the polling browser there's something new UwU
     def flush(self, force: bool = False, status: str | None = None, content: str | None = None) -> None:
         """Write the message (meta, and the status / final content when given). Streaming writes are throttled to
         one per FLUSH seconds; every version bump tells the polling browser there is something new."""
@@ -169,6 +199,7 @@ class Feed:
             args.append(content)
         self.conn.execute(f"UPDATE chat_messages SET {', '.join(sets)} WHERE id = ?", (*args, self.id))
 
+    # cancel_unfinished_tools: mark in-flight tool steps cancelled >w<
     def cancel_unfinished_tools(self) -> None:
         for step in self.steps:
             if step.get("type") == "tool" and step.get("status") in UNFINISHED:
@@ -177,21 +208,25 @@ class Feed:
 
 # ---- The thread ----------------------------------------------------------------------------------------------
 
+# _provider: the chat's provider (or the default), allowed a whole hour per answer in background turns OwO
 def _provider(app, conn, chat):
     provider, settings = resolve(conn, app.state.box, json.loads(chat["state"] or "{}").get("provider"))
     provider.max_total = ai.TURN_MAX_TOTAL           # a slow local model may think for a long time
     return provider, settings
 
 
+# _usage: the token counts a failed call still used (cut_off puts them in details) ^w^
 def _usage(error: ValorError) -> dict:
     """Tokens a failed model call still used (cut_off and friends put them in details)."""
     return error.details if isinstance(error.details, dict) else {}
 
 
+# run: the thread of one answer. Whatever happens, the message ends done, waiting, stopped or failed UwU
 def run(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag: threading.Event) -> None:
     """The thread of one answer. Whatever happens, the message ends as done, waiting, stopped or failed.
 
     When the provider fails and autofix knows a fallback (fix chats), the turn starts over with that provider."""
+    # Its own database connection (threads must not share one) >w<
     conn = db.connect(app.state.wcfg.db)
     feed = None
     settings: dict = {}                              # the provider answering now (charged for a failed call)
@@ -199,6 +234,7 @@ def run(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag: 
         feed = Feed(conn, msg_id, stop_flag)
         chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
         msg = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
+        # Run the turn; if the provider fails and this is a fix chat with a fallback provider, switch and start over OwO
         while True:
             provider, settings = _provider(app, conn, chat)
             try:
@@ -212,15 +248,18 @@ def run(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag: 
                 chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
                 msg = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (msg_id,)).fetchone()
                 resume = False                   # the next provider starts the turn over
+        # Finished: in an "auto" fix chat, a done turn triggers the rebuild; then the final write ^w^
         feed.close()
         chat = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
         if status == "done" and json.loads(chat["state"] or "{}").get("fix") == "auto":
             feed.meta["rebuild"] = autofix.rebuild(app, conn, chat, username)
         feed.flush(True, status=status, content=content)
+    # Stop pressed: cancel in-flight tools, mark stopped UwU
     except Stopped:
         feed.close()
         feed.cancel_unfinished_tools()
         feed.flush(True, status="stopped", content="(stopped)")
+    # An engine/AI error: charge the tokens it still used, cancel tools, save the error for the UI >w<
     except ValorError as e:
         used = _usage(e)
         if settings and used:
@@ -231,11 +270,14 @@ def run(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag: 
             feed.cancel_unfinished_tools()
             feed.meta["error"] = {"code": e.code, "message": e.message, "hint": e.hint}
             feed.flush(True, status="failed")
+    # Anything unexpected: logged, shown as failed OwO
     except Exception as e:                           # pragma: no cover - logged, shown as failed
         log.exception("chat turn %s failed", msg_id)
         if feed is not None:
             feed.meta["error"] = {"code": "internal", "message": f"internal error: {e.__class__.__name__}"}
             feed.flush(True, status="failed")
+    # Always: unregister the stop flag (only if it's still ours: a resumed turn may have registered its own), touch
+    # the chat's updated time, close the connection ^w^
     finally:
         with _lock:
             if _active.get(msg_id) is stop_flag:     # a resumed turn may already have registered its own thread
@@ -244,6 +286,7 @@ def run(app, chat_id: int, msg_id: int, username: str, resume: bool, stop_flag: 
         conn.close()
 
 
+# _switch_provider: charge the failed provider's tokens and tell the person (in the feed) who takes over UwU
 def _switch_provider(conn, username: str, settings: dict, fallback: dict, error: ValorError, feed: Feed) -> None:
     """Charge what the failed provider used and tell the person (in the feed) which provider takes over."""
     used = _usage(error)
@@ -257,7 +300,9 @@ def _switch_provider(conn, username: str, settings: dict, fallback: dict, error:
 
 # ---- One answer ------------------------------------------------------------------------------------------------
 
+# Turn: one answer >w<
 class Turn:
+    # Keep everything; a resumed turn keeps counting tokens; a Proxmox client if the cluster is reachable OwO
     def __init__(self, app, conn, chat, msg, username: str, prov: ai.Provider, settings: dict, feed: Feed):
         self.app, self.conn, self.chat, self.msg, self.username = app, conn, chat, msg, username
         self.prov, self.settings, self.feed = prov, settings, feed
@@ -270,6 +315,7 @@ class Turn:
         except ValorError:
             self.pve = None
 
+    # run: the chat builder, Plan mode, or the agent loop (Question/Code) ^w^
     def run(self, resume: bool) -> tuple[str, str]:
         if self.chat["kind"] == "builder":
             return self.builder()
@@ -279,6 +325,7 @@ class Turn:
 
     # ---- shared ----
 
+    # history: earlier messages as plain text (their tool calls summarized), trimmed to the size limits UwU
     def history(self) -> list[dict]:
         """Earlier turns as plain text (their tool calls summarized), then this turn's question."""
         rows = self.conn.execute("SELECT * FROM chat_messages WHERE chat_id = ? AND id < ? ORDER BY id",
@@ -291,12 +338,14 @@ class Turn:
                 out.append({"role": "assistant", "content": _answer_as_text(row)})
         return ai.trim(out)
 
+    # record: count a reply's tokens (in the turn, in the usage table, and in the feed) >w<
     def record(self, reply: ai.Reply) -> None:
         self.used[0] += reply.input_tokens
         self.used[1] += reply.output_tokens
         record_usage(self.conn, self.username, self.settings, reply.input_tokens, reply.output_tokens, True)
         self.feed.meta["usage"] = {"input_tokens": self.used[0], "output_tokens": self.used[1]}
 
+    # check_budget: before every further model call, the daily budget must still have room OwO
     def check_budget(self) -> None:
         """Before every further model call of a turn (the first was checked when the message was sent)."""
         limit = int(self.settings.get("daily_tokens_per_user") or 0)
@@ -306,6 +355,8 @@ class Turn:
             if spent >= limit:
                 raise ValorError("ai_budget", f"You used your daily AI budget ({limit} tokens).")
 
+    # finish_text: the final answer: question cards out, and the streamed copy removed from the feed (it's shown as the
+    # answer instead) ^w^
     def finish_text(self, text: str) -> str:
         """The final answer: questions become cards, and the streamed copy of it leaves the feed."""
         questions, text = ai.extract_questions(text)
@@ -320,23 +371,28 @@ class Turn:
         if steps and steps[-1].get("type") == "text":
             steps.pop()
 
+    # note: a feed step saying VALOR checked the spec and asked for fixes UwU
     def note(self, problems: list[str]) -> None:
         self.feed.add({"type": "check",
                        "text": "VALOR checked the spec and asked the model to fix: " + "; ".join(problems)[:1500]})
 
     # ---- the chat builder ----
 
+    # builder: the chat builder: write or change a spec for a NEW range (the spec stays in the chat) >w<
     def builder(self) -> tuple[str, str]:
         """Write or change a spec for a new range (the builder page). The spec goes to the chat, not a range."""
         system = ai.builder_prompt(reference_for(self.cfg, self.pve))
         messages = self.history()
         spec = self.chat["spec"]
+        # The current spec is appended to the last message so the model edits it rather than starting over OwO
         if spec.strip() and messages and messages[-1]["role"] == "user":
             messages[-1] = {"role": "user", "content": messages[-1]["content"] +
                             f"\n\nThe current spec in the builder:\n```yaml\n{spec.strip()}\n```"}
+        # Its name (if any) is the one to keep ^w^
         own_name = (re.search(r"^name:\s*([a-z0-9-]+)", spec, re.M) or [None, ""])[1]
         base_check = spec_check(self.cfg, self.pve, own_name)
 
+        # check(): the usual checks, except "keep the name" (the person picks the name when saving) UwU
         def check(text: str) -> list[str]:
             # a range of that name existing is fine here: the person picks the name when saving
             problems = [p for p in base_check(text) if not p.startswith("the range is called")]
@@ -344,8 +400,10 @@ class Turn:
             return problems
         check.warnings = []
 
+        # Run the validate-and-fix loop, streaming into the feed; count tokens >w<
         result = ai.build(self.prov, system, messages, check, on_delta=self.feed.delta, on_check=self.note)
         self.record(ai.Reply("", result["input_tokens"], result["output_tokens"]))
+        # Save questions; a passing spec goes into the chat (with what got fixed and warnings); otherwise the problems OwO
         meta = self.feed.meta
         if result["questions"]:
             meta["questions"] = result["questions"]
@@ -359,12 +417,14 @@ class Turn:
 
     # ---- a range: Plan mode (a draft spec + VALOR's plan) ----
 
+    # working: the spec the chat works on: the range's draft, else its saved spec ^w^
     def working(self) -> tuple[str, bool]:
         """The spec the chat works on: the range's draft if it has one, else its saved spec."""
         _, saved = _load(self.cfg, self.chat["range"])
         draft = drafts.load(self.cfg, self.chat["range"])
         return (draft[0] if draft else saved), draft is not None
 
+    # plan: Plan mode: the model proposes a change as a full spec; it becomes the DRAFT, with VALOR's plan for it UwU
     def plan(self) -> tuple[str, str]:
         name = self.chat["range"]
         working, has_draft = self.working()
@@ -384,6 +444,8 @@ class Turn:
         self.drop_streamed_answer()
         return result["reply"] or "(no explanation)", "done"
 
+    # save_plan_draft: save the draft, describe what it changes, and (when the cluster is reachable and the spec is
+    # valid) attach the plan summary and hash, so the person can approve it right from the chat >w<
     def save_plan_draft(self, name: str, text: str, meta: dict) -> None:
         """Save the model's spec as the range's draft and show VALOR's plan for it (nothing is built yet)."""
         drafts.save(self.cfg, name, text, self.username, "chat:plan")
@@ -404,6 +466,7 @@ class Turn:
 
     # ---- a range: Question / Code mode (the agent loop with tools) ----
 
+    # context: what the tools need: the range's VMs, their OS families, and callbacks OwO
     def context(self) -> agent.Context:
         """What the tools need: the range's VMs, their OS families, and callbacks for status and the spec."""
         name = self.chat["range"]
@@ -415,6 +478,7 @@ class Turn:
                     **{host.name: catalog.get(host.os or "", {}).get("family", "debian") for host in spec.hosts}}
         vms = {vm.host: vm for vm in range_vms(self.pve, name) if vm.host}
 
+        # status(): the range_status tool's data (live state + per-host status, OS, address, segment) ^w^
         def status() -> dict:
             working, has_draft = self.working()
             live = _live(self.cfg, self.pve, name, has_draft)
@@ -426,11 +490,13 @@ class Turn:
                                             "address": str(host.address), "segment": host.segment}
             return live
 
+        # check_spec(): problems with a proposed spec + its diff against the working spec UwU
         def check_spec(text: str):
             problems = spec_check(self.cfg, self.pve, name)(text)
             working, _ = self.working()
             return problems, drafts.unified_diff(working, text, name), None
 
+        # save_spec(): save as the draft and tell the map to reload >w<
         def save_spec(text: str) -> dict:
             drafts.save(self.cfg, name, text, self.username, "chat:code")
             view = editing.view(self.cfg, name)
@@ -440,6 +506,8 @@ class Turn:
 
         return agent.Context(self.cfg, self.pve, name, self.username, vms, families, status, check_spec, save_spec)
 
+    # agent: the agent loop: call the model, run its tool calls, feed back the results, until it answers without calls
+    # (done) or a call needs approval (waiting) OwO
     def agent(self, resume: bool) -> tuple[str, str]:
         """The agent loop: call the model, run its tool calls, give it the results, until it answers without
         calls (done) or a call needs the person's approval (waiting - `resume` continues after the decision)."""
@@ -447,6 +515,8 @@ class Turn:
         model_state = json.loads(self.msg["model"] or "{}")
         ctx = self.context()
         tools = agent.tool_specs(self.mode)
+        # A new turn freezes its system prompt and history (so resuming sends the model EXACTLY the same conversation); a
+        # resumed turn first runs the calls that were decided ^w^
         if not resume or not model_state:
             working, has_draft = self.working()
             live = _live(self.cfg, self.pve, name, has_draft)
@@ -455,7 +525,9 @@ class Turn:
                            "history": self.history(), "transcript": []}
         else:
             self.run_pending(model_state, ctx)
+        # Is this a fix chat for a failed build? UwU
         fixing = "job" in json.loads(self.chat["state"] or "{}")       # a fix chat for a failed build
+        # Up to MAX_ROUNDS model calls: stop if asked, check the budget, nudge fix turns to wrap up near the end >w<
         for i in range(MAX_ROUNDS):
             if self.feed.stop.is_set():
                 raise Stopped()
@@ -463,6 +535,7 @@ class Turn:
                 self.check_budget()
             if fixing and i == MAX_ROUNDS - WRAP_UP:
                 _tell_to_wrap_up(model_state)
+            # Ask the model (streaming), count tokens; a cut-off answer is an error OwO
             reply = self.prov.complete(model_state["system"], model_state["history"] + model_state["transcript"],
                                        tools=tools, on_delta=self.feed.delta)
             self.record(reply)
@@ -471,11 +544,13 @@ class Turn:
                 error = ai.cut_off(self.prov, reply)
                 error.details = None                 # its tokens are counted already
                 raise error
+            # Add its message to the transcript; no tool calls = the final answer ^w^
             model_state["transcript"].append({"role": "assistant", "content": reply.text,
                                               "tool_calls": reply.tool_calls})
             if not reply.tool_calls:
                 self.save_state(model_state)
                 return self.finish_text(reply.text), "done"
+            # Handle the calls; if one needs approval, save and return "waiting" UwU
             waiting = self.handle_calls(reply.tool_calls, model_state, ctx)
             self.save_state(model_state)
             if waiting:
@@ -483,14 +558,17 @@ class Turn:
         raise ValorError("ai_too_many_steps", f"the assistant used {MAX_ROUNDS} steps without finishing",
                          hint="Ask it to continue, or split the task.")
 
+    # save_state: store the model's side of the turn with the message >w<
     def save_state(self, model_state: dict) -> None:
         self.conn.execute("UPDATE chat_messages SET model = ? WHERE id = ?", (json.dumps(model_state), self.msg["id"]))
 
+    # allow_all: read fresh, since the owner can switch it on mid-turn OwO
     def allow_all(self) -> bool:
         """The owner allowed every action in this chat (read fresh: they can switch it on while a turn runs)."""
         row = self.conn.execute("SELECT state FROM chats WHERE id = ?", (self.chat["id"],)).fetchone()
         return bool(json.loads(row["state"] or "{}").get("allow_all"))
 
+    # handle_calls: go through the model's calls IN ORDER ^w^
     def handle_calls(self, calls: list[dict], model_state: dict, ctx: agent.Context) -> bool:
         """Run the calls in order until one needs the person: it and the ones after it wait. True when waiting."""
         results: dict[str, dict] = {}
@@ -498,6 +576,7 @@ class Turn:
         allow_all = self.allow_all()
         for call in calls:
             args = call["input"]
+            # Invalid calls fail at once (the model hears why) UwU
             problem = agent.validate(call["name"], args, ctx)
             step = {"type": "tool", "id": call["id"], "name": call["name"],
                     "summary": agent.summary(call["name"], args or {}),
@@ -506,6 +585,8 @@ class Turn:
                 self.feed.add({**step, "status": "failed", "output": problem})
                 results[call["id"]] = {"content": problem, "error": True}
                 continue
+            # Is this call read-only? update_spec is checked BEFORE the approval card, so the person only approves a usable
+            # spec (and sees its diff) >w<
             family = ctx.families.get(args.get("host", ""), "debian")
             readonly = agent.is_readonly(call["name"], args, family)
             step["readonly"] = readonly
@@ -518,18 +599,22 @@ class Turn:
                     results[call["id"]] = {"content": message, "error": True}
                     continue
                 step["diff"] = diff
+            # Question mode refuses anything that changes things OwO
             if not readonly and self.mode != "code":
                 message = "Question mode cannot change anything: tell the person to switch to Code mode for this."
                 self.feed.add({**step, "status": "refused", "output": message})
                 results[call["id"]] = {"content": message, "error": True}
                 continue
+            # Needs approval (or comes after one that does: calls keep their order)? Show a pending/queued card and wait ^w^
             if waiting or (not readonly and not allow_all):
                 # this call needs approval, or runs after one that does (calls keep their order)
                 needs_approval = not readonly and not allow_all
                 self.feed.add({**step, "status": "pending" if needs_approval else "queued", "approval": needs_approval})
                 waiting = True
                 continue
+            # Otherwise run it now (read-only = "auto", or allowed by allow_all) UwU
             results[call["id"]] = self.execute(step, call, ctx, approved_by="auto" if readonly else "allow_all")
+        # Not waiting: hand all results to the model; waiting: remember the calls for resume >w<
         model_state["results"] = results
         if not waiting:
             self.append_results(model_state, calls)
@@ -537,6 +622,8 @@ class Turn:
             model_state["pending_calls"] = calls
         return waiting
 
+    # execute: run one call, show it running then done/failed with output, exit code and time, and audit every action
+    # except status reads OwO
     def execute(self, step: dict, call: dict, ctx: agent.Context, approved_by: str) -> dict:
         """Run one call, show it in the feed and audit it."""
         existing = next((s for s in self.feed.steps if s.get("id") == call["id"] and s.get("type") == "tool"), None)
@@ -555,6 +642,8 @@ class Turn:
                                                "summary": shown.get("summary", "")[:500], "approved_by": approved_by})
         return {"content": result["content"], "error": bool(result.get("error"))}
 
+    # run_pending: after the decisions: run approved and queued calls in order, tell the model about denied ones,
+    # then append all results ^w^
     def run_pending(self, model_state: dict, ctx: agent.Context) -> None:
         """After the person decided: run approved and queued calls in order, answer denied ones, then continue."""
         calls = model_state.pop("pending_calls", [])
@@ -576,6 +665,7 @@ class Turn:
         model_state["results"] = results
         self.append_results(model_state, calls)
 
+    # append_results: answer EVERY call of the model's last message in order ("not run" for any that didn't run) UwU
     @staticmethod
     def append_results(model_state: dict, calls: list[dict]) -> None:
         """Answer every call of the model's last message, in its order (a call that never ran says so)."""
@@ -587,6 +677,8 @@ class Turn:
 
 # ---- Helpers ---------------------------------------------------------------------------------------------------
 
+# _answer_as_text: an earlier answer for the history: its text (or what it wrote before ending early), the actions
+# it took, and the questions it asked >w<
 def _answer_as_text(row) -> str:
     """An earlier answer for the model's history: its text, the actions it took and the questions it asked."""
     meta = json.loads(row["meta"] or "{}")
@@ -606,6 +698,8 @@ def _answer_as_text(row) -> str:
     return text or "(no answer)"
 
 
+# _tell_to_wrap_up: near the end of a fix turn, append a "make the fix now" note to the last tool result (some
+# providers refuse a user message right after tool results) OwO
 def _tell_to_wrap_up(model_state: dict) -> None:
     """Near the end of a fix turn's steps: tell the model to make the fix now. Said in a tool result, not a user
     message: some providers refuse a user message after tool results."""
@@ -616,6 +710,7 @@ def _tell_to_wrap_up(model_state: dict) -> None:
             "it with update_spec) and finish, or say what you found - VALOR rebuilds the range when you finish.")
 
 
+# _shown: the call's input for the approval card: long text shortened, the spec left out (it's shown as a diff) ^w^
 def _shown(name: str, args: dict) -> dict:
     """The call's input as the approval card shows it (long fields shortened; the spec is shown as a diff)."""
     out = {}
@@ -628,6 +723,8 @@ def _shown(name: str, args: dict) -> dict:
     return out
 
 
+# _live: what the model should know beyond the spec: whether there's a draft, VM states, the last build and the
+# last verification UwU
 def _live(cfg, pve, name: str, has_draft: bool) -> dict:
     """What the model should know beyond the spec: VM states and the last build / verification."""
     out: dict = {"draft": has_draft}
@@ -645,6 +742,8 @@ def _live(cfg, pve, name: str, has_draft: bool) -> dict:
     return out
 
 
+# _verification_digest: the verification summary plus ONLY what failed (the model doesn't need passing tests) >w<
+# *waves goodbye at the end of the turn*
 def _verification_digest(verification: dict) -> dict:
     """The summary plus only what failed (the model doesn't need the passing tests)."""
     failed_tests = [{key: test.get(key) for key in ("name", "target", "expect", "observed", "detail")}

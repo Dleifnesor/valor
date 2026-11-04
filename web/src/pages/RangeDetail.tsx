@@ -1,4 +1,9 @@
+// *opens a range's big folder* OwO web/src/pages/RangeDetail.tsx: ONE RANGE's page! ^w^
+// Its title-bar actions (start, shut down, login, verify, plan, more) and its sections: summary, the editable map with
+// the range chat, verification, snapshots, access, the spec, the build journal and the history. The data comes from
+// GET /api/ranges/<name>, refreshed every 20 s *wags tail*
 import { useState } from "react";
+// API error type, hooks, the map type, UI pieces, and every section's component UwU
 import { ApiError } from "../api";
 import { ago, go, openTask, useApi, when } from "../hooks";
 import { Topology } from "../types";
@@ -17,6 +22,8 @@ import { RangeEditor } from "./RangeEditor";
 // and the build history. The data comes from GET /api/ranges/<name>, refreshed every 20 s.
 
 /** A range as GET /api/ranges/<name> returns it: the spec, the VMs on the cluster, and what VALOR recorded. */
+// Detail: what GET /api/ranges/<name> returns (spec, VMs, map, tests, history, journal, last verification and build,
+// logins) >w<
 export interface Detail {
   name: string;
   yaml: string;
@@ -40,6 +47,7 @@ export interface Detail {
   logins: boolean;
 }
 
+// SECTIONS: the left menu. ALIAS: older links and routes that open inside a section OwO
 const SECTIONS: Omit<MenuEntry, "href">[] = [
   { id: "summary", label: "Summary", icon: "info" },
   { id: "map", label: "Map", icon: "map" },
@@ -54,19 +62,25 @@ const SECTIONS: Omit<MenuEntry, "href">[] = [
 const ALIAS: Record<string, string> = { hosts: "summary", tests: "verification", edit: "spec", chat: "map" };
 
 /** A range, as Proxmox shows a node: its actions in the title bar, its sections on the left. */
+// RangeView: the page ^w^
 export function RangeView({ name, section, canOperate, chatId }: { name: string; section?: string; canOperate: boolean; chatId?: number }) {
+  // The range (every 20 s), an error from an action, the active section, the menu, and the title UwU
   const { data, error, loading } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
   const [actionError, setActionError] = useState<ApiError | null>(null);
   const active = SECTIONS.some((entry) => entry.id === section) ? section! : ALIAS[section ?? ""] ?? "summary";
   const menu = SECTIONS.map((entry) => ({ ...entry, href: `ranges/${name}${entry.id === "summary" ? "" : `/${entry.id}`}` }));
   const title = `Range '${name}'`;
+  // Not loaded yet >w<
   if (!data) return <View title={title} menu={menu} active={active}>{loading ? <Loading /> : <ErrorBox error={error} />}</View>;
 
+  // VM counts and the range's actions (errors land in actionError) OwO
   const vmCount = Object.keys(data.vms).length;
   const running = Object.values(data.vms).filter((vm) => vm.status === "running").length;
   const actions = rangeActions({ name, vms: vmCount, running }, setActionError);
+  // The title-bar tools (operators): Start, Shutdown menu, Login, Verify, Plan, and More (edit/destroy/delete) ^w^
   const tools = canOperate && (
     <>
+      {/* Each tool only when it applies */}
       {actions.start && <ToolButton action={actions.start} label="Start" />}
       {actions.shutdown && <DropButton label="Shutdown" icon="power" disabled={!running} items={[actions.shutdown, actions.reboot, actions.stop]} />}
       {actions.login && data.logins && <ToolButton action={actions.login} />}
@@ -76,10 +90,14 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
     </>
   );
 
+  // The page UwU
   return (
     <View title={title} tools={tools} menu={menu} active={active} fill={active === "map"}>
+      {/* Errors and cluster problems */}
       <ErrorBox error={actionError} />
       {data.cluster_error && <div className="alert warn">Live VM status unavailable: {data.cluster_error}</div>}
+      {/* The active section: summary, map (full height), verification, snapshots, access, spec (or the editor), journal,
+         history */}
       {active === "summary" && <Summary data={data} canOperate={canOperate} onError={setActionError} />}
       {active === "map" && (
         <div className="map-page">
@@ -103,6 +121,7 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
 }
 
 /** The router and the hosts as rows: the spec's view of each VM next to the cluster's. */
+// machinesOf(): the router and the hosts as rows (the router's "address" lists the segment networks) >w<
 export function machinesOf(data: Detail) {
   return [{ name: "rtr", segment: "all", address: data.spec.segments.map((segment: any) => segment.cidr).join(", "), os: data.spec.router.os,
     cores: data.spec.router.cores, memory: data.spec.router.memory, disk: data.spec.router.disk, roles: [{ name: "router" }] },
@@ -110,14 +129,18 @@ export function machinesOf(data: Detail) {
 }
 
 /** Status and notes, then the VMs as a table (a click opens one, right-click for its menu). */
+// Summary: status and notes, then the VMs as a table (click opens one, right-click for its menu) OwO
 function Summary({ data, canOperate, onError }: { data: Detail; canOperate: boolean; onError: (e: ApiError) => void }) {
   const vmCount = Object.keys(data.vms).length;
   const running = Object.values(data.vms).filter((vm) => vm.status === "running").length;
+  // The spec version the VMs were last built from ^w^
   const deployed = Object.values(data.vms)[0]?.spec;          // the spec version the VMs were last built from
   return (
     <>
+      {/* Status card and Notes card side by side */}
       <div className="summary-row two">
         <Card title="Status">
+          {/* Status, spec version (with "changed since the last build"), layout, last build, verification */}
           <dl className="kv">
             <dt>Status</dt>
             <dd>{vmCount ? <StateBadge state={running === vmCount ? "ok" : running ? "warn" : "unknown"} label={`${running} of ${vmCount} VMs running`} />
@@ -136,19 +159,23 @@ function Summary({ data, canOperate, onError }: { data: Detail; canOperate: bool
           </dl>
         </Card>
         <Card title="Notes">
+          {/* The description */}
           <div className="notes">{data.spec.description || <span className="muted">No description.</span>}</div>
         </Card>
       </div>
+      {/* One row per VM: name, id, status, segment, address, OS, size, services, and power buttons */}
       <Card title="Virtual machines" bodyClass="">
         <div className="table-wrap">
           <table>
             <thead><tr><th>Name</th><th>VMID</th><th>Status</th><th>Segment</th><th>Address</th><th>OS</th><th>Size</th><th>Services</th><th /></tr></thead>
             <tbody>
               {machinesOf(data).map((machine) => {
+                // This row's live VM (if built) UwU
                 const vm = data.vms[machine.name];
                 return (
                   <tr key={machine.name} className="clickable" onClick={() => go(`ranges/${data.name}/vm/${machine.name}`)}
                     onContextMenu={(e) => showMenu(e, vmMenu(data.name, machine.name, vm, canOperate))}>
+                    {/* The row's cells (the power cell doesn't open the VM page) */}
                     <td className="nowrap"><b>{machine.name}</b></td>
                     <td>{vm ? vm.vmid : "–"}</td>
                     <td className="nowrap">{vm ? <StateBadge state={vm.status === "running" ? "ok" : "unknown"} label={vm.status} /> : <span className="muted">not built</span>}</td>
@@ -170,9 +197,12 @@ function Summary({ data, canOperate, onError }: { data: Detail; canOperate: bool
 }
 
 /** The build journal (journals/<range>.md) rendered; its Mermaid topology is shown as the range map. */
+// Journal: the build journal rendered as Markdown, with a Download button; its Mermaid topology is shown as the
+// real map (the source stays available, folded) >w<
 function Journal({ data }: { data: Detail }) {
   if (!data.journal) return <Card title="Journal"><div className="empty">No journal yet (written after the first build).</div></Card>;
   const text = data.journal;
+  // download(): save the journal as a .md file OwO
   const download = () => {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
@@ -180,20 +210,24 @@ function Journal({ data }: { data: Detail }) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   };
+  // fence(): draw ```mermaid blocks as the map ^w^
   const fence = (lang: string, code: string) => lang === "mermaid" ? (
     <>
+      {/* The map, then the Mermaid source */}
       <div className="card md-map"><TopologyMap topology={data.topology} /></div>
       <details className="check-notes"><summary>Mermaid source (as in the file)</summary><pre className="md-code">{code}</pre></details>
     </>
   ) : undefined;
   return (
     <Card title="Journal" actions={<button className="btn small" onClick={download}><Icon name="download" size={14} /> Download .md</button>}>
+      {/* The journal */}
       <Markdown text={text} fence={fence} />
     </Card>
   );
 }
 
 /** Every build, verification and destroy, newest first; a row with a job opens its task log. */
+// History: every build, verification and destroy, newest first; a row with a job opens its task log UwU
 function History({ data }: { data: Detail }) {
   if (!data.history.length) return <div className="empty">No builds recorded yet.</div>;
   return (
@@ -201,6 +235,7 @@ function History({ data }: { data: Detail }) {
       <table>
         <thead><tr><th>When</th><th>Action</th><th>Result</th><th>Duration</th><th>Details</th></tr></thead>
         <tbody>
+          {/* One row per entry: when, what, result, duration, error */}
           {[...data.history].reverse().map((entry, i) => (
             <tr key={i} className={entry.job ? "clickable" : ""} onClick={() => entry.job && openTask(entry.job)}>
               <td className="nowrap">{when(entry.started)}</td><td>{entry.kind}</td>

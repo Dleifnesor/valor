@@ -1,10 +1,15 @@
+# *builds a classic two-tier web lab* OwO examples/web2tier.yaml: the reference range! ^w^
+# A DMZ web server with internet access, and an isolated LAN database only the web server may reach on TCP 5432
+# *wags tail*
 apiVersion: valor/v1
 name: web2tier
 description: >
   Reference range 1 (MVP spec 6.1): a DMZ with an nginx web server that has internet access,
   and an isolated LAN running PostgreSQL that only the web server can reach, on TCP 5432.
+# The hardening profile for every Linux host UwU
 baseline: ubuntu-l1
 
+# Two segments: the DMZ (internet allowed) and the LAN (no internet) >w<
 segments:
   - name: dmz
     vlan: 110
@@ -15,6 +20,8 @@ segments:
     cidr: 10.120.0.0/24
     internet: false
 
+# The web server (nginx) in the DMZ and the database (PostgreSQL, 2 GiB) in the LAN; the database accepts the web
+# server OwO
 hosts:
   - name: web
     segment: dmz
@@ -30,6 +37,7 @@ hosts:
         params:
           allow_from: [web]
 
+# The ONE allowed flow between segments: DMZ -> LAN on TCP 5432. Everything else is blocked ^w^
 policy:
   - from: dmz
     to: lan
@@ -37,6 +45,7 @@ policy:
     ports: [5432]
     description: web tier to database
 
+# Tests: the allowed flow is open; SSH from web to db and anything from db to web are closed UwU
 tests:
   - {name: web reaches db on 5432, from: web, to: db, proto: tcp, port: 5432, expect: open}
   - {name: web cannot reach db on SSH, from: web, to: db, proto: tcp, port: 22, expect: closed}

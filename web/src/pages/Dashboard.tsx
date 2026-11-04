@@ -1,4 +1,8 @@
+// *sits at the big control desk* OwO web/src/pages/Dashboard.tsx is Datacenter -> SUMMARY! ^w^
+// VALOR's health checks, guest counts, the range node's resources, every range with its build and verification
+// state, and the cluster settings VALOR builds with *wags tail*
 import { Check, RangeRow } from "../types";
+// Types, hooks, UI pieces, and the right-click range menu UwU
 import { ago, go, useApi } from "../hooks";
 import { Card, ErrorBox, Icon, Loading, StateBadge } from "../components/ui";
 import { showMenu } from "../components/ContextMenu";
@@ -7,6 +11,7 @@ import { rangeMenu } from "../components/RangeActions";
 // Datacenter -> Summary: VALOR's health checks, the range node's resources, every range with its build and
 // verification state, and the cluster settings VALOR builds with.
 
+// Status: what GET /api/status returns >w<
 interface Status {
   version: string;
   instance: string;
@@ -28,10 +33,12 @@ interface Status {
   };
 }
 
+// gib(): MiB as whole GiB OwO
 const gib = (mib: number) => `${(mib / 1024).toFixed(0)} GiB`;
 
 /** Datacenter -> Summary: health, VMs and resources at a glance, then every range. */
 export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; canOperate: boolean }) {
+  // The status (refreshed every 30 s); then the problems and the VM counts ^w^
   const { data, error, loading } = useApi<Status>("/api/status", 30000);
   if (loading && !data) return <Loading label="Checking the cluster…" />;
   if (!data) return <ErrorBox error={error} />;
@@ -39,9 +46,12 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
   const problems = data.checks.filter((check) => check.status === "problem");
   const vms = (ranges ?? []).reduce((sum, range) => sum + range.vms, 0);
   const running = (ranges ?? []).reduce((sum, range) => sum + range.running, 0);
+  // The page UwU
   return (
     <>
+      {/* Top row: three summary cards */}
       <div className="summary-row">
+        {/* Health: a big ok/bad mark, the count, which checks fail, and the job queue */}
         <Card title="Health">
           <div className="health">
             <span className={`health-mark ${problems.length ? "bad" : "ok"}`}><Icon name={problems.length ? "info" : "check"} size={30} /></span>
@@ -54,6 +64,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
             </div>
           </div>
         </Card>
+        {/* Guests: ranges (and how many are built), running and stopped VMs */}
         <Card title="Guests">
           <dl className="kv">
             <dt>Ranges</dt><dd>{ranges?.length ?? "–"} ({(ranges ?? []).filter((range) => range.vms).length} built)</dd>
@@ -61,6 +72,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
             <dt>Stopped VMs</dt><dd><StateBadge state="unknown" label={String(vms - running)} /></dd>
           </dl>
         </Card>
+        {/* Resources: node, CPU threads, free memory and storage */}
         <Card title="Resources">
           {cluster ? (
             <dl className="kv">
@@ -72,6 +84,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
         </Card>
       </div>
 
+      {/* Every range: name (with "no spec"/"changed" badges), description, layout, VMs, last build, last verification */}
       <Card title="Ranges" bodyClass="">
         {!ranges ? <Loading /> : !ranges.length ? (
           <div className="empty">No ranges yet.{canOperate && <> <button className="link" onClick={() => go("ranges/new")}>Create range</button> or
@@ -84,6 +97,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
                 {ranges.map((range) => (
                   <tr key={range.name} className={range.has_spec ? "clickable" : ""} onClick={() => range.has_spec && go(`ranges/${range.name}`)}
                     onContextMenu={(e) => range.has_spec && showMenu(e, rangeMenu(range, canOperate))}>
+                    {/* Name and badges */}
                     <td className="nowrap">
                       <b>{range.name}</b>
                       {!range.has_spec && <span className="badge warn" style={{ marginLeft: 8 }}>no spec</span>}
@@ -91,6 +105,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
                         <span className="badge info" style={{ marginLeft: 8 }} title="The spec changed since the last build">changed</span>
                       )}
                     </td>
+                    {/* Description, layout, VM state, last build, last verification */}
                     <td className="fill"><span className="clip">{range.error ?? range.description}</span></td>
                     <td className="nowrap">{range.segments ?? "–"} segments · {range.hosts ?? "–"} hosts</td>
                     <td className="nowrap">{range.vms ? <StateBadge state={range.running === range.vms ? "ok" : range.running ? "warn" : "unknown"}
@@ -107,10 +122,12 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
         )}
       </Card>
 
+      {/* Bottom row: every health check in detail, and what VALOR uses on the cluster */}
       <div className="dash">
         <Card title="Health checks" bodyClass="">
           <table>
             <tbody>
+              {/* One row per check: badge with its name, the detail and a hint */}
               {data.checks.map((check) => (
                 <tr key={check.name}>
                   <td className="nowrap"><StateBadge state={check.status === "ok" ? "ok" : check.status === "problem" ? "failed" : "unknown"} label={check.name} /></td>
@@ -126,6 +143,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
         {cluster && (
           <Card title="What VALOR uses on the cluster">
             <dl className="kv">
+              {/* Bridges, reserved networks, default OS, templates (built or not), and VALOR's own VM and version */}
               <dt>Segment bridge</dt><dd className="mono">{cluster.segment_bridge.name} (VLANs {cluster.segment_bridge.usable_vlans})</dd>
               <dt>Uplink bridge</dt><dd className="mono">{cluster.uplink_bridge.name}</dd>
               <dt>Reserved networks</dt><dd className="mono">{cluster.reserved_networks.join(", ") || "–"}</dd>
