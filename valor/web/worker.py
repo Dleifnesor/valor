@@ -31,16 +31,17 @@ def recover_interrupted(cfg) -> list[str]:
     """Jobs left 'running' by a previous worker that died (reboot, crash) are marked failed."""
     out = []
     root = Path(cfg.jobs_dir)
-    for d in sorted(root.iterdir()) if root.exists() else []:
+    for folder in sorted(root.iterdir()) if root.exists() else []:
         try:
-            j = json.loads((d / "job.json").read_text())
+            job = json.loads((folder / "job.json").read_text())
         except Exception:
             continue
-        if j.get("state") == "running" and not Path(f"/proc/{j.get('pid', 0)}").exists():
-            jobs.finish(cfg, d.name, {"ok": False, "error": "interrupted",
-                                      "message": "the worker stopped while this job ran (reboot or crash); run it again"})
-            jobs.update(cfg, d.name, state="failed")
-            out.append(d.name)
+        if job.get("state") == "running" and not Path(f"/proc/{job.get('pid', 0)}").exists():
+            jobs.finish(cfg, folder.name, {"ok": False, "error": "interrupted",
+                                           "message": "the worker stopped while this job ran (reboot or crash); "
+                                                      "run it again"})
+            jobs.update(cfg, folder.name, state="failed")
+            out.append(folder.name)
     return out
 
 
@@ -53,18 +54,20 @@ DONE = {"power": "Range {name}: {action} done",
 
 
 def _describe(job: dict, result: dict) -> tuple[str, str, str]:
+    """(level, title, body) of the notification sent when a job ends."""
     kind, target = job["kind"], job["target"]
     name = target.get("range") or str(target.get("spec", "")).removesuffix(".yaml")
     if result.get("ok"):
         if kind == "apply":
-            v = (result.get("verify") or {}).get("summary") or {}
-            extra = f" Verified: tests {v.get('tests_passed')}/{v.get('tests_total')}, baseline " \
-                    f"{v.get('baseline_passed')}/{v.get('baseline_total')}." if v else ""
+            summary = (result.get("verify") or {}).get("summary") or {}
+            extra = (f" Verified: tests {summary.get('tests_passed')}/{summary.get('tests_total')}, baseline "
+                     f"{summary.get('baseline_passed')}/{summary.get('baseline_total')}." if summary else "")
             return "success", f"Range {name} built", f"Finished in {result.get('seconds')} s.{extra}"
         if kind == "verify":
-            sm = result.get("summary", {})
-            return "success", f"Range {name} verified", \
-                f"Tests {sm.get('tests_passed')}/{sm.get('tests_total')}, baseline {sm.get('baseline_passed')}/{sm.get('baseline_total')}."
+            summary = result.get("summary", {})
+            return "success", f"Range {name} verified", (
+                f"Tests {summary.get('tests_passed')}/{summary.get('tests_total')}, "
+                f"baseline {summary.get('baseline_passed')}/{summary.get('baseline_total')}.")
         if kind == "destroy":
             return "success", f"Range {name} destroyed", f"{len(result.get('removed', []))} VMs deleted."
     if result.get("ok") is not False and kind in DONE:
@@ -72,17 +75,18 @@ def _describe(job: dict, result: dict) -> tuple[str, str, str]:
                                  peers=", ".join(target.get("peers") or []))
         extra = ""
         if kind == "rollback" and result.get("verify"):
-            v = result["verify"]["summary"]
-            extra = f"Verified after the reset: tests {v.get('tests_passed')}/{v.get('tests_total')}."
+            summary = result["verify"]["summary"]
+            extra = f"Verified after the reset: tests {summary.get('tests_passed')}/{summary.get('tests_total')}."
         return "success", done, extra
     what = {"apply": "Build", "verify": "Verification", "destroy": "Teardown", "power": "Power action",
             "snapshot": "Snapshot", "rollback": "Reset", "snapshot_delete": "Snapshot deletion",
             "rotate": "Password rotation", "wg_rotate": "WireGuard key rotation"}.get(kind, kind)
-    return "error", f"{what} of range {name} failed", \
-        f"{result.get('error', 'error')}: {result.get('message', '')}" + (f"\nHint: {result['hint']}" if result.get("hint") else "")
+    hint = f"\nHint: {result['hint']}" if result.get("hint") else ""
+    return "error", f"{what} of range {name} failed", f"{result.get('error', 'error')}: {result.get('message', '')}{hint}"
 
 
 def run_forever(poll: float = 2.0) -> None:
+    """The worker's main loop: take the oldest queued job, run it, audit and notify; stop between jobs on SIGTERM."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)

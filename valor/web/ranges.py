@@ -1,4 +1,9 @@
-"""Ranges, specs, plans, approved builds and jobs. Every change to the cluster goes through an engine job."""
+"""Ranges, specs, plans, approved builds and jobs. Every change to the cluster goes through an engine job.
+
+The approval rule lives here: a build runs only the plan the person reviewed. The plan page shows the plan and its
+`plan_hash`; apply recomputes the plan and refuses (409 plan_changed) if anything differs, e.g. because someone
+edited the spec or a VM changed in the meantime.
+"""
 
 from __future__ import annotations
 
@@ -66,13 +71,14 @@ class RollbackIn(_In):
 def role_list(cfg) -> list[dict]:
     """Every role (Linux role.sh and/or Windows role.ps1) with the OS families it supports."""
     roles = []
-    for d in sorted(cfg.roles_dir.iterdir()):
-        if (d / "role.sh").is_file() or (d / "role.ps1").is_file():
-            role = load_role(cfg.roles_dir, d.name)
+    for folder in sorted(cfg.roles_dir.iterdir()):
+        if (folder / "role.sh").is_file() or (folder / "role.ps1").is_file():
+            role = load_role(cfg.roles_dir, folder.name)
             meta = role.meta
-            roles.append({"name": d.name, "description": meta.get("description", ""), "ports": meta.get("ports", []),
-                          "ports_param": meta.get("ports_param"), "params": meta.get("params", {}),
-                          "families": role.families, "category": meta.get("category", "service")})
+            roles.append({"name": folder.name, "description": meta.get("description", ""),
+                          "ports": meta.get("ports", []), "ports_param": meta.get("ports_param"),
+                          "params": meta.get("params", {}), "families": role.families,
+                          "category": meta.get("category", "service")})
     return roles
 
 
@@ -81,6 +87,7 @@ def _cfg(request: Request):
 
 
 def _name(name: str) -> str:
+    """A range name from the URL, checked before it becomes part of a file path."""
     if not NAME_RE.fullmatch(name):
         raise ApiError(400, "invalid_name", "Range names are 2-15 lowercase letters, digits or dashes.")
     return name
@@ -91,10 +98,11 @@ def _spec_path(cfg, name: str) -> Path:
 
 
 def _load(cfg, name: str):
-    p = _spec_path(cfg, name)
-    if not p.is_file():
+    """(the range's normalized spec, its YAML text); 404 when the range has no spec."""
+    path = _spec_path(cfg, name)
+    if not path.is_file():
         raise ApiError(404, "no_spec", f"There is no spec for range '{name}'.")
-    text = p.read_text()
+    text = path.read_text()
     return normalize(parse_spec(text), cfg.default_os), text
 
 
@@ -114,66 +122,74 @@ def _vm_states(pve: PVE, name: str) -> dict[str, dict]:
 
 
 def _plan_hash(spec, plan: dict) -> str:
-    key = {"spec": spec_hash(spec), "actions": [(a["host"], a["action"], a.get("vmid")) for a in plan["actions"]]}
+    """What the person approves: the spec version and, per VM, the action and the VMID it applies to."""
+    key = {"spec": spec_hash(spec),
+           "actions": [(action["host"], action["action"], action.get("vmid")) for action in plan["actions"]]}
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:32]
 
 
 def _summary(cfg, name: str) -> dict:
-    ap = state.load(cfg, name, "apply") or {}
-    vr = state.load(cfg, name, "verify") or {}
+    last_apply = state.load(cfg, name, "apply") or {}
+    last_verify = state.load(cfg, name, "verify") or {}
+    apply_fields = ("ok", "started", "seconds", "changed", "error", "message", "job")
     return {
-        "last_apply": {k: ap.get(k) for k in ("ok", "started", "seconds", "changed", "error", "message", "job")} if ap else None,
-        "last_verify": {"ok": vr.get("ok"), "finished": vr.get("finished"), "summary": vr.get("summary"),
-                        "job": vr.get("job")} if vr else None,
+        "last_apply": {key: last_apply.get(key) for key in apply_fields} if last_apply else None,
+        "last_verify": {"ok": last_verify.get("ok"), "finished": last_verify.get("finished"),
+                        "summary": last_verify.get("summary"), "job": last_verify.get("job")} if last_verify else None,
     }
 
 
-# ---------------------------------------------------------------------- catalog
+# ---- Catalog -----------------------------------------------------------------------------------------------------
+
 @router.get("/catalog")
 def catalog(request: Request, s: Session = Depends(require("viewer"))) -> dict:
+    """What specs can use on this cluster: OSes (with or without a built template), roles, baselines, limits."""
     cfg = _cfg(request)
-    cat = load_catalog(cfg)
+    os_catalog = load_catalog(cfg)
     try:
-        present = templates(PVE(cfg), cat)
+        present = templates(PVE(cfg), os_catalog)
     except ValorError:
         present = {}
     roles = role_list(cfg)
     baselines = []
-    for p in sorted(cfg.baselines_dir.glob("*.yaml")):
-        b = load_baseline(cfg.baselines_dir, p.stem)
-        baselines.append({"name": p.stem, "controls": len(b.controls) if b else 0})
+    for path in sorted(cfg.baselines_dir.glob("*.yaml")):
+        baseline = load_baseline(cfg.baselines_dir, path.stem)
+        baselines.append({"name": path.stem, "controls": len(baseline.controls) if baseline else 0})
     return {"default_os": cfg.default_os,
-            "os": [{"name": k, "family": v.get("family"), "description": v.get("description", ""),
-                    "template": bool(present.get(k, {}).get("present"))} for k, v in cat.items()],
+            "os": [{"name": name, "family": entry.get("family"), "description": entry.get("description", ""),
+                    "template": bool(present.get(name, {}).get("present"))} for name, entry in os_catalog.items()],
             "roles": roles, "baselines": baselines,
             "limits": {"vlan_min": cfg.vlan_min, "vlan_max": cfg.vlan_max,
                        "reserved_networks": list(cfg.reserved_networks)}}
 
 
-# ---------------------------------------------------------------------- ranges
+# ---- Ranges ------------------------------------------------------------------------------------------------------
+
 @router.get("/ranges")
 def list_ranges(request: Request, s: Session = Depends(require("viewer"))) -> dict:
+    """Every range VALOR knows: those with a spec file and those that only exist as VMs on the cluster."""
     cfg = _cfg(request)
     out: dict[str, dict] = {}
-    for p in sorted(cfg.ranges_dir.glob("*.yaml")) if cfg.ranges_dir.exists() else []:
-        item = {"name": p.stem, "has_spec": True, "vms": 0, "running": 0}
+    for path in sorted(cfg.ranges_dir.glob("*.yaml")) if cfg.ranges_dir.exists() else []:
+        item = {"name": path.stem, "has_spec": True, "vms": 0, "running": 0}
         try:
-            spec = normalize(parse_spec(p.read_text()), cfg.default_os)
+            spec = normalize(parse_spec(path.read_text()), cfg.default_os)
             item.update(description=spec.description, version=spec_hash(spec)[:12], segments=len(spec.segments),
                         hosts=len(spec.hosts))
         except ValorError as e:
             item.update(error=e.message)
-        out[p.stem] = item
+        out[path.stem] = item
     cluster_error = None
     try:
-        for name, r in ranges_overview(PVE(cfg)).items():
+        for name, deployed in ranges_overview(PVE(cfg)).items():
             item = out.setdefault(name, {"name": name, "has_spec": False})
-            item.update(vms=r["vms"], running=r["running"], deployed_version=r["spec"], machines=r["hosts"])
+            item.update(vms=deployed["vms"], running=deployed["running"], deployed_version=deployed["spec"],
+                        machines=deployed["hosts"])
     except ValorError as e:
-        cluster_error = e.message
+        cluster_error = e.message               # the list still shows the specs
     for name, item in out.items():
         item.update(_summary(cfg, name))
-    return {"ranges": sorted(out.values(), key=lambda r: r["name"]), "cluster_error": cluster_error}
+    return {"ranges": sorted(out.values(), key=lambda item: item["name"]), "cluster_error": cluster_error}
 
 
 @router.get("/ranges/{name}")
@@ -201,14 +217,14 @@ def check_spec(body: SpecIn, request: Request, s: Session = Depends(require("ope
         spec = normalize(parse_spec(body.yaml), cfg.default_os)
     except ValorError as e:
         return {"ok": False, "errors": [e.to_dict()], "topology": None}
-    res = {"ok": True, "errors": [], "warnings": [], "name": spec.name, "version": spec_hash(spec)[:12],
-           "topology": topology.build(spec)}
+    result = {"ok": True, "errors": [], "warnings": [], "name": spec.name, "version": spec_hash(spec)[:12],
+              "topology": topology.build(spec)}
     try:
-        v = validate_cluster(PVE(cfg), spec)
-        res.update(ok=v["ok"], errors=v["errors"], warnings=v.get("warnings", []))
+        checks = validate_cluster(PVE(cfg), spec)
+        result.update(ok=checks["ok"], errors=checks["errors"], warnings=checks.get("warnings", []))
     except ValorError as e:
-        res["warnings"].append({"location": "cluster", "message": f"cluster checks skipped: {e.message}"})
-    return res
+        result["warnings"].append({"location": "cluster", "message": f"cluster checks skipped: {e.message}"})
+    return result
 
 
 @router.put("/ranges/{name}/spec")
@@ -246,11 +262,11 @@ def _target(cfg, name: str, draft: bool):
     """The spec to plan: the saved one, or the range's draft."""
     if not draft:
         return _load(cfg, name)
-    _load(cfg, name)
-    d = drafts.load(cfg, _name(name))
-    if d is None:
+    _load(cfg, name)                    # the range itself must exist
+    draft = drafts.load(cfg, _name(name))
+    if draft is None:
         raise ApiError(404, "no_draft", "This range has no draft changes.")
-    return normalize(parse_spec(d[0]), cfg.default_os), d[0]
+    return normalize(parse_spec(draft[0]), cfg.default_os), draft[0]
 
 
 @router.post("/ranges/{name}/plan")
@@ -258,21 +274,23 @@ def plan(name: str, request: Request, body: PlanIn | None = None, s: Session = D
     cfg = _cfg(request)
     spec, _ = _target(cfg, name, bool(body and body.draft))
     pve = PVE(cfg)
-    v = validate_cluster(pve, spec)
-    if not v["ok"]:
-        return {"ok": False, "errors": v["errors"], "warnings": v.get("warnings", []),
+    checks = validate_cluster(pve, spec)
+    if not checks["ok"]:
+        return {"ok": False, "errors": checks["errors"], "warnings": checks.get("warnings", []),
                 "topology": topology.build(spec, _vm_states(pve, name))}
-    p = make_plan(pve, spec)
-    return {"ok": True, "warnings": v.get("warnings", []), "plan": p, "plan_hash": _plan_hash(spec, p),
-            "version": spec_hash(spec)[:12], "topology": topology.build(spec, _vm_states(pve, name), p),
-            "scripts": custom_scripts(spec, p)}
+    plan = make_plan(pve, spec)
+    return {"ok": True, "warnings": checks.get("warnings", []), "plan": plan, "plan_hash": _plan_hash(spec, plan),
+            "version": spec_hash(spec)[:12], "topology": topology.build(spec, _vm_states(pve, name), plan),
+            "scripts": custom_scripts(spec, plan)}
 
 
 def custom_scripts(spec, plan: dict) -> list[dict]:
     """The custom-script roles this plan runs (as root / SYSTEM), so the person approving sees them in full."""
-    runs = {a["host"] for a in plan.get("actions", []) if a["action"] not in ("keep", "restamp", "remove")}
-    return [{"host": h.name, "os": h.os, "script": r.params.get("script", ""), "ports": r.params.get("ports", "")}
-            for h in spec.hosts if h.name in runs for r in h.roles if r.name == "custom-script"]
+    runs = {action["host"] for action in plan.get("actions", [])
+            if action["action"] not in ("keep", "restamp", "remove")}
+    return [{"host": host.name, "os": host.os, "script": ref.params.get("script", ""),
+             "ports": ref.params.get("ports", "")}
+            for host in spec.hosts if host.name in runs for ref in host.roles if ref.name == "custom-script"]
 
 
 @router.post("/ranges/{name}/apply")
@@ -317,8 +335,10 @@ def destroy(name: str, body: DestroyIn, request: Request, s: Session = Depends(r
     return job
 
 
-# ---------------------------------------------------------------------- logins, power, snapshots
+# ---- Logins, power, snapshots -------------------------------------------------------------------------------------
+
 def _job(s: Session, cfg, kind: str, target: dict, action: str, detail: dict | None = None) -> dict:
+    """Queue an engine job for the worker and audit who asked for it."""
     job = ops.start(cfg, kind, target, f"web:{s.username}", background=True)
     s.audit(action, target=target.get("range", ""), detail={"job": job["job"], **(detail or {})})
     return job
@@ -335,11 +355,11 @@ def get_credentials(name: str, request: Request, s: Session = Depends(require("o
     s.audit("range.credentials.view", target=name)
     try:
         spec, _ = _load(cfg, name)
-        accts = credentials.accounts(spec, load_catalog(cfg), login["username"])
+        accounts = credentials.accounts(spec, load_catalog(cfg), login["username"])
     except (ApiError, ValorError, OSError):
-        accts = [{"username": login["username"], "hosts": [], "kind": "linux"}]
+        accounts = [{"username": login["username"], "hosts": [], "kind": "linux"}]
     return {"username": login["username"], "password": login["password"], "version": login["version"],
-            "created": login["created"], "accounts": accts}
+            "created": login["created"], "accounts": accounts}
 
 
 @router.post("/ranges/{name}/credentials/rotate")
@@ -391,7 +411,8 @@ def delete_snapshot(name: str, snap: str, request: Request, s: Session = Depends
                 {"name": snap})
 
 
-# ---------------------------------------------------------------------- jobs
+# ---- Jobs --------------------------------------------------------------------------------------------------------
+
 @router.get("/jobs")
 def list_jobs(request: Request, s: Session = Depends(require("viewer")),
               limit: int = Query(default=30, ge=1, le=200)) -> dict:

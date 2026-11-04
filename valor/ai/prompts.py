@@ -13,18 +13,9 @@ SPEC_REFERENCE = Path(__file__).parent.parent / "spec-reference.md"      # the s
 
 def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: dict) -> str:
     """What every VALOR prompt needs: the spec format, the OSes and roles this cluster has, and its facts."""
-    oses = "\n".join(f"- {name}{' (default)' if name == cfg.default_os else ''}: {e.get('description', '')} "
-                     f"[{e.get('family', 'debian')}]" for name, e in catalog.items() if name in present)
-    role_lines = []
-    for r in roles:
-        params = "; ".join(f"{k}{'' if not v.get('required') else ' (required)'}: {' '.join(v.get('description', '').split())}"
-                           + (f" (default {v['default']!r})" if 'default' in v else "")
-                           for k, v in (r.get("params") or {}).items())
-        ports = (f"TCP ports from its '{r['ports_param']}' param" if r.get("ports_param")
-                 else "TCP " + ", ".join(map(str, r["ports"])) if r.get("ports") else "")
-        role_lines.append(f"- {r['name']} [{', '.join(r.get('families') or ['debian'])}]"
-                          f"{' (generic)' if r.get('category') == 'generic' else ''}: {' '.join(r['description'].split())}"
-                          + (f" | serves: {ports}" if ports else "") + (f" | params: {params}" if params else ""))
+    oses = "\n".join(f"- {name}{' (default)' if name == cfg.default_os else ''}: {entry.get('description', '')} "
+                     f"[{entry.get('family', 'debian')}]" for name, entry in catalog.items() if name in present)
+    role_lines = [_role_line(role) for role in roles]
     frameworks = compliance.reference(Path(cfg.baselines_dir))
     return f"""# Spec reference
 {SPEC_REFERENCE.read_text()}
@@ -41,6 +32,27 @@ def reference(cfg, catalog: dict, present: set[str], roles: list[dict], facts: d
 # Cluster facts
 {json.dumps(facts, indent=1, sort_keys=True)}
 """
+
+
+def _role_line(role: dict) -> str:
+    """One role for the model: "- nginx [debian, rhel]: description | serves: TCP 80 | params: port: ..."."""
+    def param(name: str, definition: dict) -> str:
+        required = " (required)" if definition.get("required") else ""
+        description = " ".join(definition.get("description", "").split())
+        default = f" (default {definition['default']!r})" if "default" in definition else ""
+        return f"{name}{required}: {description}{default}"
+
+    params = "; ".join(param(name, definition) for name, definition in (role.get("params") or {}).items())
+    if role.get("ports_param"):
+        ports = f"TCP ports from its '{role['ports_param']}' param"
+    elif role.get("ports"):
+        ports = "TCP " + ", ".join(map(str, role["ports"]))
+    else:
+        ports = ""
+    families = ", ".join(role.get("families") or ["debian"])
+    generic = " (generic)" if role.get("category") == "generic" else ""
+    return (f"- {role['name']} [{families}]{generic}: {' '.join(role['description'].split())}"
+            + (f" | serves: {ports}" if ports else "") + (f" | params: {params}" if params else ""))
 
 
 SPEC_RULES = """Rules for specs:

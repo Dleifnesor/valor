@@ -148,7 +148,7 @@ def test_streaming_edge_cases(monkeypatch):
     monkeypatch.setattr(ai.providers.requests, "post", post)
     r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
     assert r.text == "fine" and len(calls) == 2 and "stream_options" not in calls[1]
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **key: Stream(
         [{"choices": [{"delta": {"reasoning_content": "web → db — ok"}}]},
          {"choices": [{"delta": {"content": "It isn’t café"}, "finish_reason": "stop"}]}]))
     r = ai.OpenAICompatible("m", base_url="https://x.example/v1").complete("S", [])
@@ -169,14 +169,14 @@ def test_openrouter_on_the_wire(monkeypatch):
     assert sent["headers"]["X-Title"] == "VALOR" and sent["body"]["model"] == "qwen/qwen3.8-27b"
     assert (r.text, r.reasoning, r.input_tokens) == ("OK", "think", 9)
     # an error after the stream started is an error, not an empty answer
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream([
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **key: Stream([
         {"choices": [{"delta": {"content": "half"}}]},
         {"error": {"code": "server_error", "message": "Provider disconnected unexpectedly"},
          "choices": [{"delta": {"content": ""}, "finish_reason": "error"}]}]))
     with pytest.raises(ValorError) as e:
         p.complete("S", [])
     assert e.value.code == "ai_error" and "Provider disconnected" in e.value.message
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(status=402, error={"message": "can only afford 9000"}))
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **key: Stream(status=402, error={"message": "can only afford 9000"}))
     with pytest.raises(ValorError) as e:
         p.complete("S", [])
     assert e.value.code == "ai_credits" and "Max tokens" in e.value.hint and "9000" in e.value.message
@@ -219,11 +219,11 @@ def test_context_length_is_the_loaded_one(monkeypatch):
         def json(self):
             return self.d
     p = ai.OpenAICompatible("m", base_url="http://x:1234/v1")
-    monkeypatch.setattr(ai.providers.requests, "get", lambda *a, **k: Info({"state": "not-loaded", "max_context_length": 262144}))
+    monkeypatch.setattr(ai.providers.requests, "get", lambda *a, **key: Info({"state": "not-loaded", "max_context_length": 262144}))
     assert p.context_length() is None                  # unloaded: the model's maximum says nothing about the load
-    monkeypatch.setattr(ai.providers.requests, "get", lambda *a, **k: Info({"loaded_context_length": 35328, "max_context_length": 262144}))
+    monkeypatch.setattr(ai.providers.requests, "get", lambda *a, **key: Info({"loaded_context_length": 35328, "max_context_length": 262144}))
     assert p.context_length() == 35328
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream([{"choices": [{"delta": {"content": "half"}}]}],
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **key: Stream([{"choices": [{"delta": {"content": "half"}}]}],
                                                                      stall=ai.providers.requests.ConnectionError("Read timed out.")))
     with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="https://x.example/v1", timeout=60).complete("S", [])
@@ -312,7 +312,7 @@ def test_cut_off_detected_on_the_wire(monkeypatch):
 
 def test_connection_errors_say_what_to_check(monkeypatch):
     def boom(exc):
-        def post(*a, **k):
+        def post(*a, **key):
             raise exc
         return post
     p = ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234/v1")
@@ -324,7 +324,7 @@ def test_connection_errors_say_what_to_check(monkeypatch):
             p.complete("S", [])
         assert "192.168.1.67:1234" in e.value.message and words in e.value.hint
 
-    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **k: Stream(status=404))
+    monkeypatch.setattr(ai.providers.requests, "post", lambda *a, **key: Stream(status=404))
     with pytest.raises(ValorError) as e:
         ai.OpenAICompatible("m", base_url="http://192.168.1.67:1234").complete("S", [])
     assert "/v1" in e.value.hint

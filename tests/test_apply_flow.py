@@ -49,19 +49,19 @@ def run(cfg, monkeypatch):
     monkeypatch.setattr(A.credentials, "ensure", lambda cfg, name: None)
 
     def plan(pve, s, desired):
-        acts = [{"host": d.host, "action": "create", "vmid": None, "reasons": ["new VM"]} for d in desired]
+        acts = [{"host": vm.host, "action": "create", "vmid": None, "reasons": ["new VM"]} for vm in desired]
         return {"actions": acts, "changes": True, "summary": {"create": len(acts)}, "node": {"within_limit": True}}
     monkeypatch.setattr(A, "make_plan", plan)
     ids = iter(range(100, 200))
-    monkeypatch.setattr(A, "create_vm", lambda pve, s, d, taken, mac=None: log.append(("create", d.host)) or next(ids))
+    monkeypatch.setattr(A, "create_vm", lambda pve, s, vm, taken, mac=None: log.append(("create", vm.host)) or next(ids))
     monkeypatch.setattr(A, "router_interfaces", lambda pve, vmid, n, s: ({"dmz": "eth1", "lan": "eth2"}, "eth0"))
-    monkeypatch.setattr(A, "load_router_policy", lambda pve, s, vmid, ifmap, up, build_egress: log.append(
+    monkeypatch.setattr(A, "load_router_policy", lambda pve, s, vmid, ifmap, uplink, build_egress: log.append(
         ("policy", "build" if build_egress else "final")))
-    monkeypatch.setattr(A, "set_login", lambda pve, d, vmid, login, steps: log.append(("login", d.host)))
-    monkeypatch.setattr(A, "run_roles", lambda pve, s, d, vmid, steps, login=None: log.append(("roles", d.host)) or [])
-    monkeypatch.setattr(A, "run_baseline", lambda pve, s, d, vmid, steps: log.append(("baseline", d.host)) or [])
-    monkeypatch.setattr(A, "stamp", lambda pve, s, d, vmid, conv: log.append(("stamp", d.host)))
-    monkeypatch.setattr(A, "configure_wireguard", lambda pve, s, vmid, up, steps: None)
+    monkeypatch.setattr(A, "set_login", lambda pve, vm, vmid, login, steps: log.append(("login", vm.host)))
+    monkeypatch.setattr(A, "run_roles", lambda pve, s, vm, vmid, steps, login=None: log.append(("roles", vm.host)) or [])
+    monkeypatch.setattr(A, "run_baseline", lambda pve, s, vm, vmid, steps: log.append(("baseline", vm.host)) or [])
+    monkeypatch.setattr(A, "stamp", lambda pve, s, vm, vmid, conv: log.append(("stamp", vm.host)))
+    monkeypatch.setattr(A, "configure_wireguard", lambda pve, s, vmid, uplink, steps: None)
     monkeypatch.setattr(A, "range_vms", lambda pve, name: [])
     return lambda: (A.apply(FakePVE(cfg), spec), log)
 
@@ -79,7 +79,7 @@ def test_every_host_converges_inside_the_build_window(run):
 
 def test_a_failing_host_closes_the_build_window(run, monkeypatch):
     policies = []
-    monkeypatch.setattr(A, "load_router_policy", lambda pve, s, vmid, ifmap, up, build_egress: policies.append(
+    monkeypatch.setattr(A, "load_router_policy", lambda pve, s, vmid, ifmap, uplink, build_egress: policies.append(
         "build" if build_egress else "final"))
 
     def boom(*a, **k):

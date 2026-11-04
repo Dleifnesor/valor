@@ -10,58 +10,72 @@ from __future__ import annotations
 import re
 import shlex
 
-# Linux commands that only report state, with the extra condition (on their arguments) some of them need.
-POSITIONAL = lambda args: [a for a in args if not a.startswith("-")]          # noqa: E731
+# ---- Linux -------------------------------------------------------------------------------------------------
+#
+# Each allowlisted command maps to None (any arguments are fine) or a check of its arguments. The helpers below
+# build the common checks.
+
+def _positional(args):
+    """The arguments that are not options."""
+    return [arg for arg in args if not arg.startswith("-")]
 
 
 def _first_in(*names, bare_ok=False):
+    """The subcommand (first positional argument) is one of names; bare_ok: no subcommand at all is fine too."""
     allowed = set(names)
-    return lambda args: (not POSITIONAL(args) and bare_ok) or bool(POSITIONAL(args)) and POSITIONAL(args)[0] in allowed
+    return lambda args: (not _positional(args) and bare_ok) or bool(_positional(args)) and _positional(args)[0] in allowed
 
 
 def _flags_in(*flags, need=()):
+    """Only these options (any positional arguments), and at least one of `need` when given."""
     allowed = set(flags)
-    return lambda args: all(a in allowed or not a.startswith("-") for a in args) and \
-        (not need or any(a in need for a in args))
+    return lambda args: all(arg in allowed or not arg.startswith("-") for arg in args) and \
+        (not need or any(arg in need for arg in args))
 
 
 def _only_flags(*flags):
+    """Nothing but these options (and at least one)."""
     allowed = set(flags)
-    return lambda args: bool(args) and all(a in allowed for a in args)
+    return lambda args: bool(args) and all(arg in allowed for arg in args)
 
 
 def _no_flags(*flags):
+    """Anything except these options (also in --option=value form)."""
     bad = set(flags)
-    return lambda args: not any(a.split("=", 1)[0] in bad for a in args)
+    return lambda args: not any(arg.split("=", 1)[0] in bad for arg in args)
 
 
 def _ip(args):
-    pos = POSITIONAL(args)
-    return bool(pos) and pos[0] in {"a", "addr", "address", "r", "route", "l", "link", "n", "neigh", "neighbor",
-                                    "neighbour", "rule", "maddr", "netns"} \
-        and (len(pos) == 1 or pos[1] in ("show", "list", "ls", "get", "lst") or pos[0] in ("r", "route") and pos[1] == "get")
+    """ip addr / route / link / neigh ... with no verb or a showing verb (show, list, get)."""
+    positional = _positional(args)
+    objects = {"a", "addr", "address", "r", "route", "l", "link", "n", "neigh", "neighbor", "neighbour", "rule",
+               "maddr", "netns"}
+    return bool(positional) and positional[0] in objects \
+        and (len(positional) == 1 or positional[1] in ("show", "list", "ls", "get", "lst")
+             or positional[0] in ("r", "route") and positional[1] == "get")
 
 
 def _curl(args):
+    """curl that only fetches: no uploads, posts, cookie jars or files written (except -o /dev/null)."""
     bad = {"-o", "--output", "-O", "--remote-name", "-d", "--data", "--data-binary", "--data-raw", "--data-urlencode",
            "-F", "--form", "-T", "--upload-file", "-X", "--request", "-K", "--config", "-c", "--cookie-jar", "--json",
            "-D", "--dump-header", "--remote-name-all", "-J"}
     skip = False
-    for i, a in enumerate(args):
+    for i, arg in enumerate(args):
         if skip:
             skip = False
             continue
-        nxt = args[i + 1] if i + 1 < len(args) else ""
-        if a in ("-o", "--output") and nxt == "/dev/null" or a in ("--output=/dev/null", "-o/dev/null"):
-            skip = a in ("-o", "--output")                  # the body thrown away (e.g. -w '%{http_code}' checks)
+        next_arg = args[i + 1] if i + 1 < len(args) else ""
+        if arg in ("-o", "--output") and next_arg == "/dev/null" or arg in ("--output=/dev/null", "-o/dev/null"):
+            skip = arg in ("-o", "--output")                # the body thrown away (e.g. -w '%{http_code}' checks)
             continue
-        if a.startswith("-") and not a.startswith("--") and len(a) > 2 and a.endswith("o") and nxt == "/dev/null" \
-                and not set(a[1:-1]) & set("oOdFTXKcDJ"):
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 2 and arg.endswith("o") \
+                and next_arg == "/dev/null" and not set(arg[1:-1]) & set("oOdFTXKcDJ"):
             skip = True                                     # -so /dev/null
             continue
-        if a.split("=", 1)[0] in bad:
+        if arg.split("=", 1)[0] in bad:
             return False
-        if a.startswith("-") and not a.startswith("--") and len(a) > 2 and set(a[1:]) & set("oOdFTXKcDJ"):
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 2 and set(arg[1:]) & set("oOdFTXKcDJ"):
             return False                # combined short flags such as -sSo
     return True
 
@@ -73,19 +87,19 @@ def _wget(args):
            "--continue", "-x", "-e", "--execute", "-i", "--input-file", "-B", "--save-cookies", "--save-headers",
            "--delete-after", "-k", "--convert-links", "-p", "--page-requisites"}
     out = None
-    for i, a in enumerate(args):
-        if a.split("=", 1)[0] in bad:
+    for i, arg in enumerate(args):
+        if arg.split("=", 1)[0] in bad:
             return False
-        if a in ("-O", "--output-document"):
+        if arg in ("-O", "--output-document"):
             out = args[i + 1] if i + 1 < len(args) else None
-        elif a.startswith("--output-document="):
-            out = a.split("=", 1)[1]
-        elif a.startswith("-") and not a.startswith("--") and "O" in a[1:]:
-            flags, rest = a[1:a.index("O")], a[a.index("O") + 1:]
+        elif arg.startswith("--output-document="):
+            out = arg.split("=", 1)[1]
+        elif arg.startswith("-") and not arg.startswith("--") and "O" in arg[1:]:
+            flags, rest = arg[1:arg.index("O")], arg[arg.index("O") + 1:]       # -qO- / -qO /dev/null
             if set(flags) & set("rmPoacxeiNBkp"):
                 return False
             out = rest or (args[i + 1] if i + 1 < len(args) else None)
-        elif a.startswith("-") and not a.startswith("--") and set(a[1:]) & set("rmPoacxeiNBkp"):
+        elif arg.startswith("-") and not arg.startswith("--") and set(arg[1:]) & set("rmPoacxeiNBkp"):
             return False
     return out in ("-", "/dev/null")
 
@@ -94,16 +108,16 @@ def _mysqladmin(args):
     """mysqladmin ping / status / version / variables (no password on the command line)."""
     words, i = [], 0
     while i < len(args):
-        a = args[i]
-        if a in ("-h", "-P", "-u", "-S", "--host", "--port", "--user", "--socket"):
-            i += 2
+        arg = args[i]
+        if arg in ("-h", "-P", "-u", "-S", "--host", "--port", "--user", "--socket"):
+            i += 2                      # an option with its value
             continue
-        if a.startswith("-p") or a.startswith("--password"):
+        if arg.startswith("-p") or arg.startswith("--password"):
             return False
-        if not a.startswith("-"):
-            words.append(a)
+        if not arg.startswith("-"):
+            words.append(arg)
         i += 1
-    return bool(words) and all(w in ("ping", "status", "version", "variables") for w in words)
+    return bool(words) and all(word in ("ping", "status", "version", "variables") for word in words)
 
 
 REDIS_READ = {"ping", "info", "dbsize", "role", "time", "lastsave", "get", "mget", "exists", "type", "ttl", "pttl",
@@ -111,18 +125,20 @@ REDIS_READ = {"ping", "info", "dbsize", "role", "time", "lastsave", "get", "mget
 
 
 def _redis_cli(args):
+    """redis-cli with one reading Redis command (GET, INFO, CONFIG GET, ...); no interactive shell, no scripts."""
     words, i = [], 0
     while i < len(args):
-        a = args[i]
-        if a in ("-h", "-p", "-n", "-a", "--user", "--pass", "-u", "-s"):
-            i += 2
+        arg = args[i]
+        if arg in ("-h", "-p", "-n", "-a", "--user", "--pass", "-u", "-s"):
+            i += 2                      # an option with its value
             continue
-        if a.startswith("-"):
-            if a in ("--eval", "-x", "--pipe", "--rdb", "--functions-rdb", "-r", "--replica", "--bigkeys", "--memkeys"):
+        if arg.startswith("-"):
+            if arg in ("--eval", "-x", "--pipe", "--rdb", "--functions-rdb", "-r", "--replica", "--bigkeys",
+                       "--memkeys"):
                 return False
             i += 1
             continue
-        words.append(a.lower())
+        words.append(arg.lower())
         i += 1
     if not words:
         return False                                        # an interactive shell
@@ -138,20 +154,20 @@ def _sed(args):
     """sed that only prints or skips lines (sed -n '1,120p', '/x/d', '5q'): no -i, no s/// (w and e flags), no files written."""
     scripts, i = [], 0
     while i < len(args):
-        a = args[i]
-        if a in ("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-u", "--unbuffered", "-z"):
+        arg = args[i]
+        if arg in ("-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-u", "--unbuffered", "-z"):
             i += 1
             continue
-        if a in ("-e", "--expression"):
+        if arg in ("-e", "--expression"):
             scripts.append(args[i + 1] if i + 1 < len(args) else "")
             i += 2
             continue
-        if a.startswith("-"):
+        if arg.startswith("-"):
             return False                # -i (in place), -f (script file), -s ...
         if not scripts:
-            scripts.append(a)           # the script; the rest are files to read
+            scripts.append(arg)         # the script; the rest are files to read
         i += 1
-    return bool(scripts) and all(SED_PRINT.fullmatch(x.strip()) for x in scripts)
+    return bool(scripts) and all(SED_PRINT.fullmatch(script.strip()) for script in scripts)
 
 
 def _rpm(args):
@@ -249,6 +265,9 @@ NET = "\x00net"                         # marks a command that opens a /dev/tcp|
 
 
 def linux_readonly(command: str, depth: int = 0) -> bool:
+    """Whether a bash command line only reads. It is split into simple commands at ; | && || and parentheses,
+    redirections are checked on the way, and every simple command must pass _linux_segment_ok. depth limits how
+    often `bash -c` / `su -c` may nest."""
     text = command.strip()
     if not text or any(s in text for s in ("$(", "`", "<(", ">(", "<<")):
         return False
@@ -286,18 +305,20 @@ def linux_readonly(command: str, depth: int = 0) -> bool:
 
 
 def _linux_segment_ok(words: list[str], depth: int = 0) -> bool:
+    """One simple command (no operators left): allowlisted, with arguments its check accepts."""
     if NET in words:
-        return [w for w in words if w != NET] in ([], ["exec"], ["echo"], ["true"], [":"])
+        return [word for word in words if word != NET] in ([], ["exec"], ["echo"], ["true"], [":"])
     words = list(words)
     while words and words[0] in WRAPPERS:           # sudo X, timeout 10 X, nice -n 5 X: judge X
-        w = words.pop(0)
-        while words and (words[0].startswith("-") or w in ("timeout", "nice") and re.fullmatch(r"[\d.]+[smhd]?", words[0])):
+        wrapper = words.pop(0)
+        while words and (words[0].startswith("-")
+                         or wrapper in ("timeout", "nice") and re.fullmatch(r"[\d.]+[smhd]?", words[0])):
             words.pop(0)
     if not words or "=" in words[0]:
         return False                    # nothing left, or an environment assignment (FOO=bar cmd)
     cmd, args = words[0].rsplit("/", 1)[-1], words[1:]
     if cmd == "su" and depth < 2:                   # su [-] USER -c 'cmd': judge cmd
-        rest = [w for w in args if w not in ("-", "-l", "--login")]
+        rest = [word for word in args if word not in ("-", "-l", "--login")]
         return len(rest) == 3 and rest[1] == "-c" and linux_readonly(rest[2], depth + 1)
     if cmd == "runuser" and len(args) >= 4 and args[0] == "-u" and args[2] == "--" and depth < 2:
         return _linux_segment_ok(args[3:], depth + 1)       # runuser -u USER -- cmd
@@ -313,7 +334,9 @@ def _linux_segment_ok(words: list[str], depth: int = 0) -> bool:
     return check is None or bool(check(args))
 
 
-# PowerShell: reading cmdlet verbs, executables/aliases that only report (with their allowed arguments), and methods
+# ---- PowerShell --------------------------------------------------------------------------------------------
+#
+# Reading cmdlet verbs, executables/aliases that only report (with their allowed arguments), and methods.
 PS_VERBS = {"Get", "Test", "Resolve", "Measure", "Select", "Where", "Sort", "Format", "Group", "Compare", "Find",
             "ConvertTo", "ConvertFrom"}
 PS_OK = {"Out-String", "Out-Host", "Out-Null", "Write-Output", "Write-Host"}
@@ -322,8 +345,9 @@ PS_ALIASES = {"dir", "ls", "cat", "type", "gc", "gci", "gi", "gp", "gsv", "gps",
 
 
 def _all_slash_in(*opts):
-    allowed = {o.lower() for o in opts}
-    return lambda args: all(a.split(":")[0] in allowed for a in args if a.startswith("/"))
+    """Only these /options (Windows style, also /option:value)."""
+    allowed = {opt.lower() for opt in opts}
+    return lambda args: all(arg.split(":")[0] in allowed for arg in args if arg.startswith("/"))
 
 
 PS_EXES = {
@@ -360,6 +384,9 @@ PS_TOKEN = re.compile(r"""'(?:[^']|'')*'|"(?:[^"`]|`.)*"|[|;{}()]|[^\s|;{}()'"]+
 
 
 def powershell_readonly(command: str) -> bool:
+    """Whether a PowerShell command only reads. PowerShell can run code from almost anywhere (methods, script
+    blocks, expandable strings), so anything that could is refused first; then every command in the pipeline
+    must be a reading cmdlet, alias or allowlisted executable."""
     text = command.strip()
     if not text or re.search(r"::|\$\(|@['\"]|`|#|\binvoke-|\biex\b|\bicm\b|\bstart-", text, re.I):
         return False                    # static .NET calls, subexpressions, here-strings, comments, Invoke-*
@@ -367,8 +394,8 @@ def powershell_readonly(command: str) -> bool:
         return False                    # call operator, dot-sourcing
     if re.search(r"\d?>>?(?!\s*\$null|&1)", text):
         return False                    # redirection into a file (> $null and 2>&1 are fine)
-    for m in re.finditer(r"\.\s*([A-Za-z_]\w*)\s*\(", text):
-        if m.group(1) not in SAFE_METHODS:
+    for method in re.finditer(r"\.\s*([A-Za-z_]\w*)\s*\(", text):
+        if method.group(1) not in SAFE_METHODS:
             return False                # e.g. (Get-Service x).Stop()
     tokens = PS_TOKEN.findall(text)
     if any(tok.startswith('"') and "$" in tok for tok in tokens):
@@ -405,10 +432,11 @@ def _ps_command_ok(words: list[str]) -> bool:
     if exe is None:
         return False
     check = PS_EXES[exe]
-    return check is None or bool(check([a.lower() for a in words[1:]]))
+    return check is None or bool(check([arg.lower() for arg in words[1:]]))
 
 
 def is_readonly(name: str, args: dict, family: str) -> bool:
+    """Whether a tool call may run without the person's approval."""
     if name in ("read_file", "range_status"):
         return True
     if name == "snapshot":

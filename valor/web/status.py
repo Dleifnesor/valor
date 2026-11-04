@@ -28,16 +28,16 @@ def _check(name: str, ok: bool | None, detail: str, **extra) -> dict:
 def _cert(path: str) -> dict | None:
     try:
         from cryptography import x509
-        c = x509.load_pem_x509_certificate(Path(path).read_bytes())
-        not_after = c.not_valid_after_utc
+        cert = x509.load_pem_x509_certificate(Path(path).read_bytes())
+        not_after = cert.not_valid_after_utc
         days = (not_after - dt.datetime.now(dt.timezone.utc)).days
         try:
-            san = c.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-            names = [str(n.value) for n in san]
+            alt_names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+            names = [str(name.value) for name in alt_names]
         except x509.ExtensionNotFound:
             names = []
         return {"expires": not_after.isoformat(), "days_left": days, "names": names,
-                "issuer": c.issuer.rfc4514_string()}
+                "issuer": cert.issuer.rfc4514_string()}
     except Exception:
         return None
 
@@ -50,8 +50,8 @@ def _updates() -> dict | None:
     tool = "/usr/lib/update-notifier/apt-check"
     if os.path.exists(tool):
         try:
-            res = subprocess.run([tool], capture_output=True, text=True, timeout=60)
-            total, security = (res.stderr.strip() or "0;0").split(";")[:2]
+            result = subprocess.run([tool], capture_output=True, text=True, timeout=60)
+            total, security = (result.stderr.strip() or "0;0").split(";")[:2]       # apt-check prints "12;3"
             value = {"total": int(total), "security": int(security)}
         except Exception:
             value = None
@@ -71,20 +71,21 @@ def status(request: Request, s: Session = Depends(require("viewer"))) -> dict:
     checks, info = [], {}
     try:
         pve = PVE(cfg)
-        ver = pve.version()
-        checks.append(_check("Proxmox API", True, f"Proxmox VE {ver.get('version')} at {cfg.api_host}"))
+        version = pve.version()
+        checks.append(_check("Proxmox API", True, f"Proxmox VE {version.get('version')} at {cfg.api_host}"))
         info = cluster_info(pve)
-        tpl = info["templates"]
-        missing = [k for k, v in tpl.items() if not v["present"]]
-        checks.append(_check("Templates", tpl.get(cfg.default_os, {}).get("present", False),
-                             f"{len(tpl) - len(missing)} of {len(tpl)} built"
+        built = info["templates"]
+        missing = [name for name, template in built.items() if not template["present"]]
+        checks.append(_check("Templates", built.get(cfg.default_os, {}).get("present", False),
+                             f"{len(built) - len(missing)} of {len(built)} built"
                              + (f"; missing: {', '.join(missing)}" if missing else "")))
-        seg = info["segment_bridge"]
-        checks.append(_check("Range network", seg["present"] and seg["vlan_aware"],
-                             f"{seg['name']}: {'VLAN-aware' if seg['vlan_aware'] else 'missing or not VLAN-aware'}"))
+        bridge = info["segment_bridge"]
+        checks.append(_check("Range network", bridge["present"] and bridge["vlan_aware"],
+                             f"{bridge['name']}: {'VLAN-aware' if bridge['vlan_aware'] else 'missing or not VLAN-aware'}"))
         checks.append(_check("Uplink", info["uplink_bridge"]["present"], f"{cfg.uplink_bridge}"
                              + (f" (VLAN {cfg.uplink_vlan})" if cfg.uplink_vlan else "")))
         if wcfg.appliance_vmid:
+            # least privilege: the engine's token must not be able to read (or change) VALOR's own VM
             try:
                 pve.vm_config(wcfg.appliance_vmid)
                 checks.append(_check("Token scope", False, "the API token can read the VALOR VM - it should not"))
@@ -100,16 +101,16 @@ def status(request: Request, s: Session = Depends(require("viewer"))) -> dict:
     usage = shutil.disk_usage(cfg.state_dir if os.path.exists(cfg.state_dir) else "/")
     free_pct = round(usage.free / usage.total * 100)
     checks.append(_check("VALOR VM disk", free_pct > 10, f"{free_pct}% free"))
-    upd = _updates()
-    if upd is not None:
-        checks.append(_check("OS updates", upd["security"] == 0,
-                             f"{upd['total']} pending, {upd['security']} security"
-                             + (" (installed automatically overnight)" if upd["security"] else "")))
+    updates = _updates()
+    if updates is not None:
+        checks.append(_check("OS updates", updates["security"] == 0,
+                             f"{updates['total']} pending, {updates['security']} security"
+                             + (" (installed automatically overnight)" if updates["security"] else "")))
     recent = jobs.list_jobs(cfg, 50)
-    queue = {"queued": sum(j["state"] == "queued" for j in recent),
-             "running": sum(j["state"] == "running" for j in recent)}
+    queue = {"queued": sum(job["state"] == "queued" for job in recent),
+             "running": sum(job["state"] == "running" for job in recent)}
+    cluster_fields = ("node", "cpu_threads", "memory_total_mib", "memory_free_mib", "storage", "segment_bridge",
+                      "uplink_bridge", "reserved_networks", "templates", "ranges", "default_os")
     return {"version": __version__, "instance": wcfg.instance_name, "hostname": os.uname().nodename,
             "checks": checks, "jobs": queue,
-            "cluster": {k: info.get(k) for k in ("node", "cpu_threads", "memory_total_mib", "memory_free_mib",
-                                                  "storage", "segment_bridge", "uplink_bridge", "reserved_networks",
-                                                  "templates", "ranges", "default_os")} if info else None}
+            "cluster": {key: info.get(key) for key in cluster_fields} if info else None}

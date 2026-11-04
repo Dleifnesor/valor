@@ -42,7 +42,7 @@ def test_map_edits():
     assert any(r.from_ == "lan" and r.to == "db" and r.ports == [80] for r in lan.policy)
     assert new.host("pc").cores == 2
     gone = parse_spec(drafts.to_yaml(drafts.apply_ops(spec, [{"op": "remove_host", "name": "pc"}])))
-    assert [h.name for h in gone.hosts] == ["web"] and gone.policy == [] and gone.tests == []   # its rules go too
+    assert [csrf_headers.name for csrf_headers in gone.hosts] == ["web"] and gone.policy == [] and gone.tests == []   # its rules go too
     for ops, code in (([{"op": "add_host", "segment": "dmz", "name": "web"}], "name_taken"),
                       ([{"op": "add_host", "segment": "nope", "name": "x1"}], "unknown_segment"),
                       ([{"op": "add_role", "host": "web", "role": "nginx"}], "role_exists"),
@@ -78,23 +78,23 @@ def test_draft_api(env, tmp_path):
     app, wcfg, cfg = _app(env, tmp_path)
     with client(app) as op, client(app) as viewer:
         me, _ = enroll(op, "olivia")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         vme, _ = enroll(viewer, "vic")
         assert viewer.get("/api/ranges/lab/draft").json()["draft"] is None
         add = {"ops": [{"op": "add_host", "segment": "lan", "name": "kali1", "os": "kali", "memory": 2048,
                         "roles": [{"name": "attacker-tools"}]}]}
         assert viewer.post("/api/ranges/lab/draft/ops", json=add, headers={"X-CSRF-Token": vme["csrf"]}).status_code == 403
-        r = op.post("/api/ranges/lab/draft/ops", json=add, headers=h).json()
+        r = op.post("/api/ranges/lab/draft/ops", json=add, headers=csrf_headers).json()
         assert r["draft"]["summary"] == {"create": 1} and "kali1" in r["draft"]["diff"]
         node = next(n for n in r["topology"]["nodes"] if n["id"] == "host:kali1")
         assert node["change"] == "create" and node["address"] == "10.69.0.11"
         assert (cfg.ranges_dir / "lab.yaml").read_text() == SPEC              # the spec itself is untouched
-        bad = op.post("/api/ranges/lab/draft/ops", json={"ops": [{"op": "add_role", "host": "pc", "role": "nope"}]}, headers=h)
+        bad = op.post("/api/ranges/lab/draft/ops", json={"ops": [{"op": "add_role", "host": "pc", "role": "nope"}]}, headers=csrf_headers)
         assert bad.status_code == 400 and bad.json()["error"] == "unknown_role"
-        assert op.put("/api/ranges/lab/draft", json={"yaml": "name: [x"}, headers=h).status_code == 400
+        assert op.put("/api/ranges/lab/draft", json={"yaml": "name: [x"}, headers=csrf_headers).status_code == 400
         assert op.put("/api/ranges/lab/draft", json={"yaml": SPEC.replace("name: lab", "name: other")},
-                      headers=h).json()["error"] == "name_mismatch"
-        assert op.delete("/api/ranges/lab/draft", headers=h).json()["draft"] is None
+                      headers=csrf_headers).json()["error"] == "name_mismatch"
+        assert op.delete("/api/ranges/lab/draft", headers=csrf_headers).json()["draft"] is None
         assert db.connect(wcfg.db).execute("SELECT COUNT(*) FROM audit WHERE action='range.draft.edit'").fetchone()[0] == 1
 
 
@@ -123,7 +123,7 @@ def test_segment_and_rule_edits():
         drafts.apply_ops(new, [{"op": "remove_segment", "name": "lan"}])
     assert e.value.code == "segment_not_empty"
     gone = parse_spec(drafts.to_yaml(drafts.apply_ops(new, [{"op": "remove_segment", "name": "lan", "with_hosts": True}])))
-    assert [s.name for s in gone.segments] == ["dmz", "mgmt"] and [h.name for h in gone.hosts] == ["web"]
+    assert [s.name for s in gone.segments] == ["dmz", "mgmt"] and [csrf_headers.name for csrf_headers in gone.hosts] == ["web"]
     assert gone.policy == [] and gone.access.wireguard.reach == ["dmz"]
     i = len(new.policy) - 1
     kept = drafts.apply_ops(new, [{"op": "remove_rule", "index": i, "from": "mgmt", "to": "lan"}])
@@ -140,14 +140,14 @@ def test_segment_api(env, tmp_path):
     app, wcfg, cfg = _app(env, tmp_path)
     with client(app) as op:
         me, _ = enroll(op, "olivia")
-        h = {"X-CSRF-Token": me["csrf"]}
+        csrf_headers = {"X-CSRF-Token": me["csrf"]}
         sug = op.get("/api/ranges/lab/draft/suggest-segment").json()
         assert sug["vlan"] not in (680, 681) and sug["cidr"].endswith("/24")
         r = op.post("/api/ranges/lab/draft/ops", json={"ops": [
             {"op": "add_segment", "name": "srv", "internet": True},
-            {"op": "add_rule", "from": "lan", "to": "srv", "proto": "any"}]}, headers=h).json()
+            {"op": "add_rule", "from": "lan", "to": "srv", "proto": "any"}]}, headers=csrf_headers).json()
         seg = next(n for n in r["topology"]["nodes"] if n["id"] == "seg:srv")
         assert seg["vlan"] == sug["vlan"] and seg["cidr"] == sug["cidr"] and r["draft"]["summary"] == {"replace": 1}
         assert any(e["kind"] == "policy" and e["target"] == "seg:srv" for e in r["topology"]["edges"])
-        bad = op.post("/api/ranges/lab/draft/ops", json={"ops": [{"op": "add_rule", "from": "web", "to": "web", "proto": "any"}]}, headers=h)
+        bad = op.post("/api/ranges/lab/draft/ops", json={"ops": [{"op": "add_rule", "from": "web", "to": "web", "proto": "any"}]}, headers=csrf_headers)
         assert bad.status_code == 400                                                       # same segment: invalid spec

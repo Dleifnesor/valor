@@ -77,7 +77,7 @@ def _alloc(cfg) -> dict:
     except ValorError:
         live = {}
     vlans, nets = _taken(cfg, live)
-    return {"vlans": set(vlans), "nets": [n for n, _ in nets], "vlan_range": (cfg.vlan_min, cfg.vlan_max)}
+    return {"vlans": set(vlans), "nets": [net for net, _ in nets], "vlan_range": (cfg.vlan_min, cfg.vlan_max)}
 
 
 def _vms(cfg, name: str) -> dict:
@@ -90,19 +90,20 @@ def _vms(cfg, name: str) -> dict:
 def view(cfg, name: str) -> dict:
     """The range as the map should show it: with its draft (and what the draft changes) when there is one."""
     current, current_text = _load(cfg, name)
-    d = drafts.load(cfg, name)
-    if d is None:
+    stored = drafts.load(cfg, name)
+    if stored is None:
         return {"draft": None, "topology": topology.build(current, _vms(cfg, name))}
-    text, meta = d
+    text, meta = stored
     try:
         draft = normalize(parse_spec(text), cfg.default_os)
     except ValorError as e:
         return {"draft": {"yaml": text, "meta": meta, "valid": False, "error": e.message, "errors": e.details},
                 "topology": topology.build(current, _vms(cfg, name))}
-    ch = drafts.changes(current, draft)
-    return {"draft": {"yaml": text, "meta": meta, "valid": True, "summary": ch["summary"], "actions": ch["actions"],
+    changes = drafts.changes(current, draft)
+    return {"draft": {"yaml": text, "meta": meta, "valid": True, "summary": changes["summary"],
+                      "actions": changes["actions"],
                       "diff": drafts.unified_diff(drafts.spec_yaml(current), drafts.spec_yaml(draft), name)},
-            "topology": topology.build(draft, _vms(cfg, name), ch)}
+            "topology": topology.build(draft, _vms(cfg, name), changes)}
 
 
 @router.get("/ranges/{name}/draft")
@@ -127,28 +128,29 @@ def edit(name: str, body: OpsIn, request: Request, s: Session = Depends(require(
     """Map controls: add/remove VMs and services. Applied to the draft (started from the saved spec)."""
     cfg = _cfg(request)
     _, saved = _load(cfg, _name(name))
-    d = drafts.load(cfg, name)
-    base = parse_spec(d[0] if d else saved)             # unnormalized: hosts without an OS keep the default
+    draft = drafts.load(cfg, name)
+    base = parse_spec(draft[0] if draft else saved)     # unnormalized: hosts without an OS keep the default
+    # Every role the edits name must exist; their ports open the rules for `allow_from`.
     loaded = {}
-    for o in body.ops:
-        for r in [o.role, *(x.name for x in o.roles)]:
-            if r and r not in loaded:
+    for op in body.ops:
+        for role in [op.role, *(ref.name for ref in op.roles)]:
+            if role and role not in loaded:
                 try:
-                    loaded[r] = load_role(cfg.roles_dir, r)
+                    loaded[role] = load_role(cfg.roles_dir, role)
                 except ValorError:
-                    raise ApiError(400, "unknown_role", f"There is no service (role) '{r}'.")
+                    raise ApiError(400, "unknown_role", f"There is no service (role) '{role}'.")
 
     def ports(role: str, params: dict) -> list[int]:
         return role_ports(loaded[role], params) if role in loaded else []
     try:
-        segment_ops = any(o.op in ("add_segment", "update_segment") for o in body.ops)
-        data = drafts.apply_ops(base, [o.model_dump(exclude_none=True, by_alias=True) for o in body.ops], ports,
+        segment_ops = any(op.op in ("add_segment", "update_segment") for op in body.ops)
+        data = drafts.apply_ops(base, [op.model_dump(exclude_none=True, by_alias=True) for op in body.ops], ports,
                                 _alloc(cfg) if segment_ops else None)
         text = drafts.to_yaml(data)
         drafts.save(cfg, name, text, s.username, "map")
     except ValorError as e:
         raise ApiError(400, e.code, e.message, **({"details": e.details} if e.details else {}))
-    s.audit("range.draft.edit", target=name, detail={"ops": [o.op for o in body.ops]})
+    s.audit("range.draft.edit", target=name, detail={"ops": [op.op for op in body.ops]})
     return view(cfg, name)
 
 
@@ -157,8 +159,8 @@ def suggest_segment(name: str, request: Request, s: Session = Depends(require("o
     """A free VLAN and private network for the Add-segment form (editable there)."""
     cfg = _cfg(request)
     _, saved = _load(cfg, _name(name))
-    d = drafts.load(cfg, name)
-    data = parse_spec(d[0] if d else saved).model_dump(mode="json", by_alias=True, exclude_none=True)
+    draft = drafts.load(cfg, name)
+    data = parse_spec(draft[0] if draft else saved).model_dump(mode="json", by_alias=True, exclude_none=True)
     try:
         return {**drafts.suggest_segment(data, _alloc(cfg)), "vlan_range": [cfg.vlan_min, cfg.vlan_max]}
     except ValorError as e:

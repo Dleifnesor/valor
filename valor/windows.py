@@ -1,5 +1,9 @@
 """Windows range hosts: guest preparation over the QEMU agent (Windows has no cloud-init here), PowerShell role
 wrapper, baseline bundle and connectivity probes. Scripts run as SYSTEM through PVE.ps() (file, never a command line).
+
+Scripts talk back to the engine with marker lines in their output: REBOOT asks the engine to restart the VM and
+run the script again, PREP_OK confirms the preparation finished, VALOR-ROLE-CHANGED / VALOR-CONTROL report like
+their Linux counterparts (roles.py, baseline.py).
 """
 
 from __future__ import annotations
@@ -36,17 +40,18 @@ def prep_script(name: str, address: str, prefix: int, gateway: str, dns: list[st
     """Hostname, Administrator password, static IPv4, DNS, network profile and licensing (no license checks, the
     evaluation renewed). Idempotent; prints REBOOT when the rename or a rearm needs one. DNS stays as a role set it
     (e.g. pointing at a domain controller) once a role took it over."""
-    pw = (f"$pw = ConvertTo-SecureString {q(password)} -AsPlainText -Force\n"
-          "if ($cs.DomainRole -ge 4) { Import-Module ActiveDirectory; "
-          "Set-ADAccountPassword -Identity Administrator -Reset -NewPassword $pw }\n"
-          "else { Set-LocalUser -Name Administrator -Password $pw -PasswordNeverExpires $true; "
-          "Enable-LocalUser -Name Administrator }\n") if password else ""
+    # On a domain controller (DomainRole >= 4) there are no local accounts: the domain's Administrator gets it.
+    set_password = (f"$pw = ConvertTo-SecureString {q(password)} -AsPlainText -Force\n"
+                    "if ($cs.DomainRole -ge 4) { Import-Module ActiveDirectory; "
+                    "Set-ADAccountPassword -Identity Administrator -Reset -NewPassword $pw }\n"
+                    "else { Set-LocalUser -Name Administrator -Password $pw -PasswordNeverExpires $true; "
+                    "Enable-LocalUser -Name Administrator }\n") if password else ""
     return f"""
 $cs = Get-CimInstance Win32_ComputerSystem
 # the VM's hardware clock is UTC (Proxmox localtime=0): keep it so if someone changes the time zone
 New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation' -Name RealTimeIsUniversal `
   -Value 1 -PropertyType DWord -Force | Out-Null
-{pw}
+{set_password}
 $nic = Get-NetAdapter -Physical | Sort-Object ifIndex | Select-Object -First 1
 if (-not $nic) {{ throw 'no network adapter' }}
 $ip = {q(address)}; $prefix = {int(prefix)}; $gw = {q(gateway)}
@@ -58,7 +63,7 @@ if (-not ($cur | Where-Object {{ $_.IPAddress -eq $ip -and $_.PrefixLength -eq $
   New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $ip -PrefixLength $prefix -DefaultGateway $gw | Out-Null
 }}
 if (-not (Test-Path 'HKLM:\\SOFTWARE\\VALOR\\DnsByRole')) {{
-  Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses @({', '.join(q(d) for d in dns)})
+  Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses @({', '.join(q(server) for server in dns)})
 }}
 # Private network profile. Right after an address change Windows shows "Identifying..." and refuses to set it;
 # retry for a minute, never fail on it (firewall rules VALOR relies on apply to every profile).
@@ -130,8 +135,10 @@ function Wait-Until([scriptblock]$test, [int]$seconds = 600, [string]$what = 'co
 
 
 def role_script(name: str, script: str, env: dict[str, str]) -> str:
-    vars_ = "\n".join(f"${k} = {q(v)}" for k, v in sorted(env.items()))
-    return (f"{vars_}\n{PS_PRELUDE}\n# ---- role {name} ----\n"
+    """A role.ps1 with its environment as PowerShell variables ($VALOR_HOST = '...') and the PS_PRELUDE helpers.
+    The finally block reports VALOR-ROLE-CHANGED even when the role throws."""
+    assignments = "\n".join(f"${key} = {q(value)}" for key, value in sorted(env.items()))
+    return (f"{assignments}\n{PS_PRELUDE}\n# ---- role {name} ----\n"
             f"try {{\n{script}\n}} finally {{ \"VALOR-ROLE-CHANGED=$([int]$VALOR_CHANGED)\" }}\n")
 
 
@@ -140,15 +147,15 @@ def baseline_bundle(baseline, is_router: bool, *, fix: bool) -> str:
     parts = ["$ErrorActionPreference = 'Continue'",
              "$IsDC = (Get-CimInstance Win32_ComputerSystem).DomainRole -ge 4",
              "function Invoke-Check([scriptblock]$c) { try { [bool](& $c) } catch { $false } }"]
-    for c in baseline.controls:
-        if not c.applies(is_router):
+    for control in baseline.controls:
+        if not control.applies(is_router):
             continue
-        parts.append(f"$check = {{\n{c.check.strip()}\n}}")
-        parts.append(f"$fix = {{\n{c.fix.strip()}\n}}")
+        parts.append(f"$check = {{\n{control.check.strip()}\n}}")
+        parts.append(f"$fix = {{\n{control.fix.strip()}\n}}")
         parts.append("$before = Invoke-Check $check; $after = $before")
         if fix:
             parts.append("if (-not $before) { try { & $fix *> $null } catch {} ; $after = Invoke-Check $check }")
-        parts.append(f"\"VALOR-CONTROL {c.id} $(if ($before) {{ 'pass' }} else {{ 'fail' }}) "
+        parts.append(f"\"VALOR-CONTROL {control.id} $(if ($before) {{ 'pass' }} else {{ 'fail' }}) "
                      f"$(if ($after) {{ 'pass' }} else {{ 'fail' }})\"")
     return "\n".join(parts) + "\n"
 

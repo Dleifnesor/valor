@@ -65,24 +65,28 @@ def _key_context(pid: str) -> str:
 def ai_settings(conn, box) -> dict:
     """{providers: [{id, name, provider, model, base_url, api_key (encrypted), max_tokens, timeout}], default (an id),
     daily_tokens_per_user}. The single provider of earlier versions becomes the first named one (its key re-sealed)."""
-    st = db.get_setting(conn, "ai", {}) or {}
-    if "providers" in st:
-        return {"providers": st["providers"], "default": st.get("default", ""),
-                "daily_tokens_per_user": st.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"]),
-                "fix_failed_builds": st.get("fix_failed_builds", True), "fix_provider": st.get("fix_provider", ""),
-                "fix_mode": st.get("fix_mode", "auto")}
+    saved = db.get_setting(conn, "ai", {}) or {}
+    if "providers" in saved:
+        return {"providers": saved["providers"], "default": saved.get("default", ""),
+                "daily_tokens_per_user": saved.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"]),
+                "fix_failed_builds": saved.get("fix_failed_builds", True),
+                "fix_provider": saved.get("fix_provider", ""), "fix_mode": saved.get("fix_mode", "auto")}
+
+    # Settings from a version with a single provider: convert them once.
     new = {"providers": [], "default": "", "fix_failed_builds": True, "fix_provider": "", "fix_mode": "auto",
-           "daily_tokens_per_user": st.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"])}
-    if st.get("provider", "none") != "none":
+           "daily_tokens_per_user": saved.get("daily_tokens_per_user", ai.DEFAULTS["daily_tokens_per_user"])}
+    if saved.get("provider", "none") != "none":
         pid = secrets.token_hex(6)
         key = ""
-        if st.get("api_key") and box is not None:
-            key = box.seal_text(box.open_text(st["api_key"], "ai:api_key"), _key_context(pid))
-        new["providers"].append({"id": pid, "name": {"openai": "Local model server"}.get(st["provider"], st["provider"]), "provider": st["provider"], "model": st.get("model", ""),
-            "base_url": st.get("base_url", ""), "api_key": key,
-            "max_tokens": st.get("max_tokens", ai.DEFAULTS["max_tokens"]), "timeout": st.get("timeout", ai.DEFAULTS["timeout"])})
+        if saved.get("api_key") and box is not None:        # re-sealed under the new provider's own context
+            key = box.seal_text(box.open_text(saved["api_key"], "ai:api_key"), _key_context(pid))
+        new["providers"].append({
+            "id": pid, "name": {"openai": "Local model server"}.get(saved["provider"], saved["provider"]),
+            "provider": saved["provider"], "model": saved.get("model", ""), "base_url": saved.get("base_url", ""),
+            "api_key": key, "max_tokens": saved.get("max_tokens", ai.DEFAULTS["max_tokens"]),
+            "timeout": saved.get("timeout", ai.DEFAULTS["timeout"])})
         new["default"] = pid
-    if st:
+    if saved:
         db.put_setting(conn, "ai", new, by="migration")
     return new
 
@@ -91,18 +95,19 @@ def resolve(conn, box, pid: str | None = None) -> tuple[ai.Provider, dict]:
     """The provider to use (a chat's choice, else the default; a deleted choice falls back to the default) and its
     settings with the daily budget."""
     store = ai_settings(conn, box)
-    by_id = {p["id"]: p for p in store["providers"]}
-    p = by_id.get(pid or "") or by_id.get(store["default"])
-    if p is None:
+    by_id = {provider["id"]: provider for provider in store["providers"]}
+    chosen = by_id.get(pid or "") or by_id.get(store["default"])
+    if chosen is None:
         raise ValorError("ai_not_configured", "No AI provider is connected.",
                          hint="An administrator can connect one in Settings -> AI providers.")
-    key = box.open_text(p["api_key"], _key_context(p["id"])) if p.get("api_key") and box is not None else ""
-    st = {**ai.DEFAULTS, **{k: v for k, v in p.items() if k != "api_key"},
-          "daily_tokens_per_user": store["daily_tokens_per_user"]}
-    return ai.provider_from(st, key), st
+    key = box.open_text(chosen["api_key"], _key_context(chosen["id"])) if chosen.get("api_key") and box is not None else ""
+    settings = {**ai.DEFAULTS, **{k: v for k, v in chosen.items() if k != "api_key"},
+                "daily_tokens_per_user": store["daily_tokens_per_user"]}
+    return ai.provider_from(settings, key), settings
 
 
 def _masked(store: dict) -> dict:
+    """The settings for the admin page: a stored key shows as MASK (sending MASK back keeps it)."""
     return {"providers": [{**p, "api_key": MASK if p.get("api_key") else "", "default": p["id"] == store["default"]}
                           for p in store["providers"]],
             "daily_tokens_per_user": store["daily_tokens_per_user"], "fix_failed_builds": store["fix_failed_builds"],
@@ -110,14 +115,16 @@ def _masked(store: dict) -> dict:
 
 
 def _check_url(url: str) -> None:
+    """A model server URL: http(s) without credentials; plain http only on a private address (the API key would
+    otherwise cross the internet unencrypted)."""
     if not url:
         return
-    u = urlparse(url)
-    if u.scheme not in ("https", "http") or not u.hostname or u.username or u.password:
+    parts = urlparse(url)
+    if parts.scheme not in ("https", "http") or not parts.hostname or parts.username or parts.password:
         raise ApiError(400, "invalid_ai", "The base URL must be http(s)://host[:port]/path without credentials.")
-    if u.scheme == "http":
+    if parts.scheme == "http":
         try:
-            ip = ipaddress.ip_address(u.hostname)
+            ip = ipaddress.ip_address(parts.hostname)
         except ValueError:
             ip = None
         if not ip or not (ip.is_private or ip.is_loopback):
@@ -134,18 +141,19 @@ def get_ai(request: Request, s: Session = Depends(require("admin"))) -> dict:
     return {**_masked(ai_settings(s.conn, request.app.state.box)), "kinds": list(ai.PROVIDERS)}
 
 
-def _validate_provider(d: dict) -> None:
-    name = d["name"]
-    if d["provider"] == "openai":
-        _check_url(d["base_url"])
-        if not d["base_url"]:
-            raise ApiError(400, "invalid_ai", f"{name}: an OpenAI-compatible provider needs its base URL (ending in /v1).")
+def _validate_provider(provider: dict) -> None:
+    name = provider["name"]
+    if provider["provider"] == "openai":
+        _check_url(provider["base_url"])
+        if not provider["base_url"]:
+            raise ApiError(400, "invalid_ai",
+                           f"{name}: an OpenAI-compatible provider needs its base URL (ending in /v1).")
     else:
-        d["base_url"] = ""                                  # OpenRouter has a fixed address
-    if not d["model"]:
+        provider["base_url"] = ""                           # OpenRouter has a fixed address
+    if not provider["model"]:
         raise ApiError(400, "invalid_ai", f"{name}: name the model to use.")
-    if d["provider"] == "openrouter" and not d["api_key"]:
-        raise ApiError(400, "invalid_ai", f"{name}: {ai.KIND_NAMES[d['provider']]} needs an API key.")
+    if provider["provider"] == "openrouter" and not provider["api_key"]:
+        raise ApiError(400, "invalid_ai", f"{name}: {ai.KIND_NAMES[provider['provider']]} needs an API key.")
 
 
 @router.put("/settings/ai")
@@ -157,23 +165,23 @@ def put_ai(body: AiSettingsIn, request: Request, s: Session = Depends(require("a
     if len(set(names)) != len(names):
         raise ApiError(400, "invalid_ai", "Give every provider its own name.")
     new, default, changed = [], "", []
-    for p in body.providers:
-        d = p.model_dump()
-        d["name"] = d["name"].strip()
-        d["id"] = d["id"] if d["id"] in old else secrets.token_hex(6)
-        key, is_default = d.pop("api_key"), d.pop("default")
-        prev = old.get(d["id"], {})
+    for submitted in body.providers:
+        provider = submitted.model_dump()
+        provider["name"] = provider["name"].strip()
+        provider["id"] = provider["id"] if provider["id"] in old else secrets.token_hex(6)
+        key, is_default = provider.pop("api_key"), provider.pop("default")
+        previous = old.get(provider["id"], {})
         if key and key != MASK:
-            d["api_key"] = box.seal_text(key, _key_context(d["id"]))
-            changed.append(d["name"])
-        elif key == MASK and prev.get("provider") == d["provider"]:
-            d["api_key"] = prev.get("api_key", "")          # kept (encrypted)
+            provider["api_key"] = box.seal_text(key, _key_context(provider["id"]))
+            changed.append(provider["name"])
+        elif key == MASK and previous.get("provider") == provider["provider"]:
+            provider["api_key"] = previous.get("api_key", "")   # kept (encrypted)
         else:
-            d["api_key"] = ""                               # cleared, or a new kind of provider without one
-        _validate_provider(d)
+            provider["api_key"] = ""                        # cleared, or a new kind of provider without one
+        _validate_provider(provider)
         if is_default and not default:
-            default = d["id"]
-        new.append(d)
+            default = provider["id"]
+        new.append(provider)
     store = {"providers": new, "default": default or (new[0]["id"] if new else ""),
              "daily_tokens_per_user": body.daily_tokens_per_user, "fix_failed_builds": body.fix_failed_builds,
              # a removed provider: failed builds go to the default one again
@@ -194,28 +202,30 @@ def test_ai(body: TestIn, request: Request, s: Session = Depends(require("admin"
     if body.id not in {p["id"] for p in store["providers"]}:
         raise ApiError(404, "not_found", "No such provider (save the settings first).")
     try:
-        prov, st = _provider(request, s.conn, body.id)
-        t0 = time.time()
-        r = prov.complete("You are a connectivity check.", [{"role": "user", "content": "Reply with the word OK."}])
+        provider, settings = _provider(request, s.conn, body.id)
+        started = time.time()
+        reply = provider.complete("You are a connectivity check.",
+                                  [{"role": "user", "content": "Reply with the word OK."}])
     except ValorError as e:
         s.audit("settings.ai.test", "fail", target=next(p["name"] for p in store["providers"] if p["id"] == body.id),
                 detail={"error": e.code})
         raise ApiError(409 if e.code == "ai_not_configured" else 502, e.code, e.message, hint=e.hint)
-    _record(s, st, r.input_tokens, r.output_tokens, True)
-    s.audit("settings.ai.test", target=st["name"], detail={"model": st["model"]})
+    _record(s, settings, reply.input_tokens, reply.output_tokens, True)
+    s.audit("settings.ai.test", target=settings["name"], detail={"model": settings["model"]})
     cfg = _cfg(request)
     try:
         pve = PVE(cfg)
     except ValorError:
         pve = None
+    # Warn when the model's context window can't hold VALOR's prompt plus an answer (local models often load small).
     prompt = len(ai.builder_prompt(reference_for(cfg, pve))) // 4          # ~4 characters per token
-    ctx = prov.context_length()
-    need = prompt + int(st.get("max_tokens") or ai.DEFAULTS["max_tokens"]) // 2
-    advice = (f"The model is loaded with a {ctx:,}-token context, but VALOR's prompt alone is about {prompt:,} tokens "
-              f"and answers need room too: load it with a Context Length of at least {max(32768, need):,}."
-              if ctx and ctx < need else "")
-    return {"ok": True, "seconds": round(time.time() - t0, 1), "model": st["model"], "reply": r.text[:200],
-            "context_length": ctx, "prompt_tokens": prompt, "advice": advice}
+    context = provider.context_length()
+    need = prompt + int(settings.get("max_tokens") or ai.DEFAULTS["max_tokens"]) // 2
+    advice = (f"The model is loaded with a {context:,}-token context, but VALOR's prompt alone is about {prompt:,} "
+              f"tokens and answers need room too: load it with a Context Length of at least {max(32768, need):,}."
+              if context and context < need else "")
+    return {"ok": True, "seconds": round(time.time() - started, 1), "model": settings["model"],
+            "reply": reply.text[:200], "context_length": context, "prompt_tokens": prompt, "advice": advice}
 
 
 @router.get("/settings/ai/usage")
@@ -226,17 +236,18 @@ def usage(s: Session = Depends(require("admin"))) -> dict:
         "SELECT username, COUNT(*) AS requests, SUM(input_tokens) AS input, SUM(output_tokens) AS output, "
         "SUM(CASE WHEN ts > ? THEN input_tokens + output_tokens ELSE 0 END) AS today "
         "FROM ai_usage WHERE ts > ? GROUP BY username ORDER BY username", (day, month)).fetchall()
-    return {"users": [dict(r) for r in rows]}
+    return {"users": [dict(row) for row in rows]}
 
 
-def _record(s: Session, st: dict, tin: int, tout: int, ok: bool) -> None:
-    record_usage(s.conn, s.username, st, tin, tout, ok)
+def _record(s: Session, settings: dict, input_tokens: int, output_tokens: int, ok: bool) -> None:
+    record_usage(s.conn, s.username, settings, input_tokens, output_tokens, ok)
 
 
-def record_usage(conn, username: str, st: dict, tin: int, tout: int, ok: bool) -> None:
+def record_usage(conn, username: str, settings: dict, input_tokens: int, output_tokens: int, ok: bool) -> None:
+    """One model call's tokens, for the daily budget and the usage page."""
     conn.execute("INSERT INTO ai_usage(ts, username, provider, model, input_tokens, output_tokens, ok) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?)", (time.time(), username, st["provider"], st.get("model", ""),
-                                                  tin, tout, int(ok)))
+                 "VALUES (?, ?, ?, ?, ?, ?, ?)", (time.time(), username, settings["provider"],
+                                                  settings.get("model", ""), input_tokens, output_tokens, int(ok)))
 
 
 @router.get("/builder")
@@ -248,16 +259,17 @@ def builder_info(request: Request, s: Session = Depends(require("operator"))) ->
 
 
 def _facts(cfg, pve: PVE | None) -> dict:
+    """Cluster facts for the prompt: which VLANs, networks and range names are taken."""
     used_vlans, nets, names = {}, [], []
-    for p in sorted(cfg.ranges_dir.glob("*.yaml")):
+    for path in sorted(cfg.ranges_dir.glob("*.yaml")):
         try:
-            sp = parse_spec(p.read_text())
+            spec = parse_spec(path.read_text())
         except Exception:
             continue
-        names.append(sp.name)
-        for seg in sp.segments:
-            used_vlans[seg.vlan] = sp.name
-            nets.append(str(seg.cidr))
+        names.append(spec.name)
+        for segment in spec.segments:
+            used_vlans[segment.vlan] = spec.name
+            nets.append(str(segment.cidr))
     if pve is not None:
         try:
             used_vlans.update(vlans_in_use(pve))
@@ -272,15 +284,15 @@ def start_ai(request: Request, s: Session, pid: str | None = None):
     Returns (provider, settings, pve)."""
     now = time.time()
     with _rate_lock:
-        recent = [t for t in _rate.get(s.username, []) if now - t < RATE[1]]
+        recent = [stamp for stamp in _rate.get(s.username, []) if now - stamp < RATE[1]]
         if len(recent) >= RATE[0]:
             raise ApiError(429, "rate_limited", "Too many AI requests; wait a minute.")
         _rate[s.username] = recent + [now]
     try:
-        prov, st = _provider(request, s.conn, pid)
+        provider, settings = _provider(request, s.conn, pid)
     except ValorError as e:
         raise ApiError(409, e.code, e.message, hint=e.hint)
-    limit = int(st.get("daily_tokens_per_user") or 0)
+    limit = int(settings.get("daily_tokens_per_user") or 0)
     if limit:
         spent = s.conn.execute("SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM ai_usage "
                                "WHERE username = ? AND ts > ?", (s.username, now - 86400)).fetchone()[0]
@@ -290,12 +302,16 @@ def start_ai(request: Request, s: Session, pid: str | None = None):
         pve = PVE(_cfg(request))
     except ValorError:
         pve = None
-    return prov, st, pve
+    return provider, settings, pve
 
 
 def reference_for(cfg, pve: PVE | None) -> str:
+    """The prompt's reference part for this cluster. Without a cluster connection every catalog OS is listed."""
     try:
-        present = {k for k, v in templates(pve, load_catalog(cfg)).items() if v["present"]} if pve else set(load_catalog(cfg))
+        if pve:
+            present = {name for name, template in templates(pve, load_catalog(cfg)).items() if template["present"]}
+        else:
+            present = set(load_catalog(cfg))
     except ValorError:
         present = set(load_catalog(cfg))
     return ai.reference(cfg, load_catalog(cfg), present, role_list(cfg), _facts(cfg, pve))
@@ -308,7 +324,8 @@ def spec_check(cfg, pve: PVE | None, own_name: str = ""):
         try:
             spec = normalize(parse_spec(text), cfg.default_os)
         except ValorError as e:
-            return [f"{d.get('location', '')}: {d.get('message', '')}" for d in (e.details or [])] or [e.message]
+            return [f"{problem.get('location', '')}: {problem.get('message', '')}"
+                    for problem in (e.details or [])] or [e.message]
         problems = []
         if own_name and spec.name != own_name:
             problems.append(f"the range is called '{own_name}'; keep that name")
@@ -316,10 +333,10 @@ def spec_check(cfg, pve: PVE | None, own_name: str = ""):
             problems.append(f"a range named '{spec.name}' already exists; choose another name")
         if pve is not None:
             try:
-                v = validate_cluster(pve, spec)
+                checks = validate_cluster(pve, spec)
                 problems += [f"{e['location']}: {e['message']}" + (f" ({e['hint']})" if e.get("hint") else "")
-                             for e in v["errors"]]
-                check.warnings = [w["message"] for w in v.get("warnings", [])]
+                             for e in checks["errors"]]
+                check.warnings = [warning["message"] for warning in checks.get("warnings", [])]
             except ValorError as e:
                 problems.append(e.message)
         elif spec.baseline == "none":

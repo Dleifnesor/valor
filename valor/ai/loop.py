@@ -15,11 +15,11 @@ FIX_ROUNDS = 2
 def trim(messages: list[dict]) -> list[dict]:
     """The newest turns that fit the size limits, starting with a user turn."""
     out, size = [], 0
-    for m in reversed(messages[-MAX_TURNS:]):
-        size += len(m["content"])
+    for message in reversed(messages[-MAX_TURNS:]):
+        size += len(message["content"])
         if size > MAX_CHARS:
             break
-        out.append(m)
+        out.append(message)
     out.reverse()
     while out and out[0]["role"] != "user":
         out.pop(0)
@@ -46,16 +46,16 @@ def build(provider: Provider, system: str, messages: list[dict], check, on_delta
     fixed: list[str] = []                   # problems found in earlier attempts (the model corrected them)
     reasoning: list[str] = []
     for attempt in range(1, FIX_ROUNDS + 2):
-        r = _complete(provider, system, convo, on_delta)
-        used_in += r.input_tokens
-        used_out += r.output_tokens
-        if r.reasoning:
-            reasoning.append(r.reasoning)
-        if r.truncated:                 # asking again would be cut off at the same place
-            e = cut_off(provider, r)
-            e.details = {"input_tokens": used_in, "output_tokens": used_out}
-            raise e
-        questions, text = extract_questions(r.text)
+        answer = _complete(provider, system, convo, on_delta)
+        used_in += answer.input_tokens
+        used_out += answer.output_tokens
+        if answer.reasoning:
+            reasoning.append(answer.reasoning)
+        if answer.truncated:            # asking again would be cut off at the same place
+            error = cut_off(provider, answer)
+            error.details = {"input_tokens": used_in, "output_tokens": used_out}
+            raise error
+        questions, text = extract_questions(answer.text)
         yaml_text, reply = extract_yaml(text)
         if yaml_text is None and (questions or not SPEC_TEXT.search(text)):
             problems = []               # questions, or a plain answer to something that asked for no spec
@@ -69,7 +69,9 @@ def build(provider: Provider, system: str, messages: list[dict], check, on_delta
         fixed += problems
         if on_check and attempt <= FIX_ROUNDS:
             on_check(problems)
-        convo = [*convo, {"role": "assistant", "content": r.text},
+        # Ask again with the problems. The person never sees the failed attempt, so the model is told to answer
+        # as if for the first time (no apologies for a mistake the person never saw).
+        convo = [*convo, {"role": "assistant", "content": answer.text},
                  {"role": "user", "content": "[Automatic check by VALOR - the person does not see this message or your "
                   "previous answer.] VALOR could not use that spec:\n" + "\n".join(f"- {p}" for p in problems)
                   + "\nWrite your answer to the person's request again, as if for the first time: a short explanation "

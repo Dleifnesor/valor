@@ -1,4 +1,12 @@
-"""Range specification (YAML): models, safe loading, normalization, hashing and test generation."""
+"""Range specification (YAML): models, safe loading, normalization, hashing and test generation.
+
+A range spec is the single description of a lab: segments (VLAN + subnet), hosts in them, the firewall policy
+between segments, optional WireGuard access and compliance frameworks. Everything else - validation against the
+cluster, the build plan, the router's firewall, the journal - is derived from it. The models below are strict
+(unknown keys are errors), so a typo in a spec is reported instead of silently ignored.
+
+The spec format for people (and for the AI) is documented in spec-reference.md next to this file.
+"""
 
 from __future__ import annotations
 
@@ -15,33 +23,39 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from .errors import SpecError
 
 API_VERSION = "valor/v1"
-ROUTER = "rtr"
+ROUTER = "rtr"                                      # the router's host name in every range (reserved)
 NAME = r"^[a-z][a-z0-9-]{0,13}[a-z0-9]$"            # 2-15 chars, DNS label
 MAX_SPEC_BYTES = 256 * 1024
-INTERNET_PROBE = ("1.1.1.1", 443)
+INTERNET_PROBE = ("1.1.1.1", 443)                   # default "is the internet reachable" target
 
 
 class _Strict(BaseModel):
+    """Base for every spec model: unknown keys are errors, and `from` can be written as `from_` in Python."""
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 ParamValue = str | int | bool | list[str]
 
 
+# ---- The parts of a spec ----------------------------------------------------------------------------------
+
 class RoleRef(_Strict):
+    """A service on a host (roles/<name>/), with its parameters."""
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,40}$")
     params: dict[str, ParamValue] = Field(default_factory=dict)
 
     @field_validator("params")
     @classmethod
-    def _param_names(cls, v: dict) -> dict:
-        for k in v:
-            if not re.fullmatch(r"[a-z][a-z0-9_]{0,40}", k):
-                raise ValueError(f"role parameter name '{k}' must be lower_snake_case")
-        return v
+    def _param_names(cls, params: dict) -> dict:
+        for key in params:
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,40}", key):
+                raise ValueError(f"role parameter name '{key}' must be lower_snake_case")
+        return params
 
 
 class Segment(_Strict):
+    """One network of the range: a VLAN on the range bridge with its own subnet. The router takes the first
+    address of the subnet as the segment's gateway."""
     name: str = Field(pattern=NAME)
     vlan: int = Field(ge=2, le=4094)
     cidr: ipaddress.IPv4Network
@@ -54,12 +68,12 @@ class Segment(_Strict):
 
     @field_validator("cidr")
     @classmethod
-    def _cidr(cls, v: ipaddress.IPv4Network) -> ipaddress.IPv4Network:
-        if not v.is_private:
+    def _cidr(cls, cidr: ipaddress.IPv4Network) -> ipaddress.IPv4Network:
+        if not cidr.is_private:
             raise ValueError("segment networks must use private address space")
-        if not 16 <= v.prefixlen <= 29:
+        if not 16 <= cidr.prefixlen <= 29:
             raise ValueError("segment prefix length must be between /16 and /29")
-        return v
+        return cidr
 
 
 class Host(_Strict):
@@ -81,6 +95,7 @@ class Host(_Strict):
 
 
 class Router(_Strict):
+    """Size and OS of the range router (VALOR always creates one; it routes, NATs and enforces the policy)."""
     os: str | None = None
     cores: int = Field(1, ge=1, le=8)
     memory: int = Field(1024, ge=512, le=8192)
@@ -88,6 +103,8 @@ class Router(_Strict):
 
 
 class Rule(_Strict):
+    """A firewall rule: traffic from a segment or host to another segment or host. Everything not allowed by a
+    rule is blocked between segments (default deny)."""
     from_: str = Field(alias="from")
     to: str
     proto: Literal["tcp", "udp", "icmp", "any"] = "tcp"
@@ -96,21 +113,23 @@ class Rule(_Strict):
 
     @field_validator("ports")
     @classmethod
-    def _ports(cls, v: list) -> list:
+    def _ports(cls, ports: list) -> list:
+        """Ports are 443 or "8000-8100"; a range like "80-80" is stored as the single port 80."""
         out = []
-        for p in v:
-            s = str(p)
-            m = re.fullmatch(r"(\d{1,5})(?:-(\d{1,5}))?", s)
-            if not m:
-                raise ValueError(f"invalid port '{s}' (use 443 or 8000-8100)")
-            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
-            if not (1 <= lo <= hi <= 65535):
-                raise ValueError(f"port out of range: '{s}'")
-            out.append(lo if lo == hi else f"{lo}-{hi}")
+        for port in ports:
+            text = str(port)
+            match = re.fullmatch(r"(\d{1,5})(?:-(\d{1,5}))?", text)
+            if not match:
+                raise ValueError(f"invalid port '{text}' (use 443 or 8000-8100)")
+            low, high = int(match.group(1)), int(match.group(2) or match.group(1))
+            if not (1 <= low <= high <= 65535):
+                raise ValueError(f"port out of range: '{text}'")
+            out.append(low if low == high else f"{low}-{high}")
         return out
 
 
 class Test(_Strict):
+    """A connectivity check that verify runs from one host: `expect: open` or `closed`."""
     name: str | None = None
     from_: str = Field(alias="from")
     to: str
@@ -131,20 +150,20 @@ class WireGuard(_Strict):
 
     @field_validator("network")
     @classmethod
-    def _net(cls, v: ipaddress.IPv4Network) -> ipaddress.IPv4Network:
-        if not v.is_private or not 16 <= v.prefixlen <= 29:
+    def _net(cls, network: ipaddress.IPv4Network) -> ipaddress.IPv4Network:
+        if not network.is_private or not 16 <= network.prefixlen <= 29:
             raise ValueError("the tunnel network must be private address space between /16 and /29")
-        return v
+        return network
 
     @field_validator("peers")
     @classmethod
-    def _peers(cls, v: list[str]) -> list[str]:
-        for name in v:
+    def _peers(cls, peers: list[str]) -> list[str]:
+        for name in peers:
             if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name):
                 raise ValueError(f"peer name '{name}' must be lowercase letters, digits or dashes")
-        if len(set(v)) != len(v):
+        if len(set(peers)) != len(peers):
             raise ValueError("peer names must be unique")
-        return v
+        return peers
 
 
 class Access(_Strict):
@@ -162,13 +181,17 @@ class Compliance(_Strict):
 
     @field_validator("frameworks")
     @classmethod
-    def _unique(cls, v: list) -> list:
-        if len(set(v)) != len(v):
+    def _unique(cls, frameworks: list) -> list:
+        if len(set(frameworks)) != len(frameworks):
             raise ValueError("each framework only once")
-        return v
+        return frameworks
 
+
+# ---- The whole spec ---------------------------------------------------------------------------------------
 
 class RangeSpec(_Strict):
+    """A complete range. Field-level rules live on the models above; rules that need several parts of the spec at
+    once (a host's address must be in its segment, ...) are checked in `_cross_checks`."""
     apiVersion: Literal["valor/v1"] = API_VERSION
     name: str = Field(pattern=NAME)
     description: str = ""
@@ -184,132 +207,183 @@ class RangeSpec(_Strict):
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "RangeSpec":
-        errs: list[str] = []
-        segs = {s.name: s for s in self.segments}
-        hosts = {h.name: h for h in self.hosts}
-        if len(segs) != len(self.segments):
-            errs.append("segment names must be unique")
-        if len(hosts) != len(self.hosts):
-            errs.append("host names must be unique")
-        if ROUTER in hosts:
-            errs.append(f"'{ROUTER}' is reserved for the range router (created automatically)")
-        if set(segs) & set(hosts):
-            errs.append(f"names used for both a segment and a host: {sorted(set(segs) & set(hosts))}")
-        vlans = [s.vlan for s in self.segments]
-        if len(set(vlans)) != len(vlans):
-            errs.append("each segment needs its own VLAN")
-        for i, a in enumerate(self.segments):
-            for b in self.segments[i + 1:]:
-                if a.cidr.overlaps(b.cidr):
-                    errs.append(f"segments {a.name} and {b.name} overlap ({a.cidr} / {b.cidr})")
-        seen_addr: dict = {}
-        for h in self.hosts:
-            seg = segs.get(h.segment)
-            if not seg:
-                errs.append(f"host {h.name}: unknown segment '{h.segment}'")
-                continue
-            if h.address not in seg.cidr or h.address in (seg.cidr.network_address, seg.cidr.broadcast_address):
-                errs.append(f"host {h.name}: {h.address} is not a usable address in {seg.cidr}")
-            if h.address == seg.gateway:
-                errs.append(f"host {h.name}: {h.address} is the router's address in segment {seg.name}")
-            if h.address in seen_addr:
-                errs.append(f"hosts {seen_addr[h.address]} and {h.name} share {h.address}")
-            seen_addr[h.address] = h.name
-        endpoints = set(segs) | set(hosts)
-        for i, r in enumerate(self.policy):
-            for end in (r.from_, r.to):
-                if end not in endpoints:
-                    errs.append(f"policy[{i}]: unknown segment or host '{end}'")
-            if r.proto in ("icmp", "any") and r.ports:
-                errs.append(f"policy[{i}]: ports only apply to tcp/udp")
-            if r.proto in ("tcp", "udp") and not r.ports:
-                errs.append(f"policy[{i}]: tcp/udp rules need at least one port")
-            sf, st = self.segment_of(r.from_), self.segment_of(r.to)
-            if sf and st and sf == st:
-                errs.append(f"policy[{i}]: {r.from_} and {r.to} are in the same segment ({sf}); "
-                            "traffic inside a segment never reaches the router, so it cannot be filtered")
-        wg = self.access.wireguard if self.access else None
-        if wg:
-            for s in wg.reach:
-                if s not in segs:
-                    errs.append(f"access.wireguard.reach: unknown segment '{s}'")
-            for s in self.segments:
-                if s.cidr.overlaps(wg.network):
-                    errs.append(f"access.wireguard.network {wg.network} overlaps segment {s.name} ({s.cidr})")
-            if len(wg.peers) > wg.network.num_addresses - 3:
-                errs.append(f"access.wireguard.network {wg.network} is too small for {len(wg.peers)} peers")
-        if self.compliance:
-            for s in self.compliance.scope:
-                if s not in segs:
-                    errs.append(f"compliance.scope: unknown segment '{s}'")
-        for i, t in enumerate(self.tests):
-            if t.from_ not in hosts:
-                errs.append(f"tests[{i}]: 'from' must be a host, got '{t.from_}'")
-            if t.to not in hosts and t.to != "internet":
-                try:
-                    ipaddress.IPv4Address(t.to)
-                except ValueError:
-                    errs.append(f"tests[{i}]: 'to' must be a host, an IPv4 address or 'internet'")
-            if t.proto == "tcp" and t.port is None and t.to != "internet":
-                errs.append(f"tests[{i}]: tcp tests need a port")
-        if errs:
-            raise ValueError("; ".join(errs))
+        """All rules that span several parts of the spec. Every problem is collected, so the author (or the AI)
+        sees the whole list at once instead of fixing one error per round."""
+        problems = (self._name_problems() + self._segment_problems() + self._host_problems()
+                    + self._policy_problems() + self._wireguard_problems() + self._compliance_problems()
+                    + self._test_problems())
+        if problems:
+            raise ValueError("; ".join(problems))
         return self
 
-    # ------------------------------------------------------------------ helpers
+    def _name_problems(self) -> list[str]:
+        problems = []
+        segment_names = [segment.name for segment in self.segments]
+        host_names = [host.name for host in self.hosts]
+        if len(set(segment_names)) != len(segment_names):
+            problems.append("segment names must be unique")
+        if len(set(host_names)) != len(host_names):
+            problems.append("host names must be unique")
+        if ROUTER in host_names:
+            problems.append(f"'{ROUTER}' is reserved for the range router (created automatically)")
+        both = set(segment_names) & set(host_names)
+        if both:
+            problems.append(f"names used for both a segment and a host: {sorted(both)}")
+        return problems
+
+    def _segment_problems(self) -> list[str]:
+        problems = []
+        vlans = [segment.vlan for segment in self.segments]
+        if len(set(vlans)) != len(vlans):
+            problems.append("each segment needs its own VLAN")
+        for i, first in enumerate(self.segments):
+            for second in self.segments[i + 1:]:
+                if first.cidr.overlaps(second.cidr):
+                    problems.append(f"segments {first.name} and {second.name} overlap ({first.cidr} / {second.cidr})")
+        return problems
+
+    def _host_problems(self) -> list[str]:
+        """Each host's address must be usable in its segment, not the router's, and not taken by another host."""
+        problems = []
+        segments = {segment.name: segment for segment in self.segments}
+        owner_of_address: dict = {}
+        for host in self.hosts:
+            segment = segments.get(host.segment)
+            if not segment:
+                problems.append(f"host {host.name}: unknown segment '{host.segment}'")
+                continue
+            net = segment.cidr
+            if host.address not in net or host.address in (net.network_address, net.broadcast_address):
+                problems.append(f"host {host.name}: {host.address} is not a usable address in {net}")
+            if host.address == segment.gateway:
+                problems.append(f"host {host.name}: {host.address} is the router's address in segment {segment.name}")
+            if host.address in owner_of_address:
+                problems.append(f"hosts {owner_of_address[host.address]} and {host.name} share {host.address}")
+            owner_of_address[host.address] = host.name
+        return problems
+
+    def _policy_problems(self) -> list[str]:
+        problems = []
+        endpoints = {segment.name for segment in self.segments} | {host.name for host in self.hosts}
+        for i, rule in enumerate(self.policy):
+            for end in (rule.from_, rule.to):
+                if end not in endpoints:
+                    problems.append(f"policy[{i}]: unknown segment or host '{end}'")
+            if rule.proto in ("icmp", "any") and rule.ports:
+                problems.append(f"policy[{i}]: ports only apply to tcp/udp")
+            if rule.proto in ("tcp", "udp") and not rule.ports:
+                problems.append(f"policy[{i}]: tcp/udp rules need at least one port")
+            # The router only sees traffic that crosses segments, so a rule inside one segment would be a no-op.
+            from_segment, to_segment = self.segment_of(rule.from_), self.segment_of(rule.to)
+            if from_segment and to_segment and from_segment == to_segment:
+                problems.append(f"policy[{i}]: {rule.from_} and {rule.to} are in the same segment ({from_segment}); "
+                                "traffic inside a segment never reaches the router, so it cannot be filtered")
+        return problems
+
+    def _wireguard_problems(self) -> list[str]:
+        wireguard = self.access.wireguard if self.access else None
+        if not wireguard:
+            return []
+        problems = []
+        segment_names = {segment.name for segment in self.segments}
+        for name in wireguard.reach:
+            if name not in segment_names:
+                problems.append(f"access.wireguard.reach: unknown segment '{name}'")
+        for segment in self.segments:
+            if segment.cidr.overlaps(wireguard.network):
+                problems.append(f"access.wireguard.network {wireguard.network} overlaps segment {segment.name} "
+                                f"({segment.cidr})")
+        # Network and broadcast addresses aren't usable and the router takes the first address.
+        if len(wireguard.peers) > wireguard.network.num_addresses - 3:
+            problems.append(f"access.wireguard.network {wireguard.network} is too small for "
+                            f"{len(wireguard.peers)} peers")
+        return problems
+
+    def _compliance_problems(self) -> list[str]:
+        if not self.compliance:
+            return []
+        segment_names = {segment.name for segment in self.segments}
+        return [f"compliance.scope: unknown segment '{name}'"
+                for name in self.compliance.scope if name not in segment_names]
+
+    def _test_problems(self) -> list[str]:
+        problems = []
+        host_names = {host.name for host in self.hosts}
+        for i, test in enumerate(self.tests):
+            if test.from_ not in host_names:
+                problems.append(f"tests[{i}]: 'from' must be a host, got '{test.from_}'")
+            if test.to not in host_names and test.to != "internet":
+                try:
+                    ipaddress.IPv4Address(test.to)
+                except ValueError:
+                    problems.append(f"tests[{i}]: 'to' must be a host, an IPv4 address or 'internet'")
+            if test.proto == "tcp" and test.port is None and test.to != "internet":
+                problems.append(f"tests[{i}]: tcp tests need a port")
+        return problems
+
+    # ---- Lookups used across the engine ----
     def segment(self, name: str) -> Segment:
-        return next(s for s in self.segments if s.name == name)
+        return next(segment for segment in self.segments if segment.name == name)
 
     def host(self, name: str) -> Host:
-        return next(h for h in self.hosts if h.name == name)
+        return next(host for host in self.hosts if host.name == name)
 
     def segment_of(self, endpoint: str) -> str | None:
-        if any(s.name == endpoint for s in self.segments):
+        """The segment a policy endpoint lives in: the endpoint itself if it names a segment, else its host's."""
+        if any(segment.name == endpoint for segment in self.segments):
             return endpoint
-        for h in self.hosts:
-            if h.name == endpoint:
-                return h.segment
+        for host in self.hosts:
+            if host.name == endpoint:
+                return host.segment
         return None
 
     def endpoint_cidr(self, endpoint: str) -> str:
-        for s in self.segments:
-            if s.name == endpoint:
-                return str(s.cidr)
+        """A policy endpoint as a network for the firewall: the segment's subnet, or the host's /32."""
+        for segment in self.segments:
+            if segment.name == endpoint:
+                return str(segment.cidr)
         return f"{self.host(endpoint).address}/32"
 
     def hosts_in(self, segment: str) -> list[Host]:
-        return [h for h in self.hosts if h.segment == segment]
+        return [host for host in self.hosts if host.segment == segment]
 
     def reaches(self, src: str, dst: str) -> bool:
         """Whether host src may open connections to host dst at all: same segment, or a policy rule between them."""
-        a, b = self.host(src), self.host(dst)
-        return a.segment == b.segment or any(r.from_ in (a.name, a.segment) and r.to in (b.name, b.segment)
-                                             for r in self.policy)
+        source, target = self.host(src), self.host(dst)
+        if source.segment == target.segment:
+            return True
+        return any(rule.from_ in (source.name, source.segment) and rule.to in (target.name, target.segment)
+                   for rule in self.policy)
 
+
+# ---- Loading, normalizing and hashing ---------------------------------------------------------------------
 
 def normalize(spec: RangeSpec, default_os: str) -> RangeSpec:
     """Fill defaults that depend on engine configuration (OS)."""
     data = spec.model_dump(by_alias=True)
     if not data["router"].get("os"):
         data["router"]["os"] = default_os
-    for h in data["hosts"]:
-        if not h.get("os"):
-            h["os"] = default_os
+    for host in data["hosts"]:
+        if not host.get("os"):
+            host["os"] = default_os
     return RangeSpec.model_validate(data)
 
 
 def canonical(spec: RangeSpec) -> str:
+    """The spec as compact, key-sorted JSON: the input of spec_hash. Fields added after the first release are
+    left out while they have their default value, so the hash of an older spec (and the VMs tagged with it) does
+    not change just because VALOR learned a new field."""
     data = spec.model_dump(mode="json", by_alias=True)
-    for key in ("access", "compliance"):        # added later: leaving them out keeps older specs' hashes unchanged
+    for key in ("access", "compliance"):
         if data.get(key) is None:
             data.pop(key, None)
-    for h in data["hosts"]:
-        if h.get("iso") is None:
-            h.pop("iso", None)
-        if h.get("install") == "template":
-            h.pop("install", None)
-        if h.get("nested") is False:
-            h.pop("nested", None)
+    for host in data["hosts"]:
+        if host.get("iso") is None:
+            host.pop("iso", None)
+        if host.get("install") == "template":
+            host.pop("install", None)
+        if host.get("nested") is False:
+            host.pop("nested", None)
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
@@ -318,21 +392,24 @@ def spec_hash(spec: RangeSpec) -> str:
 
 
 def resolve_spec_path(path: str | Path, ranges_dir: Path) -> Path:
-    p = Path(path)
-    if not p.is_absolute():
-        cand = ranges_dir / p
-        p = cand if cand.exists() or not (Path.cwd() / p).exists() else Path.cwd() / p
+    """The spec file for a CLI argument: a bare name is looked up in the ranges directory first. Whatever the
+    path, the resolved file must be a .yaml inside the ranges directory (no reading arbitrary files)."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        in_ranges = ranges_dir / candidate
+        in_cwd = Path.cwd() / candidate
+        candidate = in_ranges if in_ranges.exists() or not in_cwd.exists() else in_cwd
     try:
-        p = p.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
     except FileNotFoundError:
         raise SpecError(f"spec file not found: {path}", hint=f"Specs live in {ranges_dir}/<name>.yaml")
-    if not p.is_relative_to(ranges_dir.resolve()):
+    if not resolved.is_relative_to(ranges_dir.resolve()):
         raise SpecError(f"spec files must be inside {ranges_dir}", hint="Write the spec to ranges/<name>.yaml")
-    if p.suffix not in (".yaml", ".yml") or not p.is_file():
+    if resolved.suffix not in (".yaml", ".yml") or not resolved.is_file():
         raise SpecError("spec must be a .yaml file")
-    if p.stat().st_size > MAX_SPEC_BYTES:
+    if resolved.stat().st_size > MAX_SPEC_BYTES:
         raise SpecError("spec file is too large")
-    return p
+    return resolved
 
 
 def parse_spec(text: str) -> RangeSpec:
@@ -350,82 +427,114 @@ def parse_spec(text: str) -> RangeSpec:
     except ValidationError as e:
         errors = []
         for err in e.errors(include_url=False, include_input=False):
-            loc = ".".join(str(x) for x in err["loc"]) or "(spec)"
-            msg = err["msg"].removeprefix("Value error, ")
+            location = ".".join(str(part) for part in err["loc"]) or "(spec)"
+            message = err["msg"].removeprefix("Value error, ")
             if err["type"] in ("ip_v4_network", "ip_v4_address", "ip_v4_interface"):
-                msg += " (each of the four numbers is 0-255: for VLAN 340 e.g. 10.34.0.0/24, not 10.340.0.0/24)"
-            errors.append({"location": loc, "message": msg})
+                # The most common AI mistake: putting a 3-digit VLAN number into an octet.
+                message += " (each of the four numbers is 0-255: for VLAN 340 e.g. 10.34.0.0/24, not 10.340.0.0/24)"
+            errors.append({"location": location, "message": message})
         raise SpecError(f"spec has {len(errors)} problem(s)", errors)
 
 
 def load_spec(path: str | Path, ranges_dir: Path, default_os: str) -> tuple[RangeSpec, Path]:
-    p = resolve_spec_path(path, ranges_dir)
-    return normalize(parse_spec(p.read_text()), default_os), p
+    spec_file = resolve_spec_path(path, ranges_dir)
+    return normalize(parse_spec(spec_file.read_text()), default_os), spec_file
 
 
-# ---------------------------------------------------------------------- tests
+# ---- Connectivity tests -----------------------------------------------------------------------------------
+#
+# verify runs a list of tests. Besides the ones written in the spec, VALOR derives tests from the spec itself
+# (auto_tests, on by default):
+#   policy     every rule is tried once and must be open (first port of the rule)
+#   isolation  SSH between every pair of segments that no rule connects must be blocked
+#   egress     each segment's internet access must match its `internet` flag
+
 def effective_tests(spec: RangeSpec, probe: tuple[str, int] = INTERNET_PROBE) -> list[dict]:
     """Explicit tests plus, with auto_tests, tests derived from the policy and egress settings.
     probe: the public host:port that stands for "the internet" (configurable per installation)."""
-    out: list[dict] = []
+    tests = _TestList()
+    _add_spec_tests(spec, tests, probe)
+    if spec.auto_tests:
+        allowed = _add_policy_tests(spec, tests)
+        _add_isolation_tests(spec, tests, allowed)
+        _add_egress_tests(spec, tests, probe)
+    return tests.items
 
-    def add(name, src, dst, proto, port, expect, origin):
+
+class _TestList:
+    """Tests in the order they were added; a second test of the same (from, to, proto, port) is dropped, so an
+    explicit test always wins over a derived one."""
+
+    def __init__(self):
+        self.items: list[dict] = []
+
+    def add(self, name, src, dst, proto, port, expect, origin) -> None:
         key = (src, dst, proto, port)
-        if any((t["from"], t["to"], t["proto"], t["port"]) == key for t in out):
+        if any((test["from"], test["to"], test["proto"], test["port"]) == key for test in self.items):
             return
-        out.append({"name": name, "from": src, "to": dst, "proto": proto, "port": port,
-                    "expect": expect, "origin": origin})
+        self.items.append({"name": name, "from": src, "to": dst, "proto": proto, "port": port,
+                           "expect": expect, "origin": origin})
 
-    for t in spec.tests:
-        port = t.port
-        if t.to == "internet" and t.proto == "tcp":
+
+def _first_host(spec: RangeSpec, endpoint: str) -> str | None:
+    """The host that stands for a policy endpoint in a test: the host itself, or the first host of the segment."""
+    if any(host.name == endpoint for host in spec.hosts):
+        return endpoint
+    members = spec.hosts_in(endpoint)
+    return members[0].name if members else None
+
+
+def _add_spec_tests(spec: RangeSpec, tests: _TestList, probe: tuple[str, int]) -> None:
+    for test in spec.tests:
+        port = test.port
+        if test.to == "internet" and test.proto == "tcp":
             port = port or probe[1]
-        add(t.name or f"{t.from_} -> {t.to} {t.proto}{'/' + str(port) if port else ''} {t.expect}",
-            t.from_, t.to, t.proto, port, t.expect, "spec")
-    if not spec.auto_tests:
-        return out
+        name = test.name or f"{test.from_} -> {test.to} {test.proto}{'/' + str(port) if port else ''} {test.expect}"
+        tests.add(name, test.from_, test.to, test.proto, port, test.expect, "spec")
 
-    def first_host(endpoint: str):
-        if any(h.name == endpoint for h in spec.hosts):
-            return endpoint
-        hs = spec.hosts_in(endpoint)
-        return hs[0].name if hs else None
 
-    allowed_pairs: dict[tuple[str, str], set] = {}
-    for r in spec.policy:
-        sf, st = spec.segment_of(r.from_), spec.segment_of(r.to)
-        allowed_pairs.setdefault((sf, st), set())
-        if r.proto == "any":
-            allowed_pairs[(sf, st)].add("any")
-        for p in r.ports:
-            allowed_pairs[(sf, st)].add(p)
-        src, dst = first_host(r.from_), first_host(r.to)
+def _add_policy_tests(spec: RangeSpec, tests: _TestList) -> dict[tuple[str, str], set]:
+    """One "open" test per rule. Returns what the policy allows per (from segment, to segment) pair, which the
+    isolation tests need: {("users", "servers"): {443, "8000-8100", "any"}, ...}."""
+    allowed: dict[tuple[str, str], set] = {}
+    for rule in spec.policy:
+        pair = (spec.segment_of(rule.from_), spec.segment_of(rule.to))
+        allowed.setdefault(pair, set())
+        if rule.proto == "any":
+            allowed[pair].add("any")
+        allowed[pair].update(rule.ports)
+        src, dst = _first_host(spec, rule.from_), _first_host(spec, rule.to)
         if not src or not dst:
             continue
-        if r.proto == "tcp" and r.ports:
-            p = r.ports[0]
-            port = int(str(p).split("-")[0])
-            add(f"policy allows {src} -> {dst} tcp/{port}", src, dst, "tcp", port, "open", "policy")
-        elif r.proto == "icmp":
-            add(f"policy allows {src} -> {dst} icmp", src, dst, "icmp", None, "open", "policy")
+        if rule.proto == "tcp" and rule.ports:
+            port = int(str(rule.ports[0]).split("-")[0])        # a range "8000-8100" is tried on its first port
+            tests.add(f"policy allows {src} -> {dst} tcp/{port}", src, dst, "tcp", port, "open", "policy")
+        elif rule.proto == "icmp":
+            tests.add(f"policy allows {src} -> {dst} icmp", src, dst, "icmp", None, "open", "policy")
+    return allowed
 
-    for a in spec.segments:
-        for b in spec.segments:
-            if a.name == b.name:
+
+def _add_isolation_tests(spec: RangeSpec, tests: _TestList, allowed: dict[tuple[str, str], set]) -> None:
+    """SSH (tcp/22) between two segments must be blocked unless a rule allows it."""
+    for source in spec.segments:
+        for target in spec.segments:
+            if source.name == target.name:
                 continue
-            src, dst = first_host(a.name), first_host(b.name)
+            src, dst = _first_host(spec, source.name), _first_host(spec, target.name)
             if not src or not dst:
                 continue
-            allowed = allowed_pairs.get((a.name, b.name), set())
-            if "any" in allowed or 22 in allowed:
+            allowed_here = allowed.get((source.name, target.name), set())
+            if "any" in allowed_here or 22 in allowed_here:
                 continue
-            add(f"isolation: {src} ({a.name}) -> {dst} ({b.name}) tcp/22 blocked",
-                src, dst, "tcp", 22, "closed", "isolation")
+            tests.add(f"isolation: {src} ({source.name}) -> {dst} ({target.name}) tcp/22 blocked",
+                      src, dst, "tcp", 22, "closed", "isolation")
 
-    for s in spec.segments:
-        src = first_host(s.name)
+
+def _add_egress_tests(spec: RangeSpec, tests: _TestList, probe: tuple[str, int]) -> None:
+    for segment in spec.segments:
+        src = _first_host(spec, segment.name)
         if not src:
             continue
-        add(f"egress: {s.name} internet {'allowed' if s.internet else 'blocked'}",
-            src, "internet", "tcp", probe[1], "open" if s.internet else "closed", "egress")
-    return out
+        verdict = "allowed" if segment.internet else "blocked"
+        tests.add(f"egress: {segment.name} internet {verdict}",
+                  src, "internet", "tcp", probe[1], "open" if segment.internet else "closed", "egress")

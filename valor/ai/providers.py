@@ -68,7 +68,7 @@ class Provider:
         """POST with stream=true; yields the JSON payload of every server-sent event."""
         where = urlparse(url).netloc
         try:
-            r = requests.post(url, headers=headers, json=body, timeout=(10, self.timeout), stream=True)
+            response = requests.post(url, headers=headers, json=body, timeout=(10, self.timeout), stream=True)
         except requests.ConnectTimeout:
             raise ValorError("ai_unreachable", f"VALOR could not reach {where}: nothing answered (connection timed out)",
                              hint="Usually a firewall on the model server's computer drops the connection, or the "
@@ -82,12 +82,12 @@ class Provider:
             raise self._silent(where)
         except requests.RequestException as e:
             raise ValorError("ai_unreachable", f"the AI provider did not answer: {e.__class__.__name__}")
-        self._check_status(r, url)
-        r.encoding = "utf-8"            # event streams are UTF-8; without a charset requests would assume ISO-8859-1
-        t0 = time.time()
+        self._check_status(response, url)
+        response.encoding = "utf-8"     # event streams are UTF-8; without a charset requests would assume ISO-8859-1
+        started = time.time()
         try:
-            for line in r.iter_lines(decode_unicode=True):
-                if time.time() - t0 > self.max_total:
+            for line in response.iter_lines(decode_unicode=True):
+                if time.time() - started > self.max_total:
                     raise ValorError("ai_unreachable", f"{where} was still answering after {self.max_total // 60} minutes",
                                      hint="Lower 'Max tokens per answer' or use a faster model.")
                 if not line or not line.startswith("data:"):
@@ -104,7 +104,7 @@ class Provider:
                 raise ValorError("ai_unreachable", f"{where} closed the connection in the middle of the answer")
             raise self._silent(where)
         finally:
-            r.close()
+            response.close()
 
     def _silent(self, where: str) -> ValorError:
         return ValorError("ai_unreachable", f"{where} sent nothing for {self.timeout} s",
@@ -112,30 +112,33 @@ class Provider:
                                "or use a smaller model.")
 
     @staticmethod
-    def _check_status(r, url: str) -> None:
-        if r.status_code < 400:
+    def _check_status(response, url: str) -> None:
+        """Turn an HTTP error from the provider into a ValorError that says what to do about it."""
+        status = response.status_code
+        if status < 400:
             return
         detail = ""
         try:
-            detail = json.dumps(r.json().get("error", ""))[:300]
+            detail = json.dumps(response.json().get("error", ""))[:300]
         except ValueError:
             pass
-        if r.status_code == 404:
+        if status == 404:
             raise ValorError("ai_error", f"{url} does not exist on the provider (HTTP 404)",
                              hint="For OpenAI-compatible servers the base URL usually ends in /v1 "
                                   "(e.g. http://192.168.1.50:1234/v1); also check the model name.")
-        if r.status_code in (401, 403):
-            raise ValorError("ai_auth", "the AI provider rejected the API key", hint="An administrator can update it in Settings.")
-        if r.status_code == 429:
+        if status in (401, 403):
+            raise ValorError("ai_auth", "the AI provider rejected the API key",
+                             hint="An administrator can update it in Settings.")
+        if status == 429:
             raise ValorError("ai_rate_limited", "the AI provider is rate limiting VALOR; try again in a minute")
-        if r.status_code == 400 and CONTEXT_ERROR.search(detail):
+        if status == 400 and CONTEXT_ERROR.search(detail):
             raise ValorError("ai_context_full", f"the model's context window is too small: {detail}", hint=CONTEXT_HINT)
-        if r.status_code == 402:                # OpenRouter: the credits cannot cover max_tokens of this model
+        if status == 402:                       # OpenRouter: the credits cannot cover max_tokens of this model
             raise ValorError("ai_credits", f"the AI provider wants more credits for this request {detail}".strip(),
                              hint="Add credits, or lower 'Max tokens per answer' for this provider in Settings -> "
                                   "AI providers (the provider reserves the whole maximum up front).")
-        raise ValorError("ai_error", f"the AI provider answered HTTP {r.status_code} {detail}".strip(),
-                         details={"status": r.status_code, "detail": detail})
+        raise ValorError("ai_error", f"the AI provider answered HTTP {status} {detail}".strip(),
+                         details={"status": status, "detail": detail})
 
 
 class OpenAICompatible(Provider):
@@ -151,17 +154,18 @@ class OpenAICompatible(Provider):
         body = {"model": self.model, "max_tokens": self.max_tokens, "stream": True,
                 "stream_options": {"include_usage": True}, "messages": openai_messages(system, messages)}
         if tools:
-            body["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
-                                                               "parameters": t["input_schema"]}} for t in tools]
+            body["tools"] = [{"type": "function", "function": {"name": tool["name"], "description": tool["description"],
+                                                               "parameters": tool["input_schema"]}} for tool in tools]
         url = self.base_url + "/chat/completions"
         try:
             return self._read(self._events(url, headers, body), on_delta)
         except ValorError as e:
-            detail = e.details.get("detail", "") if isinstance(e.details, dict) else ""
-            if isinstance(e.details, dict) and e.details.get("status") == 400 and "stream_options" in detail:
+            details = e.details if isinstance(e.details, dict) else {}
+            detail = details.get("detail", "")
+            if details.get("status") == 400 and "stream_options" in detail:
                 body.pop("stream_options")      # servers that don't know it: no token counts, but an answer
                 return self._read(self._events(url, headers, body), on_delta)
-            if tools and isinstance(e.details, dict) and e.details.get("status") == 400 and "tool" in detail.lower():
+            if tools and details.get("status") == 400 and "tool" in detail.lower():
                 raise ValorError("ai_no_tools", "the model server does not accept tools for this model",
                                  hint="Question and Code mode on a range use tools (commands in the VMs): pick a model "
                                       "with tool use, e.g. Qwen 3, Llama 3.1+ or Mistral Small, or use Plan mode.")
@@ -172,57 +176,84 @@ class OpenAICompatible(Provider):
         root = self.base_url[:-3] if self.base_url.endswith("/v1") else self.base_url
         headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         try:
-            r = requests.get(f"{root}/api/v0/models/{self.model}", headers=headers, timeout=10)
-            info = r.json() if r.ok else {}
+            response = requests.get(f"{root}/api/v0/models/{self.model}", headers=headers, timeout=10)
+            info = response.json() if response.ok else {}
         except (requests.RequestException, ValueError):
             return None
-        n = info.get("loaded_context_length")      # not max_context_length: the model's limit, not what is loaded
-        return int(n) if isinstance(n, int) else None
+        loaded = info.get("loaded_context_length")  # not max_context_length: the model's limit, not what is loaded
+        return int(loaded) if isinstance(loaded, int) else None
 
     @staticmethod
     def _read(events, on_delta=None) -> Reply:
-        text, thinking, tin, tout, finish = [], [], 0, 0, None
-        calls: dict[int, dict] = {}
-        split = ThinkSplitter(on_delta or (lambda kind, text: None))
-        for ev in events:
-            if ev.get("error"):                 # a failure after the stream started (OpenRouter, vLLM) arrives as an event
-                err = ev["error"]
-                msg = str(err.get("message") or err.get("code") or err) if isinstance(err, dict) else str(err)
-                if CONTEXT_ERROR.search(msg):   # LM Studio / llama.cpp: the prompt does not fit the loaded context
-                    raise ValorError("ai_context_full", f"the model's context window is too small: {msg[:300]}",
-                                     hint=CONTEXT_HINT)
-                raise ValorError("ai_error", f"the model provider reported an error in the middle of the answer: {msg[:300]}",
-                                 hint="Usually temporary: send the message again, or pick another model or provider.")
-            for ch in ev.get("choices") or []:
-                delta = ch.get("delta") or {}
-                piece = delta.get("content") or ""
-                text.append(piece)
-                split.feed(piece)
-                # reasoning models behind LM Studio, vLLM, llama.cpp: separate field (name varies by server)
-                r = delta.get("reasoning_content") or delta.get("reasoning") or ""
-                thinking.append(r)
-                if r and on_delta:
-                    on_delta("thinking", r)
-                for tc in delta.get("tool_calls") or []:
-                    c = calls.setdefault(int(tc.get("index", len(calls))), {"id": "", "name": "", "args": ""})
-                    fn = tc.get("function") or {}
-                    c["id"] = tc.get("id") or c["id"]
-                    if fn.get("name") and not c["name"]:
-                        c["name"] = fn["name"]
-                        if on_delta:
-                            on_delta("tool", c["name"])
-                    c["args"] += fn.get("arguments") or ""
-                finish = ch.get("finish_reason") or finish
-            u = ev.get("usage") or {}
-            if u:
-                tin, tout = int(u.get("prompt_tokens", tin)), int(u.get("completion_tokens", tout))
-        content, inline = split_thinking("".join(text))
-        tool_calls = [{"id": c["id"] or f"call_{secrets.token_hex(6)}", "name": c["name"], "input": _args(c["args"])}
-                      for _, c in sorted(calls.items()) if c["name"]]
-        if not tool_calls:
+        """Assemble the streamed events of one answer into a Reply."""
+        stream = _Stream(on_delta)
+        for event in events:
+            stream.add(event)
+        return stream.reply()
+
+
+class _Stream:
+    """The pieces of one streamed answer as they arrive: text, reasoning, tool calls (their arguments arrive in
+    fragments), the finish reason and the token counts."""
+
+    def __init__(self, on_delta=None):
+        self.on_delta = on_delta
+        self.text: list[str] = []
+        self.thinking: list[str] = []
+        self.input_tokens = self.output_tokens = 0
+        self.finish = None
+        self.calls: dict[int, dict] = {}            # index -> {id, name, args (JSON text so far)}
+        self.splitter = ThinkSplitter(on_delta or (lambda kind, text: None))
+
+    def add(self, event: dict) -> None:
+        if event.get("error"):              # a failure after the stream started (OpenRouter, vLLM) arrives as an event
+            _raise_stream_error(event["error"])
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or {}
+            piece = delta.get("content") or ""
+            self.text.append(piece)
+            self.splitter.feed(piece)
+            # reasoning models behind LM Studio, vLLM, llama.cpp: separate field (name varies by server)
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
+            self.thinking.append(reasoning)
+            if reasoning and self.on_delta:
+                self.on_delta("thinking", reasoning)
+            for fragment in delta.get("tool_calls") or []:
+                self.add_tool_fragment(fragment)
+            self.finish = choice.get("finish_reason") or self.finish
+        usage = event.get("usage") or {}
+        if usage:
+            self.input_tokens = int(usage.get("prompt_tokens", self.input_tokens))
+            self.output_tokens = int(usage.get("completion_tokens", self.output_tokens))
+
+    def add_tool_fragment(self, fragment: dict) -> None:
+        call = self.calls.setdefault(int(fragment.get("index", len(self.calls))), {"id": "", "name": "", "args": ""})
+        function = fragment.get("function") or {}
+        call["id"] = fragment.get("id") or call["id"]
+        if function.get("name") and not call["name"]:
+            call["name"] = function["name"]
+            if self.on_delta:
+                self.on_delta("tool", call["name"])
+        call["args"] += function.get("arguments") or ""
+
+    def reply(self) -> Reply:
+        content, inline_thinking = split_thinking("".join(self.text))
+        tool_calls = [{"id": call["id"] or f"call_{secrets.token_hex(6)}", "name": call["name"],
+                       "input": _args(call["args"])}
+                      for _, call in sorted(self.calls.items()) if call["name"]]
+        if not tool_calls:                  # the server didn't parse them: maybe the model wrote them as text
             content, tool_calls = text_tool_calls(content)
-        return Reply(content, tin, tout, truncated=finish == "length", reasoning="".join(thinking) + inline,
-                     tool_calls=tool_calls)
+        return Reply(content, self.input_tokens, self.output_tokens, truncated=self.finish == "length",
+                     reasoning="".join(self.thinking) + inline_thinking, tool_calls=tool_calls)
+
+
+def _raise_stream_error(error) -> None:
+    message = str(error.get("message") or error.get("code") or error) if isinstance(error, dict) else str(error)
+    if CONTEXT_ERROR.search(message):       # LM Studio / llama.cpp: the prompt does not fit the loaded context
+        raise ValorError("ai_context_full", f"the model's context window is too small: {message[:300]}",
+                         hint=CONTEXT_HINT)
+    raise ValorError("ai_error", f"the model provider reported an error in the middle of the answer: {message[:300]}",
+                     hint="Usually temporary: send the message again, or pick another model or provider.")
 
 
 class OpenRouter(OpenAICompatible):
@@ -237,20 +268,22 @@ class OpenRouter(OpenAICompatible):
     def context_length(self) -> int | None:
         """The model's context window from OpenRouter's public model list."""
         try:
-            r = requests.get(f"{self.BASE_URL}/models", timeout=15)
-            models = r.json().get("data", []) if r.ok else []
+            response = requests.get(f"{self.BASE_URL}/models", timeout=15)
+            models = response.json().get("data", []) if response.ok else []
         except (requests.RequestException, ValueError, AttributeError):
             return None
-        n = next((m.get("context_length") for m in models if isinstance(m, dict) and m.get("id") == self.model), None)
-        return int(n) if isinstance(n, int) else None
+        length = next((model.get("context_length") for model in models
+                       if isinstance(model, dict) and model.get("id") == self.model), None)
+        return int(length) if isinstance(length, int) else None
 
 
 def _args(text: str) -> dict | None:
+    """A tool call's arguments: a JSON object, {} when empty, None when the model wrote invalid JSON."""
     try:
-        v = json.loads(text) if text.strip() else {}
+        value = json.loads(text) if text.strip() else {}
     except ValueError:
         return None
-    return v if isinstance(v, dict) else None
+    return value if isinstance(value, dict) else None
 
 
 TOOL_CALL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
@@ -259,33 +292,34 @@ TOOL_CALL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 def text_tool_calls(text: str) -> tuple[str, list[dict]]:
     """Tool calls a model wrote into its text (Qwen/Hermes <tool_call> tags) when the server did not parse them."""
     calls = []
-    for m in TOOL_CALL_TAG.finditer(text):
+    for match in TOOL_CALL_TAG.finditer(text):
         try:
-            d = json.loads(m.group(1))
+            call = json.loads(match.group(1))
         except ValueError:
             continue
-        if isinstance(d, dict) and d.get("name"):
-            args = d.get("arguments", d.get("parameters", {}))
+        if isinstance(call, dict) and call.get("name"):
+            args = call.get("arguments", call.get("parameters", {}))
             if isinstance(args, str):
                 args = _args(args)
-            calls.append({"id": f"call_{secrets.token_hex(6)}", "name": str(d["name"]),
+            calls.append({"id": f"call_{secrets.token_hex(6)}", "name": str(call["name"]),
                           "input": args if isinstance(args, dict) else None})
     return (TOOL_CALL_TAG.sub("", text).strip(), calls) if calls else (text, [])
 
 
 def openai_messages(system: str, messages: list[dict]) -> list[dict]:
+    """VALOR's neutral message format (see Provider.complete) in the OpenAI chat format."""
     out = [{"role": "system", "content": system}]
-    for m in messages:
-        if m["role"] == "tool":
-            out += [{"role": "tool", "tool_call_id": r["id"], "content": r.get("content") or "(no output)"}
-                    for r in m["results"]]
-        elif m["role"] == "assistant" and m.get("tool_calls"):
-            out.append({"role": "assistant", "content": m.get("content") or None, "tool_calls": [
-                {"id": c["id"], "type": "function",
-                 "function": {"name": c["name"], "arguments": json.dumps(c.get("input") or {})}}
-                for c in m["tool_calls"]]})
+    for message in messages:
+        if message["role"] == "tool":
+            out += [{"role": "tool", "tool_call_id": result["id"], "content": result.get("content") or "(no output)"}
+                    for result in message["results"]]
+        elif message["role"] == "assistant" and message.get("tool_calls"):
+            out.append({"role": "assistant", "content": message.get("content") or None, "tool_calls": [
+                {"id": call["id"], "type": "function",
+                 "function": {"name": call["name"], "arguments": json.dumps(call.get("input") or {})}}
+                for call in message["tool_calls"]]})
         else:
-            out.append({"role": m["role"], "content": m["content"]})
+            out.append({"role": message["role"], "content": message["content"]})
     return out
 
 
@@ -350,6 +384,7 @@ def cut_off(provider: Provider, r: Reply) -> ValorError:
     """Why an answer stopped early. Servers say "length" both for max_tokens and for a full context window (a local
     model loaded with a small context fills it with VALOR's prompt and stops at once), so tell them apart."""
     details = {"input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
+    # Stopping well before max_tokens means something else ran out: the context window.
     early = r.output_tokens < provider.max_tokens * 0.9 if r.output_tokens else not (r.text or r.reasoning)
     if r.context_full or early:
         size = f" (VALOR's request is {r.input_tokens:,} tokens)" if r.input_tokens else ""

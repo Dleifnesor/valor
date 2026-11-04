@@ -39,7 +39,8 @@ def load_catalog(cfg) -> dict:
 
 
 def _natural(name: str):
-    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", name)]
+    """Sort key that orders numbers by value: Rocky-10.2 before Rocky-10.10."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
 
 
 def parse_checksums(text: str) -> dict[str, str]:
@@ -47,9 +48,9 @@ def parse_checksums(text: str) -> dict[str, str]:
     out = {}
     for line in text.splitlines():
         line = line.strip()
-        m = re.match(r"^[A-Z0-9-]+ \((.+)\) = ([0-9a-fA-F]+)$", line)
-        if m:
-            out[m.group(1)] = m.group(2).lower()
+        bsd = re.match(r"^[A-Z0-9-]+ \((.+)\) = ([0-9a-fA-F]+)$", line)
+        if bsd:
+            out[bsd.group(1)] = bsd.group(2).lower()
             continue
         parts = line.split()
         if len(parts) == 2 and re.fullmatch(r"[0-9a-fA-F]{32,128}", parts[0]):
@@ -59,50 +60,56 @@ def parse_checksums(text: str) -> dict[str, str]:
 
 def _fetch(url: str) -> bytes:
     import requests
-    r = requests.get(url, timeout=60)
-    if r.status_code != 200:
-        raise ValorError("download_failed", f"{url}: HTTP {r.status_code}")
-    return r.content
+    response = requests.get(url, timeout=60)
+    if response.status_code != 200:
+        raise ValorError("download_failed", f"{url}: HTTP {response.status_code}")
+    return response.content
 
 
 def _verify_signature(cfg, entry: dict, data: bytes, sig: bytes) -> None:
+    """Check a checksum list's detached GPG signature against the publisher key shipped with VALOR. A throwaway
+    keyring holds only that key, so nothing else on the system can vouch for the list."""
     key = cfg.catalog_file.parent / entry["signing_key_file"]
-    fpr = entry["signing_key_fingerprint"].replace(" ", "").upper()
+    fingerprint = entry["signing_key_fingerprint"].replace(" ", "").upper()
     with tempfile.TemporaryDirectory() as home:
         env = {**os.environ, "GNUPGHOME": home}
         subprocess.run(["gpg", "--batch", "-q", "--import", str(key)], env=env, check=True, capture_output=True)
         (Path(home) / "data").write_bytes(data)
         (Path(home) / "sig").write_bytes(sig)
-        res = subprocess.run(["gpg", "--batch", "--status-fd", "1", "--verify", f"{home}/sig", f"{home}/data"],
-                             env=env, capture_output=True, text=True)
-        if f"VALIDSIG {fpr}" not in res.stdout:
-            raise ValorError("bad_signature", f"the checksum list for {entry['title']} is not signed by {fpr}",
+        result = subprocess.run(["gpg", "--batch", "--status-fd", "1", "--verify", f"{home}/sig", f"{home}/data"],
+                                env=env, capture_output=True, text=True)
+        if f"VALIDSIG {fingerprint}" not in result.stdout:
+            raise ValorError("bad_signature", f"the checksum list for {entry['title']} is not signed by {fingerprint}",
                              hint="The mirror may be compromised or the key rotated; check the publisher's site.")
 
 
 def resolve(cfg, entry_id: str) -> dict:
     """Catalog entry -> {url, filename, checksum, algorithm, verified}. Follows point releases via the checksum list."""
-    cat = load_catalog(cfg)
-    if entry_id not in cat:
-        raise ValorError("unknown_iso", f"no catalog entry {entry_id}", hint=f"Known: {', '.join(cat)}")
-    e = cat[entry_id]
-    if "checksums_url" not in e:
-        pinned = e.get("sha256")
-        return {"id": entry_id, "url": e["url"], "filename": e["filename"], "checksum": pinned,
+    catalog = load_catalog(cfg)
+    if entry_id not in catalog:
+        raise ValorError("unknown_iso", f"no catalog entry {entry_id}", hint=f"Known: {', '.join(catalog)}")
+    entry = catalog[entry_id]
+
+    # Fixed file (e.g. Windows evaluation media): a pinned checksum when the catalog has one, else https only.
+    if "checksums_url" not in entry:
+        pinned = entry.get("sha256")
+        return {"id": entry_id, "url": entry["url"], "filename": entry["filename"], "checksum": pinned,
                 "algorithm": "sha256" if pinned else None,
-                "verified": "pinned checksum" if pinned else "https only", "note": e.get("note", "")}
-    text = _fetch(e["checksums_url"])
+                "verified": "pinned checksum" if pinned else "https only", "note": entry.get("note", "")}
+
+    # Versioned file (e.g. Rocky-10.1-...iso): the newest name in the publisher's (signed) checksum list.
+    text = _fetch(entry["checksums_url"])
     verified = "checksum (https)"
-    if e.get("checksums_sig_url"):
-        _verify_signature(cfg, e, text, _fetch(e["checksums_sig_url"]))
+    if entry.get("checksums_sig_url"):
+        _verify_signature(cfg, entry, text, _fetch(entry["checksums_sig_url"]))
         verified = "signed checksum list"
     sums = parse_checksums(text.decode(errors="replace"))
-    names = sorted((n for n in sums if re.fullmatch(e["pattern"], n)), key=_natural)
+    names = sorted((name for name in sums if re.fullmatch(entry["pattern"], name)), key=_natural)
     if not names:
-        raise ValorError("unknown_iso", f"no file matching {e['pattern']} in {e['checksums_url']}")
-    name = names[-1]
-    return {"id": entry_id, "url": e["base_url"] + name, "filename": name, "checksum": sums[name],
-            "algorithm": e.get("algorithm", "sha256"), "verified": verified}
+        raise ValorError("unknown_iso", f"no file matching {entry['pattern']} in {entry['checksums_url']}")
+    newest = names[-1]
+    return {"id": entry_id, "url": entry["base_url"] + newest, "filename": newest, "checksum": sums[newest],
+            "algorithm": entry.get("algorithm", "sha256"), "verified": verified}
 
 
 def installer_iso(pve, iso_id: str) -> dict | None:
@@ -110,28 +117,37 @@ def installer_iso(pve, iso_id: str) -> dict | None:
     entry = load_catalog(pve.cfg).get(iso_id)
     if not entry:
         return None
-    hits = [i for i in list_isos(pve)
-            if (re.fullmatch(entry["pattern"], i["name"]) if entry.get("pattern") else i["name"] == entry.get("filename"))]
-    return max(hits, key=lambda i: _natural(i["name"])) if hits else None
+
+    def matches(iso: dict) -> bool:
+        if entry.get("pattern"):
+            return bool(re.fullmatch(entry["pattern"], iso["name"]))
+        return iso["name"] == entry.get("filename")
+
+    hits = [iso for iso in list_isos(pve) if matches(iso)]
+    return max(hits, key=lambda iso: _natural(iso["name"])) if hits else None
 
 
 def find(pve, name: str) -> str | None:
     """volid of the library ISO with this file name (first ISO storage that has it)."""
-    return next((i["volid"] for i in list_isos(pve) if i["name"] == name), None)
+    return next((iso["volid"] for iso in list_isos(pve) if iso["name"] == name), None)
 
 
 def list_isos(pve) -> list[dict]:
+    """Every ISO on the storages VALOR may read; only the ones on iso_storage can be deleted ("writable").
+    A storage the token can't read is skipped rather than failing the whole list."""
+    storages = pve.cfg.iso_storages or ((pve.cfg.iso_storage,) if pve.cfg.iso_storage else ())
     out = []
-    for storage in pve.cfg.iso_storages or ((pve.cfg.iso_storage,) if pve.cfg.iso_storage else ()):
+    for storage in storages:
         try:
             items = pve.storage_content(storage, "iso")
         except ValorError:
             continue
-        for it in items:
-            volid = it["volid"]
-            out.append({"volid": volid, "storage": storage, "name": volid.split("/", 1)[-1], "size": it.get("size", 0),
-                        "ctime": it.get("ctime", 0), "writable": storage == pve.cfg.iso_storage})
-    return sorted(out, key=lambda i: i["name"].lower())
+        for item in items:
+            volid = item["volid"]
+            out.append({"volid": volid, "storage": storage, "name": volid.split("/", 1)[-1],
+                        "size": item.get("size", 0), "ctime": item.get("ctime", 0),
+                        "writable": storage == pve.cfg.iso_storage})
+    return sorted(out, key=lambda iso: iso["name"].lower())
 
 
 def check_filename(name: str) -> str:
@@ -162,8 +178,8 @@ class MultipartFile(io.RawIOBase):
 
     def __init__(self, fields: dict[str, str], file_field: str, filename: str, path: str):
         self.boundary = "valor" + secrets.token_hex(16)
-        head = b"".join(f"--{self.boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
-                        for k, v in fields.items())
+        head = b"".join(f"--{self.boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode()
+                        for key, value in fields.items())
         head += (f"--{self.boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; filename=\"{filename}\"\r\n"
                  "Content-Type: application/octet-stream\r\n\r\n").encode()
         tail = f"\r\n--{self.boundary}--\r\n".encode()
@@ -197,7 +213,7 @@ class MultipartFile(io.RawIOBase):
         return out
 
     def close(self) -> None:
-        for p in self._parts:
-            p.close()
+        for part in self._parts:
+            part.close()
         self._parts = []
         super().close()

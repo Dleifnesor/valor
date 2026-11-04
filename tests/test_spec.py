@@ -33,24 +33,24 @@ def test_minimal_spec_is_valid():
 
 
 @pytest.mark.parametrize("mutate,needle", [
-    (lambda d: d["segments"][1].update(vlan=210), "own VLAN"),
-    (lambda d: d["segments"][1].update(cidr="10.210.0.128/25"), "overlap"),
-    (lambda d: d["hosts"][0].update(address="10.220.0.5"), "not a usable address"),
-    (lambda d: d["hosts"][0].update(address="10.210.0.1"), "router's address"),
-    (lambda d: d["hosts"][1].update(name="rtr"), "reserved"),
-    (lambda d: d["hosts"][1].update(segment="nope"), "unknown segment"),
-    (lambda d: d.update(policy=[{"from": "sega", "to": "zz", "proto": "tcp", "ports": [1]}]), "unknown segment or host"),
-    (lambda d: d.update(policy=[{"from": "sega", "to": "segb", "proto": "tcp"}]), "need at least one port"),
-    (lambda d: d.update(policy=[{"from": "h1", "to": "sega", "proto": "any"}]), "same segment"),
-    (lambda d: d.update(tests=[{"from": "h1", "to": "nowhere", "port": 1, "expect": "open"}]), "'to' must be"),
-    (lambda d: d["segments"][0].update(cidr="8.8.8.0/24"), "private"),
+    (lambda spec_data: spec_data["segments"][1].update(vlan=210), "own VLAN"),
+    (lambda spec_data: spec_data["segments"][1].update(cidr="10.210.0.128/25"), "overlap"),
+    (lambda spec_data: spec_data["hosts"][0].update(address="10.220.0.5"), "not a usable address"),
+    (lambda spec_data: spec_data["hosts"][0].update(address="10.210.0.1"), "router's address"),
+    (lambda spec_data: spec_data["hosts"][1].update(name="rtr"), "reserved"),
+    (lambda spec_data: spec_data["hosts"][1].update(segment="nope"), "unknown segment"),
+    (lambda spec_data: spec_data.update(policy=[{"from": "sega", "to": "zz", "proto": "tcp", "ports": [1]}]), "unknown segment or host"),
+    (lambda spec_data: spec_data.update(policy=[{"from": "sega", "to": "segb", "proto": "tcp"}]), "need at least one port"),
+    (lambda spec_data: spec_data.update(policy=[{"from": "h1", "to": "sega", "proto": "any"}]), "same segment"),
+    (lambda spec_data: spec_data.update(tests=[{"from": "h1", "to": "nowhere", "port": 1, "expect": "open"}]), "'to' must be"),
+    (lambda spec_data: spec_data["segments"][0].update(cidr="8.8.8.0/24"), "private"),
 ])
 def test_invalid_specs(mutate, needle):
     assert needle in errors_for(mutate)
 
 
 def test_unknown_fields_rejected():
-    assert "Extra inputs" in errors_for(lambda d: d.update(hostz=[]))
+    assert "Extra inputs" in errors_for(lambda spec_data: spec_data.update(hostz=[]))
 
 
 def test_yaml_errors_never_echo_content():
