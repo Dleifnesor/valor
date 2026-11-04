@@ -6,7 +6,7 @@ import { vmActions } from "../components/RangeActions";
 import { Detail, machinesOf } from "./RangeDetail";
 
 // The console page carries noVNC and xterm.js: loaded only when a console is opened.
-const ConsolePage = lazy(() => import("./Console").then((m) => ({ default: m.ConsolePage })));
+const ConsolePage = lazy(() => import("./Console").then((module) => ({ default: module.ConsolePage })));
 
 /** One VM of a range, as Proxmox shows a virtual machine: Summary and Console. */
 export function VmView({ range, host, console, canOperate }: {
@@ -24,15 +24,15 @@ export function VmView({ range, host, console, canOperate }: {
   const title = vm ? `Virtual Machine ${vm.vmid} (${host}) on range '${range}'` : `Host '${host}' on range '${range}'`;
   if (!data) return <View title={title} menu={menu} active={active}>{loading ? <Loading /> : <ErrorBox error={error} />}</View>;
 
-  const spec = machinesOf(data).find((h) => h.name === host);
-  const node = data.topology.nodes.find((n) => n.id === (host === "rtr" ? "rtr" : `host:${host}`));
+  const spec = machinesOf(data).find((machine) => machine.name === host);
+  const node = data.topology.nodes.find((candidate) => candidate.id === (host === "rtr" ? "rtr" : `host:${host}`));
   const on = vm?.status === "running";
-  const a = vmActions(range, host, vm?.status, setErr);
+  const actions = vmActions(range, host, vm?.status, setErr);
   const tools = canOperate && vm && (
     <>
-      {a.start && <ToolButton action={a.start} />}
-      <DropButton label="Shutdown" icon="power" disabled={!on} items={[a.shutdown, a.reboot, a.stop]} />
-      <DropButton label="Console" icon="terminal" disabled={!on} items={[a.console, a.serial]} />
+      {actions.start && <ToolButton action={actions.start} />}
+      <DropButton label="Shutdown" icon="power" disabled={!on} items={[actions.shutdown, actions.reboot, actions.stop]} />
+      <DropButton label="Console" icon="terminal" disabled={!on} items={[actions.console, actions.serial]} />
     </>
   );
 
@@ -63,7 +63,7 @@ export function VmView({ range, host, console, canOperate }: {
           </Card>
           <Card title="Services">
             {(spec.roles ?? []).length ? (
-              <ul className="plain-list">{spec.roles!.map((r) => <li key={r.name}>{r.name}</li>)}</ul>
+              <ul className="plain-list">{spec.roles!.map((role) => <li key={role.name}>{role.name}</li>)}</ul>
             ) : <div className="muted">No services.</div>}
           </Card>
         </div>

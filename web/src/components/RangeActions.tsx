@@ -21,12 +21,12 @@ export async function runJob(p: Promise<{ job: string }>, onError: (e: ApiError)
 
 /** What can be done to a range; `false` for what does not apply (Destroy needs VMs, Delete needs none). Errors go to
  *  `onError` (a dialog by default). */
-export function rangeActions(r: { name: string; vms: number; running: number }, onError: (e: ApiError) => void = showError) {
-  const { name } = r;
-  const built = r.vms > 0, off = !r.running;
+export function rangeActions(range: { name: string; vms: number; running: number }, onError: (e: ApiError) => void = showError) {
+  const { name } = range;
+  const built = range.vms > 0, off = !range.running;
   const power = (action: string) => runJob(post(`/api/ranges/${name}/power`, { action }), onError);
   return {
-    start: built && { label: "Start all VMs", icon: "play", disabled: r.running === r.vms, onClick: () => power("start") },
+    start: built && { label: "Start all VMs", icon: "play", disabled: range.running === range.vms, onClick: () => power("start") },
     shutdown: built && { label: "Shut down all VMs", icon: "power", disabled: off, onClick: () => power("shutdown") },
     reboot: built && { label: "Reboot all VMs", icon: "refresh", disabled: off, onClick: () => power("reboot") },
     stop: built && { label: "Force stop all VMs", icon: "stop", danger: true, disabled: off, onClick: () => power("stop") },
@@ -40,10 +40,14 @@ export function rangeActions(r: { name: string; vms: number; running: number }, 
 }
 
 /** The right-click menu of a range in the resource tree and the range list. */
-export function rangeMenu(r: { name: string; vms: number; running: number }, canOperate: boolean): Menu {
-  const a = rangeActions(r);
-  const operate: MenuItems = canOperate ? [a.start, a.shutdown, a.reboot, a.stop, "-", a.login, a.verify, a.plan, a.edit, "-", a.destroy, a.remove] : [];
-  return { title: `Range '${r.name}'`, items: [...operate, "-", newTab(`ranges/${r.name}`)] };
+export function rangeMenu(range: { name: string; vms: number; running: number }, canOperate: boolean): Menu {
+  const actions = rangeActions(range);
+  const operate: MenuItems = canOperate ? [
+    actions.start, actions.shutdown, actions.reboot, actions.stop, "-",
+    actions.login, actions.verify, actions.plan, actions.edit, "-",
+    actions.destroy, actions.remove,
+  ] : [];
+  return { title: `Range '${range.name}'`, items: [...operate, "-", newTab(`ranges/${range.name}`)] };
 }
 
 /** What can be done to one VM of a range; `false` for everything while it is not built. */
@@ -62,16 +66,16 @@ export function vmActions(range: string, host: string, status: string | undefine
 
 /** The right-click menu of a VM in the resource tree and the range's VM list. */
 export function vmMenu(range: string, host: string, vm: { vmid: number; status: string } | undefined, canOperate: boolean): Menu {
-  const a = vmActions(range, host, vm?.status);
-  const operate: MenuItems = canOperate ? [a.start, a.shutdown, a.reboot, a.stop, "-", a.console, a.serial] : [];
+  const actions = vmActions(range, host, vm?.status);
+  const operate: MenuItems = canOperate ? [actions.start, actions.shutdown, actions.reboot, actions.stop, "-", actions.console, actions.serial] : [];
   return { title: vm ? `VM ${vm.vmid} (${host})` : host, items: [...operate, "-", newTab(`ranges/${range}/vm/${host}`)] };
 }
 
 /** A VM's console in a browser window of its own, as Proxmox opens one on a double-click. One window per VM:
  *  opening it again brings that window to the front. */
 export function openConsoleWindow(range: string, host: string) {
-  const w = window.open(`#/console/${range}/${host}`, `valor-console-${range}-${host}`, "popup,width=1100,height=800");
-  w?.focus();
+  const popup = window.open(`#/console/${range}/${host}`, `valor-console-${range}-${host}`, "popup,width=1100,height=800");
+  popup?.focus();
 }
 
 /** "Plan changes": ask the engine for the plan, then show it. */
@@ -90,9 +94,9 @@ export function DestroyModal({ name, onClose }: { name: string; onClose: () => v
   const run = async () => {
     setBusy(true);
     try {
-      const r = await post<{ job: string }>(`/api/ranges/${name}/destroy`, { confirm });
+      const started = await post<{ job: string }>(`/api/ranges/${name}/destroy`, { confirm });
       onClose();
-      openTask(r.job);
+      openTask(started.job);
     } catch (e) {
       setErr(e as ApiError);
       setBusy(false);
@@ -174,12 +178,12 @@ export function LoginModal({ range, onClose }: { range: string; onClose: () => v
             keys only. Viewing this login is recorded in the audit log.
           </div>
           <dl className="kv">
-            {(login.accounts ?? [{ username: login.username, hosts: [], kind: "linux" as const }]).map((a) => (
-              <Fragment key={a.username}>
-                <dt>{a.kind === "linux" ? "Username" : KIND[a.kind]}</dt>
+            {(login.accounts ?? [{ username: login.username, hosts: [], kind: "linux" as const }]).map((account) => (
+              <Fragment key={account.username}>
+                <dt>{account.kind === "linux" ? "Username" : KIND[account.kind]}</dt>
                 <dd>
-                  <span className="mono">{a.username}</span>
-                  {a.hosts.length > 0 && <span className="muted"> on {a.hosts.join(", ")}</span>}
+                  <span className="mono">{account.username}</span>
+                  {account.hosts.length > 0 && <span className="muted"> on {account.hosts.join(", ")}</span>}
                 </dd>
               </Fragment>
             ))}
@@ -253,18 +257,18 @@ export function SnapshotsTab({ range, canOperate }: { range: string; canOperate:
           <table>
             <thead><tr><th>Snapshot</th><th>Taken</th><th>VMs</th><th>Description</th><th></th></tr></thead>
             <tbody>
-              {snaps.map((s) => (
-                <tr key={s.name}>
-                  <td><b className="mono">{s.name}</b> {s.automatic && <span className="badge ok">automatic</span>}</td>
-                  <td className="nowrap">{when(s.time)}</td>
-                  <td>{s.complete ? "all" : <span className="badge warn">{s.hosts.join(", ")} only</span>}</td>
-                  <td className="small">{s.description}</td>
+              {snaps.map((snap) => (
+                <tr key={snap.name}>
+                  <td><b className="mono">{snap.name}</b> {snap.automatic && <span className="badge ok">automatic</span>}</td>
+                  <td className="nowrap">{when(snap.time)}</td>
+                  <td>{snap.complete ? "all" : <span className="badge warn">{snap.hosts.join(", ")} only</span>}</td>
+                  <td className="small">{snap.description}</td>
                   <td>
                     {canOperate && (
                       <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
-                        <button className="btn small" onClick={() => setReset(s)} disabled={!s.complete}>Reset to this</button>
-                        <button className="btn small danger" onClick={() => confirm(`Delete snapshot ${s.name}?`) &&
-                          runJob(del(`/api/ranges/${range}/snapshots/${s.name}`), setErr)}>Delete</button>
+                        <button className="btn small" onClick={() => setReset(snap)} disabled={!snap.complete}>Reset to this</button>
+                        <button className="btn small danger" onClick={() => confirm(`Delete snapshot ${snap.name}?`) &&
+                          runJob(del(`/api/ranges/${range}/snapshots/${snap.name}`), setErr)}>Delete</button>
                       </div>
                     )}
                   </td>
@@ -274,7 +278,7 @@ export function SnapshotsTab({ range, canOperate }: { range: string; canOperate:
           </table>
         </div>
       )}
-      {reset && <ResetModal range={range} snap={reset} newer={snaps.filter((x) => x.time > reset.time)} onClose={() => setReset(null)} />}
+      {reset && <ResetModal range={range} snap={reset} newer={snaps.filter((other) => other.time > reset.time)} onClose={() => setReset(null)} />}
     </div>
   );
 }
@@ -298,7 +302,7 @@ function ResetModal({ range, snap, newer, onClose }: { range: string; snap: Snap
       {newer.length > 0 && (
         <label className="checkbox">
           <input name="delete-newer" type="checkbox" checked={deleteNewer} onChange={(e) => setDeleteNewer(e.target.checked)} />
-          Delete the newer snapshots ({newer.map((n) => n.name).join(", ")}) - storages like ZFS can only roll back to the newest one
+          Delete the newer snapshots ({newer.map((other) => other.name).join(", ")}) - storages like ZFS can only roll back to the newest one
         </label>
       )}
       <label className="field">Type <b>{range}</b> to confirm<input name="confirm-name" value={confirmName} onChange={(e) => setConfirm(e.target.value)} autoFocus /></label>

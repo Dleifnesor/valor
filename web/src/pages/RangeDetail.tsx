@@ -9,8 +9,14 @@ import { TopologyMap } from "../components/Topology";
 import { HostPower, SnapshotsTab, rangeActions, vmMenu } from "../components/RangeActions";
 import { showMenu } from "../components/ContextMenu";
 import { AccessTab } from "../components/Access";
+import { type ComplianceReport, Verification } from "../components/Verification";
 import { RangeEditor } from "./RangeEditor";
 
+// One range: its title-bar actions (start, shut down, verify, plan, ...) and its sections - summary, the editable
+// map with the range chat, verification results, snapshots, access (VPN and logins), the spec, the build journal
+// and the build history. The data comes from GET /api/ranges/<name>, refreshed every 20 s.
+
+/** A range as GET /api/ranges/<name> returns it: the spec, the VMs on the cluster, and what VALOR recorded. */
 export interface Detail {
   name: string;
   yaml: string;
@@ -51,22 +57,22 @@ const ALIAS: Record<string, string> = { hosts: "summary", tests: "verification",
 export function RangeView({ name, section, canOperate, chatId }: { name: string; section?: string; canOperate: boolean; chatId?: number }) {
   const { data, error, loading } = useApi<Detail>(`/api/ranges/${encodeURIComponent(name)}`, 20000);
   const [actionError, setActionError] = useState<ApiError | null>(null);
-  const active = SECTIONS.some((x) => x.id === section) ? section! : ALIAS[section ?? ""] ?? "summary";
-  const menu = SECTIONS.map((x) => ({ ...x, href: `ranges/${name}${x.id === "summary" ? "" : `/${x.id}`}` }));
+  const active = SECTIONS.some((entry) => entry.id === section) ? section! : ALIAS[section ?? ""] ?? "summary";
+  const menu = SECTIONS.map((entry) => ({ ...entry, href: `ranges/${name}${entry.id === "summary" ? "" : `/${entry.id}`}` }));
   const title = `Range '${name}'`;
   if (!data) return <View title={title} menu={menu} active={active}>{loading ? <Loading /> : <ErrorBox error={error} />}</View>;
 
   const vmCount = Object.keys(data.vms).length;
-  const running = Object.values(data.vms).filter((v) => v.status === "running").length;
-  const a = rangeActions({ name, vms: vmCount, running }, setActionError);
+  const running = Object.values(data.vms).filter((vm) => vm.status === "running").length;
+  const actions = rangeActions({ name, vms: vmCount, running }, setActionError);
   const tools = canOperate && (
     <>
-      {a.start && <ToolButton action={a.start} label="Start" />}
-      {a.shutdown && <DropButton label="Shutdown" icon="power" disabled={!running} items={[a.shutdown, a.reboot, a.stop]} />}
-      {a.login && data.logins && <ToolButton action={a.login} />}
-      {a.verify && <ToolButton action={a.verify} />}
-      <ToolButton action={a.plan} primary />
-      <DropButton label="More" items={[a.edit, a.destroy, a.remove]} />
+      {actions.start && <ToolButton action={actions.start} label="Start" />}
+      {actions.shutdown && <DropButton label="Shutdown" icon="power" disabled={!running} items={[actions.shutdown, actions.reboot, actions.stop]} />}
+      {actions.login && data.logins && <ToolButton action={actions.login} />}
+      {actions.verify && <ToolButton action={actions.verify} />}
+      <ToolButton action={actions.plan} primary />
+      <DropButton label="More" items={[actions.edit, actions.destroy, actions.remove]} />
     </>
   );
 
@@ -78,7 +84,7 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
       {active === "map" && (
         <div className="map-page">
           <RangeMapTab name={name} canOperate={canOperate} chatId={chatId}
-            onConsole={canOperate ? (h) => go(`ranges/${name}/vm/${h}/console`) : undefined} />
+            onConsole={canOperate ? (host) => go(`ranges/${name}/vm/${host}/console`) : undefined} />
         </div>
       )}
       {active === "verification" && <section className="card"><Verification data={data} /></section>}
@@ -98,15 +104,16 @@ export function RangeView({ name, section, canOperate, chatId }: { name: string;
 
 /** The router and the hosts as rows: the spec's view of each VM next to the cluster's. */
 export function machinesOf(data: Detail) {
-  return [{ name: "rtr", segment: "all", address: data.spec.segments.map((s: any) => s.cidr).join(", "), os: data.spec.router.os,
+  return [{ name: "rtr", segment: "all", address: data.spec.segments.map((segment: any) => segment.cidr).join(", "), os: data.spec.router.os,
     cores: data.spec.router.cores, memory: data.spec.router.memory, disk: data.spec.router.disk, roles: [{ name: "router" }] },
     ...data.spec.hosts] as { name: string; segment: string; address: string; os: string; cores: number; memory: number; disk: number; roles?: { name: string }[] }[];
 }
 
+/** Status and notes, then the VMs as a table (a click opens one, right-click for its menu). */
 function Summary({ data, canOperate, onError }: { data: Detail; canOperate: boolean; onError: (e: ApiError) => void }) {
   const vmCount = Object.keys(data.vms).length;
-  const running = Object.values(data.vms).filter((v) => v.status === "running").length;
-  const deployed = Object.values(data.vms)[0]?.spec;
+  const running = Object.values(data.vms).filter((vm) => vm.status === "running").length;
+  const deployed = Object.values(data.vms)[0]?.spec;          // the spec version the VMs were last built from
   return (
     <>
       <div className="summary-row two">
@@ -137,20 +144,20 @@ function Summary({ data, canOperate, onError }: { data: Detail; canOperate: bool
           <table>
             <thead><tr><th>Name</th><th>VMID</th><th>Status</th><th>Segment</th><th>Address</th><th>OS</th><th>Size</th><th>Services</th><th /></tr></thead>
             <tbody>
-              {machinesOf(data).map((h) => {
-                const vm = data.vms[h.name];
+              {machinesOf(data).map((machine) => {
+                const vm = data.vms[machine.name];
                 return (
-                  <tr key={h.name} className="clickable" onClick={() => go(`ranges/${data.name}/vm/${h.name}`)}
-                    onContextMenu={(e) => showMenu(e, vmMenu(data.name, h.name, vm, canOperate))}>
-                    <td className="nowrap"><b>{h.name}</b></td>
+                  <tr key={machine.name} className="clickable" onClick={() => go(`ranges/${data.name}/vm/${machine.name}`)}
+                    onContextMenu={(e) => showMenu(e, vmMenu(data.name, machine.name, vm, canOperate))}>
+                    <td className="nowrap"><b>{machine.name}</b></td>
                     <td>{vm ? vm.vmid : "–"}</td>
                     <td className="nowrap">{vm ? <StateBadge state={vm.status === "running" ? "ok" : "unknown"} label={vm.status} /> : <span className="muted">not built</span>}</td>
-                    <td>{h.segment}</td>
-                    <td className="mono">{h.address}</td>
-                    <td>{h.os}</td>
-                    <td className="nowrap">{h.cores} vCPU · {h.memory} MiB · {h.disk} GiB</td>
-                    <td>{(h.roles || []).map((r) => r.name).join(", ") || "–"}</td>
-                    <td onClick={(e) => e.stopPropagation()}>{vm && canOperate && <HostPower range={data.name} host={h.name} status={vm.status} onError={onError} />}</td>
+                    <td>{machine.segment}</td>
+                    <td className="mono">{machine.address}</td>
+                    <td>{machine.os}</td>
+                    <td className="nowrap">{machine.cores} vCPU · {machine.memory} MiB · {machine.disk} GiB</td>
+                    <td>{(machine.roles || []).map((role) => role.name).join(", ") || "–"}</td>
+                    <td onClick={(e) => e.stopPropagation()}>{vm && canOperate && <HostPower range={data.name} host={machine.name} status={vm.status} onError={onError} />}</td>
                   </tr>
                 );
               })}
@@ -162,179 +169,16 @@ function Summary({ data, canOperate, onError }: { data: Detail; canOperate: bool
   );
 }
 
-function Tests({ data }: { data: Detail }) {
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead><tr><th>Test</th><th>From</th><th>To</th><th>Check</th><th>Expect</th><th>Source</th></tr></thead>
-        <tbody>
-          {data.tests.map((t) => (
-            <tr key={t.name}>
-              <td>{t.name}</td><td>{t.from}</td><td>{t.to}</td>
-              <td className="mono">{t.proto}{t.port ? `/${t.port}` : ""}</td>
-              <td><span className={`badge ${t.expect === "open" ? "ok" : "bad"}`}>{t.expect}</span></td>
-              <td className="muted">{t.origin}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function Verification({ data }: { data: Detail }) {
-  const v = data.verify;
-  if (!v) {
-    return (
-      <div className="card-body stack">
-        <div className="muted">Not verified yet. These are the tests the verification runs after a build:</div>
-        <Tests data={data} />
-      </div>
-    );
-  }
-  const hosts = Object.keys(v.baseline || {});
-  const controls: { control: string; title: string; area: string }[] = [];
-  for (const rows of Object.values(v.baseline || {})) for (const r of rows) if (!controls.find((c) => c.control === r.control)) controls.push(r);
-  return (
-    <div className="card-body stack">
-      <div className="row">
-        <StateBadge state={v.ok ? "ok" : "failed"} label={v.ok ? "passed" : "failed"} />
-        <span>tests {v.summary.tests_passed}/{v.summary.tests_total}</span>
-        <span>· isolation {v.summary.isolation_passed}/{v.summary.isolation_total}</span>
-        <span>· baseline {v.summary.baseline_passed}/{v.summary.baseline_total}</span>
-        <span className="muted">· {when(v.finished)}</span>
-      </div>
-      {v.summary.baseline_claim && <div className="muted small">Baseline results are {v.summary.baseline_claim}.</div>}
-      <div className="table-wrap">
-        <table>
-          <thead><tr><th>Test</th><th>From</th><th>Target</th><th>Expect</th><th>Observed</th><th></th></tr></thead>
-          <tbody>
-            {v.tests.map((t) => (
-              <tr key={t.name}>
-                <td>{t.name}</td><td>{t.from}</td><td className="mono">{t.target}</td><td>{t.expect}</td>
-                <td>{t.observed} <span className="muted small">({t.detail})</span></td>
-                <td>{t.pass ? <span className="badge ok">pass</span> : <span className="badge bad">fail</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {hosts.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Baseline control</th><th>Area</th>{hosts.map((h) => <th key={h}>{h}</th>)}</tr></thead>
-            <tbody>
-              {controls.map((c) => (
-                <tr key={c.control}>
-                  <td>{c.title}</td><td className="muted">{c.area}</td>
-                  {hosts.map((h) => {
-                    const r = v.baseline[h].find((x) => x.control === c.control);
-                    return <td key={h}>{!r ? "–" : r.after === "pass" ? <span className="badge ok">pass</span> : <span className="badge bad">{r.after}</span>}</td>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {v.compliance && <Compliance report={v.compliance} />}
-      <details className="check-notes">
-        <summary>All {data.tests.length} tests with where they come from (the spec or automatic)</summary>
-        <Tests data={data} />
-      </details>
-    </div>
-  );
-}
-
-interface Evidence { kind: "control" | "design"; title: string; pass: boolean; host?: string; control?: string; check?: string; detail?: string }
-interface Requirement { id: string; title: string; status: "pass" | "partial" | "fail"; evidence: Evidence[]; no_evidence_on?: string[] }
-interface ComplianceReport {
-  claim: string;
-  frameworks: Record<string, { title: string; about: string; requirements: Requirement[]; passed: number; partial: number;
-    failed: number; not_covered: { id: string; title: string }[] }>;
-}
-
-const STATUS_BADGE = { pass: "ok", partial: "warn", fail: "bad" } as const;
-
-/** Verification evidence per framework requirement (baseline controls on each host + design checks). */
-function Compliance({ report }: { report: ComplianceReport | { error: string } }) {
-  if ("error" in report) return <div className="alert warn small">Compliance report unavailable: {report.error}</div>;
-  return (
-    <div className="stack">
-      <h3 style={{ margin: "8px 0 0" }}>Compliance frameworks</h3>
-      <div className="muted small">Results are {report.claim}.</div>
-      {Object.entries(report.frameworks).map(([id, f]) => (
-        <details key={id} className="framework" open={Object.keys(report.frameworks).length === 1}>
-          <summary>
-            <b>{f.title}</b>
-            <span className="badge ok">{f.passed} pass</span>
-            {f.partial > 0 && <span className="badge warn">{f.partial} partial</span>}
-            {f.failed > 0 && <span className="badge bad">{f.failed} fail</span>}
-            {f.not_covered.length > 0 && <span className="badge">{f.not_covered.length} not covered</span>}
-          </summary>
-          <div className="muted small">{f.about}</div>
-          <div className="table-wrap">
-            <table className="compliance">
-              <thead><tr><th>Requirement</th><th>Status</th><th>Evidence</th></tr></thead>
-              <tbody>
-                {f.requirements.map((r) => (
-                  <tr key={r.id}>
-                    <td><span className="mono">{r.id}</span> <span className="muted">{r.title}</span></td>
-                    <td><span className={`badge ${STATUS_BADGE[r.status]}`}>{r.status}</span></td>
-                    <td className="small">
-                      <Evidences items={r.evidence} />
-                      {!!r.no_evidence_on?.length && <div className="muted">No evidence on {r.no_evidence_on.join(", ")}</div>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {f.not_covered.length > 0 && (
-            <details className="check-notes">
-              <summary>Not covered by VALOR ({f.not_covered.length}) - organizational or outside a lab build</summary>
-              <ul>{f.not_covered.map((n) => <li key={n.id}><span className="mono">{n.id}</span> {n.title}</li>)}</ul>
-            </details>
-          )}
-        </details>
-      ))}
-    </div>
-  );
-}
-
-function Evidences({ items }: { items: Evidence[] }) {
-  // one line per control (hosts grouped) or design check
-  const groups = new Map<string, { title: string; pass: boolean; hosts: string[]; detail?: string }>();
-  for (const e of items) {
-    const key = e.kind === "control" ? `c:${e.control}` : `d:${e.check}`;
-    const g = groups.get(key) ?? { title: e.title, pass: true, hosts: [], detail: e.detail };
-    g.pass = g.pass && e.pass;
-    if (e.host) g.hosts.push(e.pass ? e.host : `${e.host} (fail)`);
-    groups.set(key, g);
-  }
-  return (
-    <ul className="evidence">
-      {[...groups.values()].map((g, i) => (
-        <li key={i} className={g.pass ? "" : "bad"}>
-          {g.pass ? "✓" : "✗"} {g.title}
-          {g.hosts.length > 0 && <span className="muted"> - {g.hosts.join(", ")}</span>}
-          {g.detail && <span className="muted"> - {g.detail}</span>}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 /** The build journal (journals/<range>.md) rendered; its Mermaid topology is shown as the range map. */
 function Journal({ data }: { data: Detail }) {
   if (!data.journal) return <Card title="Journal"><div className="empty">No journal yet (written after the first build).</div></Card>;
   const text = data.journal;
   const download = () => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
-    a.download = `${data.name}.md`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+    link.download = `${data.name}.md`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   };
   const fence = (lang: string, code: string) => lang === "mermaid" ? (
     <>
@@ -349,6 +193,7 @@ function Journal({ data }: { data: Detail }) {
   );
 }
 
+/** Every build, verification and destroy, newest first; a row with a job opens its task log. */
 function History({ data }: { data: Detail }) {
   if (!data.history.length) return <div className="empty">No builds recorded yet.</div>;
   return (
@@ -356,12 +201,12 @@ function History({ data }: { data: Detail }) {
       <table>
         <thead><tr><th>When</th><th>Action</th><th>Result</th><th>Duration</th><th>Details</th></tr></thead>
         <tbody>
-          {[...data.history].reverse().map((h, i) => (
-            <tr key={i} className={h.job ? "clickable" : ""} onClick={() => h.job && openTask(h.job)}>
-              <td className="nowrap">{when(h.started)}</td><td>{h.kind}</td>
-              <td><StateBadge state={h.ok ? "ok" : "failed"} label={h.ok ? "succeeded" : "failed"} /></td>
-              <td>{h.seconds ? `${h.seconds} s` : "–"}</td>
-              <td className="small">{h.error ? `${h.error}: ${h.message ?? ""}` : ""}</td>
+          {[...data.history].reverse().map((entry, i) => (
+            <tr key={i} className={entry.job ? "clickable" : ""} onClick={() => entry.job && openTask(entry.job)}>
+              <td className="nowrap">{when(entry.started)}</td><td>{entry.kind}</td>
+              <td><StateBadge state={entry.ok ? "ok" : "failed"} label={entry.ok ? "succeeded" : "failed"} /></td>
+              <td>{entry.seconds ? `${entry.seconds} s` : "–"}</td>
+              <td className="small">{entry.error ? `${entry.error}: ${entry.message ?? ""}` : ""}</td>
             </tr>
           ))}
         </tbody>

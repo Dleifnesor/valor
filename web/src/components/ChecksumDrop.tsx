@@ -44,10 +44,10 @@ export function ChecksumDrop({ filename, onChecksum }: {
     void read(e.dataTransfer.files?.[0]);
   };
   const pickByHand = (i: string) => {
-    const e = entries[Number(i)];
-    if (!e) return;
-    setChosen(e);
-    onChecksum(e.hash, e.algorithm);
+    const entry = entries[Number(i)];
+    if (!entry) return;
+    setChosen(entry);
+    onChecksum(entry.hash, entry.algorithm);
   };
 
   return (
@@ -75,7 +75,7 @@ export function ChecksumDrop({ filename, onChecksum }: {
           <span className="small">{filename ? `No entry for ${filename} in ${source}` : `${source} lists ${entries.length} files`}: pick one</span>
           <select name="checksum-entry" defaultValue="" onChange={(e) => pickByHand(e.target.value)}>
             <option value="" disabled>Choose the ISO's entry…</option>
-            {entries.map((e, i) => <option key={i} value={i}>{e.name ?? "(no name)"} · {e.algorithm}</option>)}
+            {entries.map((entry, i) => <option key={i} value={i}>{entry.name ?? "(no name)"} · {entry.algorithm}</option>)}
           </select>
         </label>
       )}

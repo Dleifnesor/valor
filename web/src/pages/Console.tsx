@@ -19,7 +19,7 @@ const utf8len = (s: string) => new TextEncoder().encode(s).length;
 
 /** `windowed`: in a console window of its own (App's console/<range>/<host> route) rather than the VM's page. */
 export function ConsolePage({ range, host, kind, windowed = false }: { range: string; host: string; kind: Kind; windowed?: boolean }) {
-  const link = (k: Kind) => (windowed ? `console/${range}/${host}` : `ranges/${range}/vm/${host}/console`) + (k === "serial" ? "/serial" : "");
+  const link = (which: Kind) => (windowed ? `console/${range}/${host}` : `ranges/${range}/vm/${host}/console`) + (which === "serial" ? "/serial" : "");
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
   const ws = useRef<WebSocket | null>(null);
@@ -41,24 +41,24 @@ export function ConsolePage({ range, host, kind, windowed = false }: { range: st
     setState("connecting");
     setErr(null);
     post<Opened>(`/api/ranges/${range}/vms/${host}/console`, { kind })
-      .then((o) => {
+      .then((opened) => {
         if (disposed || !screen.current) return;
-        setLogin(o.login);
-        const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/console/${o.session}`;
+        setLogin(opened.login);
+        const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/console/${opened.session}`;
         screen.current.innerHTML = "";
         if (kind === "vnc") {
-          const r = new RFB(screen.current, url, { credentials: { password: o.vnc_password ?? "" }, wsProtocols: ["binary"] });
-          r.scaleViewport = true;
-          r.resizeSession = false;
-          r.background = "#000";
-          r.addEventListener("connect", () => { setState("connected"); r.focus(); });
-          r.addEventListener("disconnect", (e: Event) => {
+          const vnc = new RFB(screen.current, url, { credentials: { password: opened.vnc_password ?? "" }, wsProtocols: ["binary"] });
+          vnc.scaleViewport = true;
+          vnc.resizeSession = false;
+          vnc.background = "#000";
+          vnc.addEventListener("connect", () => { setState("connected"); vnc.focus(); });
+          vnc.addEventListener("disconnect", (e: Event) => {
             const clean = (e as CustomEvent).detail?.clean;
             setState(clean ? "closed" : "error");
             if (!clean) setErr("The console connection was lost.");
           });
-          r.addEventListener("securityfailure", () => { setState("error"); setErr("Proxmox refused the console session."); });
-          rfb.current = r;
+          vnc.addEventListener("securityfailure", () => { setState("error"); setErr("Proxmox refused the console session."); });
+          rfb.current = vnc;
         } else {
           term = new Terminal({ cursorBlink: true, fontSize: 14, fontFamily: "ui-monospace, Menlo, Consolas, monospace",
             theme: { background: "#000000" }, scrollback: 5000 });
@@ -84,7 +84,7 @@ export function ConsolePage({ range, host, kind, windowed = false }: { range: st
             }
           };
           sock.onclose = (e) => { setState(e.code === 1000 || e.code === 1005 ? "closed" : "error"); if (e.code === 4401) setErr("This console session expired or is not yours. Reconnect."); };
-          term.onData((d) => sock.readyState === WebSocket.OPEN && sock.send(`0:${utf8len(d)}:${d}`));
+          term.onData((input) => sock.readyState === WebSocket.OPEN && sock.send(`0:${utf8len(input)}:${input}`));
           window.addEventListener("resize", onResize);
           ws.current = sock;
         }
@@ -104,12 +104,12 @@ export function ConsolePage({ range, host, kind, windowed = false }: { range: st
 
   const typePassword = async () => {
     try {
-      const c = await get<{ password: string }>(`/api/ranges/${range}/credentials`);
+      const creds = await get<{ password: string }>(`/api/ranges/${range}/credentials`);
       if (kind === "vnc" && rfb.current) {
-        for (const ch of c.password) rfb.current.sendKey(ch.charCodeAt(0), null);
+        for (const char of creds.password) rfb.current.sendKey(char.charCodeAt(0), null);
         rfb.current.focus();
       } else if (ws.current?.readyState === WebSocket.OPEN) {
-        ws.current.send(`0:${utf8len(c.password)}:${c.password}`);
+        ws.current.send(`0:${utf8len(creds.password)}:${creds.password}`);
       }
     } catch (e) {
       setErr(e as ApiError);

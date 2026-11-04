@@ -56,14 +56,14 @@ export function ContextMenuHost({ page }: { page: string }) {
 
   // Open: mark the row it belongs to, keep the menu inside the window, close on any click, wheel or resize elsewhere.
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (!menu || !el) return;
-    el.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - el.offsetWidth - 4))}px`;
-    el.style.top = `${menu.y + el.offsetHeight > window.innerHeight - 4 ? Math.max(4, menu.y - el.offsetHeight) : menu.y}px`;
-    (menu.keyboard ? el.querySelector<HTMLElement>(".menu-item:not(:disabled)") ?? el : el).focus();
+    const box = ref.current;
+    if (!menu || !box) return;
+    box.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - box.offsetWidth - 4))}px`;
+    box.style.top = `${menu.y + box.offsetHeight > window.innerHeight - 4 ? Math.max(4, menu.y - box.offsetHeight) : menu.y}px`;
+    (menu.keyboard ? box.querySelector<HTMLElement>(".menu-item:not(:disabled)") ?? box : box).focus();
     menu.target.dataset.menuOpen = "";
     const close = () => setMenu(null);
-    const outside = (e: Event) => !el.contains(e.target as Node) && close();
+    const outside = (e: Event) => !box.contains(e.target as Node) && close();
     document.addEventListener("mousedown", outside);
     document.addEventListener("wheel", outside);
     window.addEventListener("resize", close);
@@ -97,7 +97,7 @@ export function ContextMenuHost({ page }: { page: string }) {
         <div className="popover menu context-menu" role="menu" aria-label={menu.title} tabIndex={-1} ref={ref} onKeyDown={onKey}
           onContextMenu={(e) => e.preventDefault()}>
           {menu.title && <div className="menu-title">{menu.title}</div>}
-          <MenuList items={menu.items} onPick={(i) => { setMenu(null); i.onClick(); }} />
+          <MenuList items={menu.items} onPick={(item) => { setMenu(null); item.onClick(); }} />
         </div>
       )}
       {dialog?.render(() => setDialog(null))}

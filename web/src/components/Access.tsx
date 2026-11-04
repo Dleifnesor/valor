@@ -58,19 +58,19 @@ export function AccessTab({ range, canOperate }: { range: string; canOperate: bo
         <table>
           <thead><tr><th>Peer</th><th>Tunnel address</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            {(data.peers ?? []).map((p) => (
-              <tr key={p.name}>
-                <td className="mono">{p.name}</td>
-                <td className="mono">{p.address ?? "—"}</td>
+            {(data.peers ?? []).map((peer) => (
+              <tr key={peer.name}>
+                <td className="mono">{peer.name}</td>
+                <td className="mono">{peer.address ?? "—"}</td>
                 <td>
-                  {!p.ready ? <span className="muted">not built yet</span>
-                    : p.connected ? <span className="badge ok">connected · {ago(p.latest_handshake)}</span>
-                    : p.latest_handshake ? <span className="badge">last seen {ago(p.latest_handshake)}</span>
+                  {!peer.ready ? <span className="muted">not built yet</span>
+                    : peer.connected ? <span className="badge ok">connected · {ago(peer.latest_handshake)}</span>
+                    : peer.latest_handshake ? <span className="badge">last seen {ago(peer.latest_handshake)}</span>
                     : <span className="muted">never connected</span>}
                 </td>
                 <td style={{ textAlign: "right" }}>
-                  {canOperate && p.ready && data.endpoint &&
-                    <button className="btn small" onClick={() => setOpen(p.name)}>Config…</button>}
+                  {canOperate && peer.ready && data.endpoint &&
+                    <button className="btn small" onClick={() => setOpen(peer.name)}>Config…</button>}
                 </td>
               </tr>
             ))}
@@ -94,10 +94,10 @@ function PeerModal({ range, peer, onClose }: { range: string; peer: string; onCl
   const download = () => {
     if (!cfg) return;
     const url = URL.createObjectURL(new Blob([cfg.config], { type: "text/plain" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = cfg.filename;
-    a.click();
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = cfg.filename;
+    link.click();
     URL.revokeObjectURL(url);
   };
   return (

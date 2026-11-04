@@ -14,8 +14,8 @@ export const WEAK: Algorithm[] = ["md5", "sha1"];
 function algo(tag: string | null, hash: string): Algorithm | null {
   const byLen = BY_LENGTH[hash.length] ?? null;
   if (!tag) return byLen;
-  const t = tag.toLowerCase().replace("sha2-", "sha") as Algorithm;
-  return byLen === t ? t : null;                  // the tag and the length must agree
+  const named = tag.toLowerCase().replace("sha2-", "sha") as Algorithm;
+  return byLen === named ? named : null;          // the tag and the length must agree
 }
 
 export function parseChecksums(text: string): ChecksumEntry[] {
@@ -26,34 +26,34 @@ export function parseChecksums(text: string): ChecksumEntry[] {
     if (line.startsWith("-----BEGIN PGP SIGNATURE")) inSignature = true;
     if (line.startsWith("-----END PGP SIGNATURE")) { inSignature = false; continue; }
     if (!line || inSignature || line.startsWith("#") || line.startsWith("-----") || /^Hash:/i.test(line)) continue;
-    let m = BSD.exec(line);
-    if (m) {
-      const a = algo(m[1], m[3]);
-      if (a) out.push({ name: m[2].trim(), hash: m[3].toLowerCase(), algorithm: a });
+    let match = BSD.exec(line);
+    if (match) {
+      const found = algo(match[1], match[3]);
+      if (found) out.push({ name: match[2].trim(), hash: match[3].toLowerCase(), algorithm: found });
       continue;
     }
-    m = GNU.exec(line);
-    if (m) {
-      const a = algo(null, m[1]);
-      if (a) out.push({ name: m[2].trim().replace(/^\.\//, ""), hash: m[1].toLowerCase(), algorithm: a });
+    match = GNU.exec(line);
+    if (match) {
+      const found = algo(null, match[1]);
+      if (found) out.push({ name: match[2].trim().replace(/^\.\//, ""), hash: match[1].toLowerCase(), algorithm: found });
       continue;
     }
-    m = BARE.exec(line);
-    if (m) {
-      const a = algo(null, m[1]);
-      if (a) out.push({ name: null, hash: m[1].toLowerCase(), algorithm: a });
+    match = BARE.exec(line);
+    if (match) {
+      const found = algo(null, match[1]);
+      if (found) out.push({ name: null, hash: match[1].toLowerCase(), algorithm: found });
     }
   }
   return out;
 }
 
-const base = (n: string) => n.split(/[\\/]/).pop() ?? n;
+const base = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 /** The entry for `filename`: exact name, then base name, then case-insensitive; a lone entry (e.g. x.iso.sha256)
  * matches anything. Prefers the strongest algorithm when a file lists several for the same name. */
 export function findChecksum(entries: ChecksumEntry[], filename: string): ChecksumEntry | null {
   if (entries.length === 1) return entries[0];
-  const strength = (e: ChecksumEntry) => -Object.values(BY_LENGTH).indexOf(e.algorithm);
+  const strength = (entry: ChecksumEntry) => -Object.values(BY_LENGTH).indexOf(entry.algorithm);
   const pick = (hits: ChecksumEntry[]) => hits.sort((a, b) => strength(a) - strength(b))[0] ?? null;
   if (!filename) return null;
   return pick(entries.filter((e) => e.name === filename))

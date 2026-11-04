@@ -4,6 +4,9 @@ import { useApi, when } from "../hooks";
 import { ChecksumDrop } from "../components/ChecksumDrop";
 import { Card, ErrorBox, Loading } from "../components/ui";
 
+// The ISO library: images on the cluster's ISO storages, downloads from VALOR's catalog (checksums checked), and
+// your own uploads or URL downloads with an optional checksum.
+
 interface Iso { volid: string; storage: string; name: string; size: number; ctime: number; writable: boolean }
 interface Entry { id: string; title: string; kind: string; family?: string; install?: string; signed: boolean; checksum: boolean; note: string; present: string[] }
 interface Task { upid: string; kind: string; filename: string; user: string; started: number; running: boolean; ok: boolean; exitstatus?: string; progress: number | null; last: string; verified?: string }
@@ -24,8 +27,8 @@ export function Library({ canAdd, canDelete }: { canAdd: boolean; canDelete: boo
   };
 
   if (lib.loading && !lib.data) return <Loading />;
-  const running = tasks.data?.tasks.filter((t) => t.running) ?? [];
-  const recent = tasks.data?.tasks.filter((t) => !t.running).slice(0, 5) ?? [];
+  const running = tasks.data?.tasks.filter((task) => task.running) ?? [];
+  const recent = tasks.data?.tasks.filter((task) => !task.running).slice(0, 5) ?? [];
   return (
     <>
       <ErrorBox error={err ?? lib.error} />
@@ -33,17 +36,17 @@ export function Library({ canAdd, canDelete }: { canAdd: boolean; canDelete: boo
       {(running.length > 0 || recent.length > 0) && (
         <Card title="Downloads and uploads">
           <div className="stack">
-            {[...running, ...recent].map((t) => (
-              <div key={t.upid}>
+            {[...running, ...recent].map((task) => (
+              <div key={task.upid}>
                 <div className="row">
-                  <b className="mono">{t.filename}</b>
-                  <span className={`badge ${t.running ? "info" : t.ok ? "ok" : "bad"}`}>{t.running ? t.kind + "ing" : t.ok ? "done" : t.exitstatus}</span>
-                  <span className="muted small">{t.user} · {when(t.started)} · {t.verified}</span>
+                  <b className="mono">{task.filename}</b>
+                  <span className={`badge ${task.running ? "info" : task.ok ? "ok" : "bad"}`}>{task.running ? task.kind + "ing" : task.ok ? "done" : task.exitstatus}</span>
+                  <span className="muted small">{task.user} · {when(task.started)} · {task.verified}</span>
                 </div>
-                {t.running && (
-                  <div className="progress"><div style={{ width: `${t.progress ?? 2}%` }} /></div>
+                {task.running && (
+                  <div className="progress"><div style={{ width: `${task.progress ?? 2}%` }} /></div>
                 )}
-                {!t.ok && !t.running && <div className="small muted">{t.last}</div>}
+                {!task.ok && !task.running && <div className="small muted">{task.last}</div>}
               </div>
             ))}
           </div>
@@ -51,20 +54,20 @@ export function Library({ canAdd, canDelete }: { canAdd: boolean; canDelete: boo
       )}
       <Card title="Catalog" actions={<span className="muted small">downloads go to <b>{lib.data?.target || "–"}</b></span>}>
         <div className="grid cols-2">
-          {cat.data?.entries.map((e) => (
-            <div key={e.id} className="card" style={{ padding: 14 }}>
+          {cat.data?.entries.map((entry) => (
+            <div key={entry.id} className="card" style={{ padding: 14 }}>
               <div className="row" style={{ gap: 6 }}>
-                <b className="grow">{e.title}</b>
-                <span className={`badge ${e.kind === "windows" ? "info" : ""}`}>{e.kind}</span>
+                <b className="grow">{entry.title}</b>
+                <span className={`badge ${entry.kind === "windows" ? "info" : ""}`}>{entry.kind}</span>
               </div>
               <div className="small muted" style={{ margin: "6px 0" }}>
-                {e.signed ? "Signed checksum list (key pinned)" : e.checksum ? "Checksum over HTTPS" : "HTTPS only - " + e.note}
-                {e.install && <> · unattended install: {e.install}</>}
+                {entry.signed ? "Signed checksum list (key pinned)" : entry.checksum ? "Checksum over HTTPS" : "HTTPS only - " + entry.note}
+                {entry.install && <> · unattended install: {entry.install}</>}
               </div>
               <div className="row">
-                {e.present.length ? <span className="badge ok">on the cluster: {e.present.join(", ")}</span>
-                  : canAdd ? <button className="btn small primary" disabled={busy === e.id} onClick={() => fetchEntry(e.id)}>
-                      {busy === e.id ? "Starting…" : "Download"}</button>
+                {entry.present.length ? <span className="badge ok">on the cluster: {entry.present.join(", ")}</span>
+                  : canAdd ? <button className="btn small primary" disabled={busy === entry.id} onClick={() => fetchEntry(entry.id)}>
+                      {busy === entry.id ? "Starting…" : "Download"}</button>
                   : <span className="muted small">not downloaded</span>}
               </div>
             </div>
@@ -83,17 +86,17 @@ export function Library({ canAdd, canDelete }: { canAdd: boolean; canDelete: boo
             <table>
               <thead><tr><th>File</th><th>Storage</th><th>Size</th><th>Added</th><th></th></tr></thead>
               <tbody>
-                {lib.data.isos.map((i) => (
-                  <tr key={i.volid}>
-                    <td className="mono">{i.name}</td>
-                    <td>{i.storage}</td>
-                    <td className="nowrap">{gib(i.size)}</td>
-                    <td className="nowrap">{when(i.ctime)}</td>
+                {lib.data.isos.map((iso) => (
+                  <tr key={iso.volid}>
+                    <td className="mono">{iso.name}</td>
+                    <td>{iso.storage}</td>
+                    <td className="nowrap">{gib(iso.size)}</td>
+                    <td className="nowrap">{when(iso.ctime)}</td>
                     <td className="right">
-                      {canDelete && i.writable && (
+                      {canDelete && iso.writable && (
                         <button className="btn small danger" onClick={async () => {
-                          if (!confirm(`Delete ${i.name} from ${i.storage}?`)) return;
-                          try { await del(`/api/isos/${encodeURIComponent(i.volid)}`); refresh(); } catch (e) { setErr(e as ApiError); }
+                          if (!confirm(`Delete ${iso.name} from ${iso.storage}?`)) return;
+                          try { await del(`/api/isos/${encodeURIComponent(iso.volid)}`); refresh(); } catch (e) { setErr(e as ApiError); }
                         }}>Delete</button>
                       )}
                     </td>
@@ -109,7 +112,7 @@ export function Library({ canAdd, canDelete }: { canAdd: boolean; canDelete: boo
 }
 
 const ALGORITHMS = ["sha256", "sha512", "sha384", "sha224", "sha1", "md5"];
-const safeName = (n: string) => n.replace(/[^A-Za-z0-9._+=-]/g, "_");
+const safeName = (name: string) => name.replace(/[^A-Za-z0-9._+=-]/g, "_");
 
 function UrlDownload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError) => void }) {
   const [url, setUrl] = useState("");
@@ -137,11 +140,11 @@ function UrlDownload({ onDone, onError }: { onDone: () => void; onError: (e: Api
           </label>
           <label className="field" style={{ width: 120 }}>Algorithm
             <select name="algorithm" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
-              {ALGORITHMS.map((a) => <option key={a}>{a}</option>)}
+              {ALGORITHMS.map((name) => <option key={name}>{name}</option>)}
             </select>
           </label>
         </div>
-        <ChecksumDrop filename={filename} onChecksum={(h, a) => { setChecksum(h); setAlgorithm(a); }} />
+        <ChecksumDrop filename={filename} onChecksum={(hash, algo) => { setChecksum(hash); setAlgorithm(algo); }} />
         <div className="row end"><button className="btn primary" disabled={!url || !filename}>Download to the cluster</button></div>
       </form>
     </Card>
@@ -157,15 +160,15 @@ function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError
   const [phase, setPhase] = useState("");
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const f = file.current?.files?.[0];
-    if (!f) return;
-    const name = safeName(f.name);
-    const q = new URLSearchParams({ filename: name, ...(checksum ? { checksum, ...(algorithm ? { algorithm } : {}) } : {}) });
+    const chosen = file.current?.files?.[0];
+    if (!chosen) return;
+    const name = safeName(chosen.name);
+    const query = new URLSearchParams({ filename: name, ...(checksum ? { checksum, ...(algorithm ? { algorithm } : {}) } : {}) });
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/api/isos/upload?${q}`);
+    xhr.open("POST", `/api/isos/upload?${query}`);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.setRequestHeader("X-CSRF-Token", csrfToken());
-    xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) setPct((ev.loaded / ev.total) * 100); };
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) setPct((event.loaded / event.total) * 100); };
     xhr.upload.onload = () => setPhase("VALOR is copying the file to the cluster…");
     xhr.onload = () => {
       setPct(null); setPhase("");
@@ -174,7 +177,7 @@ function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError
     };
     xhr.onerror = () => { setPct(null); setPhase(""); onError("Upload failed (network)."); };
     setPct(0); setPhase("Uploading to VALOR…");
-    xhr.send(f);
+    xhr.send(chosen);
   };
   return (
     <Card title="Upload an ISO">
@@ -183,7 +186,7 @@ function Upload({ onDone, onError }: { onDone: () => void; onError: (e: ApiError
         <label className="field">Checksum <span className="hint">optional; VALOR refuses the file if it does not match (algorithm from its length)</span>
           <input name="checksum" value={checksum} onChange={(e) => { setChecksum(e.target.value.trim()); setAlgorithm(""); }} className="mono" />
         </label>
-        <ChecksumDrop filename={name} onChecksum={(h, a) => { setChecksum(h); setAlgorithm(a); }} />
+        <ChecksumDrop filename={name} onChecksum={(hash, algo) => { setChecksum(hash); setAlgorithm(algo); }} />
         {pct !== null && <><div className="progress"><div style={{ width: `${pct}%` }} /></div><div className="small muted">{phase} {pct < 100 ? `${pct.toFixed(0)}%` : ""}</div></>}
         <div className="row end"><button className="btn primary" disabled={pct !== null}>Upload</button></div>
       </form>
