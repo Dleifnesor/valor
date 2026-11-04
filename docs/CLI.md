@@ -26,7 +26,7 @@ Runs as root on a Proxmox VE 8.2+ node, from a clone of the repository. Details 
 | `./install.sh --status` | What is installed, and whether the web UI answers. |
 | `./install.sh --upgrade [--yes]` | Push this checkout into the VALOR VM. Data is kept; waits for running jobs first. |
 | `./install.sh --template <os> [--rebuild]` | Build another OS template, or replace one with a fresh build. |
-| `./install.sh --uninstall [--purge-ranges]` | Remove VALOR; range VMs stay unless `--purge-ranges`. |
+| `./install.sh --uninstall [--purge-ranges] [--yes]` | Remove VALOR; range VMs stay unless `--purge-ranges`. Asks first; `--yes` confirms (required when there is no terminal to ask on). |
 
 Other options: `--id <id>` (the instance id, default `valor`, for more than one installation on a cluster),
 `--version`, `--help`.

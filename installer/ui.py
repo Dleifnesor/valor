@@ -113,7 +113,11 @@ def choose(question: str, options: list[tuple[str, str]], default: str) -> str:
 
 # confirm(): a yes/no question (Y/n or y/N depending on the default) OwO *nods yes*
 def confirm(question: str, default: bool = True) -> bool:
-    if ASSUME_YES or not sys.stdin.isatty():
+    """Yes/no question; Enter keeps the default. --yes answers yes (it accepts confirmations, whatever the
+    default); with no terminal to ask on and no --yes, the default is the answer."""
+    if ASSUME_YES:
+        return True
+    if not sys.stdin.isatty():
         return default
     hint = "Y/n" if default else "y/N"
     try:

@@ -131,6 +131,7 @@ again.
 ./install.sh --template rocky-10 --rebuild  # a fresh build (current updates); the old template is removed
 ./install.sh --uninstall                    # remove VALOR, keep range VMs
 ./install.sh --uninstall --purge-ranges     # remove VALOR and every range VM
+./install.sh --uninstall --yes              # no question asked (scripts, no terminal)
 ```
 
 Break-glass, as root on the node (works even if the network is broken):

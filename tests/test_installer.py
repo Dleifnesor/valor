@@ -192,3 +192,89 @@ def test_bridge_check_ignores_formatting():
     assert removed == [] and "auto vmbr100" in added
     removed, _ = _new_lines(before, after.replace("\tgateway 10.0.0.1\n", ""))
     assert removed == ["gateway 10.0.0.1"]
+
+
+# --- uninstall: --yes confirms, no terminal without --yes refuses, a person still gets asked -------------------
+
+class _Stdin:
+    def __init__(self, tty: bool):
+        self.tty = tty
+
+    def isatty(self) -> bool:
+        return self.tty
+
+
+@pytest.fixture
+def uninstall_env(tmp_path, monkeypatch):
+    """A recorded test installation on a fake cluster: returns run(argv, tty=, typed=) and the calls it made."""
+    from installer import appliance, cli, identity, network, templates, ui
+    from installer import record as R
+    monkeypatch.setattr(R, "RECORD_DIR", tmp_path / "rec")
+    monkeypatch.setattr(R, "LOCK_DIR", tmp_path / "lock")
+    monkeypatch.setattr(ui, "ASSUME_YES", False)                         # main() sets it; restored afterwards
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    recorded = {"instance": "t1", "answers": {"id": "t1"}, "steps": {"installed": "done"},
+                "objects": {"vm": {"vmid": 4000}, "bridge": {"name": "vmbr101", "created": True}}}
+    record_file = tmp_path / "rec" / "t1.json"
+    record_file.parent.mkdir()
+    record_file.write_text("{}")
+    calls: list[tuple] = []
+    monkeypatch.setattr(cli, "collect", lambda instance, check_net: facts(record=recorded))
+    monkeypatch.setattr(appliance, "pool_vms", lambda pool: [{"vmid": 4010, "name": "web1"}])
+    monkeypatch.setattr(appliance, "destroy", lambda vmid: calls.append(("destroy VALOR VM", vmid)))
+    monkeypatch.setattr(cli, "run", lambda argv, check=True: calls.append(tuple(argv)))
+    monkeypatch.setattr(templates, "remove_built", lambda rec: calls.append(("remove templates",)))
+    monkeypatch.setattr(identity, "remove", lambda rec: calls.append(("remove identity",)))
+    monkeypatch.setattr(cli, "pvesh", lambda *a: calls.append(("pvesh",) + a))
+    monkeypatch.setattr(network, "remove_bridge", lambda node, name: calls.append(("remove bridge", name)))
+
+    def run(*argv: str, tty: bool, typed: str = "") -> int:
+        monkeypatch.setattr("sys.stdin", _Stdin(tty))
+        monkeypatch.setattr("builtins.input", lambda prompt: typed)
+        try:
+            cli.main(["--uninstall", "--id", "t1", *argv])
+        except SystemExit as e:
+            return e.code
+        return 0
+
+    run.calls = calls
+    run.record_file = record_file
+    return run
+
+
+def test_uninstall_yes_removes_without_asking(uninstall_env):
+    assert uninstall_env("--yes", tty=False) == 0
+    calls = uninstall_env.calls
+    assert ("destroy VALOR VM", 4000) in calls and ("remove identity",) in calls
+    assert not uninstall_env.record_file.exists()
+    assert not any(c[:2] == ("qm", "destroy") for c in calls)            # range VMs stay without --purge-ranges
+    assert ("remove templates",) not in calls and ("remove bridge", "vmbr101") not in calls    # ranges use them
+
+
+def test_uninstall_yes_purge_ranges_deletes_range_vms(uninstall_env):
+    assert uninstall_env("--yes", "--purge-ranges", tty=False) == 0
+    calls = uninstall_env.calls
+    assert ("qm", "destroy", "4010", "--purge", "1") in calls
+    assert ("remove templates",) in calls and ("remove bridge", "vmbr101") in calls
+
+
+def test_uninstall_without_terminal_or_yes_refuses_loudly(uninstall_env):
+    code = uninstall_env(tty=False)
+    assert code not in (0, None) and "--yes" in str(code)               # a message, so exit status 1
+    assert uninstall_env.calls == [] and uninstall_env.record_file.exists()
+
+
+@pytest.mark.parametrize("typed, removed", [("", False), ("n", False), ("y", True), ("yes", True)])
+def test_uninstall_asks_a_person_and_defaults_to_no(uninstall_env, typed, removed):
+    assert uninstall_env(tty=True, typed=typed) == 0
+    assert (("destroy VALOR VM", 4000) in uninstall_env.calls) is removed
+    assert uninstall_env.record_file.exists() is not removed
+
+
+def test_confirm_yes_accepts_whatever_the_default(monkeypatch):
+    from installer import ui
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr(ui, "ASSUME_YES", True)
+    assert ui.confirm("Remove?", default=False) is True and ui.confirm("Wait?", default=True) is True
+    monkeypatch.setattr(ui, "ASSUME_YES", False)                         # no terminal, no --yes: the default
+    assert ui.confirm("Remove?", default=False) is False and ui.confirm("Wait?", default=True) is True
