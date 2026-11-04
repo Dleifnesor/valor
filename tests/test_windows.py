@@ -1,5 +1,7 @@
+# *tests the Windows bits* OwO tests/test_windows.py: tests for WINDOWS hosts (summary in the docstring)! ^w^
 """Windows hosts: planning, dependency order, scripts (no cluster needed)."""
 
+# pytest and the modules under test UwU
 import pytest
 
 from valor import windows
@@ -9,6 +11,7 @@ from valor.plan import desired_state
 from valor.roles import load_role
 from valor.spec import normalize, parse_spec
 
+# SPEC: a small Active Directory lab: two domain controllers, a Windows 11 member, and a Linux web server (YAML) >w<
 SPEC = """
 apiVersion: valor/v1
 name: corp
@@ -39,11 +42,14 @@ policy:
 """
 
 
+# corp: that spec, parsed and normalized OwO
 @pytest.fixture
 def corp():
     return normalize(parse_spec(SPEC), "ubuntu-24.04")
 
 
+# Windows desired state: e1000e NIC, Windows family in the hardware, the catalog's minimum sizes, two cores for
+# Windows 11; Linux hosts' hardware stays as before (so their hashes don't change) ^w^
 def test_windows_desired_state(cfg, corp):
     ds = {d.host: d for d in desired_state(cfg, corp)}
     dc1, pc1, web = ds["dc1"], ds["pc1"], ds["web"]
@@ -54,6 +60,8 @@ def test_windows_desired_state(cfg, corp):
     assert ds["rtr"].family == "debian"
 
 
+# Dependency waves: DC first (with the Linux host), then the replica, then the member; an already-converged DC isn't
+# waited for UwU
 def test_dependency_waves(cfg, corp):
     ds = desired_state(cfg, corp)
     waves = [[d.host for d in w] for w in converge_waves(corp, ds[1:], cfg)]
@@ -62,6 +70,7 @@ def test_dependency_waves(cfg, corp):
     assert [[d.host for d in w] for w in converge_waves(corp, [x for x in ds[1:] if x.host != "dc1"], cfg)][0] == ["dc2", "web"]
 
 
+# A host waiting on itself through a chain is a dependency cycle >w<
 def test_dependency_cycle(cfg):
     spec = normalize(parse_spec(SPEC.replace("ad-dc, params: {domain: corp.lab}",
                                              "ad-member, params: {domain: corp.lab, dc: pc1}")), "ubuntu-24.04")
@@ -71,6 +80,8 @@ def test_dependency_cycle(cfg):
     assert e.value.code == "dependency_cycle"
 
 
+# Scripts quote safely (a password with ' inside), include licensing and the evaluation renewal, wrap roles with
+# their variables, and probe with TcpClient OwO
 def test_scripts_quote_and_wrap():
     s = windows.prep_script("dc1", "10.61.0.10", 24, "10.61.0.1", ["1.1.1.1"], "it's-a-p4ss")
     assert "'it''s-a-p4ss'" in s and "Rename-Computer" in s and windows.PREP_OK in s
@@ -83,6 +94,7 @@ def test_scripts_quote_and_wrap():
     assert "TcpClient" in windows.probe_script("tcp", "10.0.0.1", 389)
 
 
+# Windows roles are Windows-only; baselines pick the Windows twin; the Windows baseline bundle reports every control ^w^
 def test_windows_roles_and_baseline(cfg):
     from valor.baseline import baseline_for
     role = load_role(cfg.roles_dir, "ad-dc")
@@ -95,6 +107,7 @@ def test_windows_roles_and_baseline(cfg):
     assert windows.baseline_bundle(b, False, fix=True).count("VALOR-CONTROL") == len(b.controls)
 
 
+# Generated passwords always meet Windows' complexity rule (200 tries) UwU
 def test_generated_passwords_meet_windows_complexity():
     from valor.credentials import generate
     for _ in range(200):
@@ -102,6 +115,8 @@ def test_generated_passwords_meet_windows_complexity():
         assert any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw) and "-" in pw and len(pw) >= 14
 
 
+# Login accounts per OS: Linux hosts use the guest user, members the local Administrator, and the domain admin covers
+# DCs and members >w<
 def test_login_accounts_per_os(cfg, corp):
     from valor.cluster import load_catalog
     from valor.credentials import accounts
@@ -111,6 +126,38 @@ def test_login_accounts_per_os(cfg, corp):
     assert a["CORP\\Administrator"]["hosts"] == ["dc1", "dc2", "pc1"] and a["CORP\\Administrator"]["domain"] == "corp.lab"
 
 
+# Console usernames per host: domain first; on a member the local admin is ".\Administrator" OwO
+def test_console_usernames_per_host(cfg, corp):
+    from valor.cluster import load_catalog
+    from valor.credentials import accounts, host_usernames
+    account_list = accounts(corp, load_catalog(cfg), "valor")
+    names = {host: [u["username"] for u in host_usernames(account_list, host)] for host in ("rtr", "web", "dc1", "pc1")}
+    assert names["rtr"] == ["valor"] and names["web"] == ["valor"]
+    assert names["dc1"] == ["CORP\\Administrator"]
+    assert names["pc1"] == ["CORP\\Administrator", ".\\Administrator"]     # a bare name signs in to the domain
+    assert host_usernames(account_list, "gone") == []
+
+
+# The console offers usernames only once a login exists and the spec is there ^w^
+def test_console_offers_the_vms_usernames(cfg, tmp_path):
+    from valor import credentials
+    from valor.config import Config
+    from valor.crypto import Box
+    from valor.web.consoles import _usernames
+    key = tmp_path / "secret.key"
+    Box.create_key_file(key)
+    kcfg = Config(**{**cfg.__dict__, "secret_key_file": str(key), "data_dir": str(tmp_path / "data")})
+    kcfg.ranges_dir.mkdir(parents=True)
+    (kcfg.ranges_dir / "corp.yaml").write_text(SPEC)
+    assert _usernames(kcfg, "corp", "web") == []                                  # no login before the first build
+    credentials.ensure(kcfg, "corp")
+    assert _usernames(kcfg, "corp", "web") == [{"username": "valor", "kind": "linux"}]
+    assert [u["username"] for u in _usernames(kcfg, "corp", "pc1")] == ["CORP\\Administrator", ".\\Administrator"]
+    (kcfg.ranges_dir / "corp.yaml").unlink()
+    assert _usernames(kcfg, "corp", "web") == []                                  # no spec: offer nothing
+
+
+# The catalog lists Windows roles with their families and params UwU
 def test_catalog_lists_windows_roles(cfg):
     from valor.web.ranges import role_list
     roles = {r["name"]: r for r in role_list(cfg)}
@@ -118,6 +165,7 @@ def test_catalog_lists_windows_roles(cfg):
     assert roles["nginx"]["families"] == ["debian", "rhel"] and "domain" in roles["ad-member"]["params"]
 
 
+# ValidatePVE: just enough cluster for validate_cluster (also used by test_compliance.py) >w<
 class ValidatePVE:
     """Just enough cluster for validate_cluster: a VLAN-aware bridge, memory and storage."""
 
@@ -135,6 +183,7 @@ class ValidatePVE:
         return {"avail": 100 * 2**30}
 
 
+# The range baseline must be a LINUX profile: a Windows one is a single clear error; "none" only warns OwO
 @pytest.mark.parametrize("baseline, error, warning", [
     ("ubuntu-l1", None, None),
     ("windows-l1", "is the Windows baseline", None),       # a model once "fixed" a spec by turning hardening off
@@ -167,6 +216,8 @@ hosts:
     assert v["ok"] is (error is None), v["errors"]
 
 
+# A domain member must be able to reach its DCs under the policy, or validation names the missing rule (a real bug
+# from 2026-10-25); host-to-host rules work too ^w^
 def test_a_domain_member_must_reach_its_domain_controllers(cfg, monkeypatch):
     """hr-nist171 (2026-10-25): the file server's segment had no rule to the DCs' segment, so ad-member waited for
     DNS until it timed out. Validation names the missing rule before anything is built."""
