@@ -90,7 +90,10 @@ def _overview(spec: RangeSpec, spec_path: Path | None, last_apply: dict, last_ve
     apply_seconds = f" · {last_apply.get('seconds')} s" if last_apply.get("seconds") is not None else ""
     summary = last_verify.get("summary", {})
     verified = "not run"
-    if last_verify:
+    if last_verify and not summary:            # it stopped with an error before testing anything
+        verified = (f"{last_verify.get('finished', last_verify.get('started', '-'))} · could not run: "
+                    f"{last_verify.get('message', last_verify.get('error', '-'))}")
+    elif last_verify:
         verified = (f"{last_verify.get('finished', last_verify.get('started', '-'))} · "
                     f"{'PASS' if last_verify.get('ok') else 'FAIL'} · "
                     f"tests {summary.get('tests_passed')}/{summary.get('tests_total')} · "
@@ -176,8 +179,14 @@ def _verification(cfg, spec: RangeSpec, last_verify: dict) -> list[str]:
         lines += [f"| {test['name']} | {test['expect']} |" for test in effective_tests(spec, cfg.probe)]
         return lines + [""]
 
-    # Verified: the scores in one line, then one row per test with ✅/❌, then the baseline matrix ^w^
-    summary = last_verify.get("summary", {})
+    # Stopped with an error before testing anything: why, and what to do OwO
+    summary = last_verify.get("summary")
+    if not summary:
+        lines += [f"**Could not run**: {last_verify.get('message', last_verify.get('error', '-'))}", ""]
+        return lines + ([f"Hint: {last_verify['hint']}", ""] if last_verify.get("hint") else [])
+
+    # Verified: the scores in one line, checks that could not run, one row per test with ✅/❌, then the baseline
+    # matrix ^w^
     lines += [
         f"**{'PASS' if last_verify.get('ok') else 'FAIL'}** · "
         f"tests {summary.get('tests_passed')}/{summary.get('tests_total')} · "
@@ -185,6 +194,9 @@ def _verification(cfg, spec: RangeSpec, last_verify: dict) -> list[str]:
         f"baseline controls {summary.get('baseline_passed')}/{summary.get('baseline_total')} · "
         f"{last_verify.get('seconds')} s",
         "",
+        *[f"- Could not run on {error['host']} ({error['check']}): {error['message']}"
+          for error in last_verify.get("errors", [])],
+        *([""] if last_verify.get("errors") else []),
         "| Test | From | Target | Expect | Observed | Result |",
         "|---|---|---|---|---|---|",
     ]

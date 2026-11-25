@@ -18,10 +18,10 @@ from __future__ import annotations
 import ipaddress
 
 # compliance, baseline loaders, ISO lookups, cluster helpers, ValorError, PVE, role loading/env, RangeSpec OwO
-from . import compliance
+from . import capacity, compliance
 from .baseline import baseline_for, load_baseline
 from .isos import installer_iso, list_isos
-from .cluster import load_catalog, range_vms, templates, vlans_in_use
+from .cluster import load_catalog, range_tag, range_vms, tag_list, templates, vlans_in_use
 from .errors import ValorError
 from .pve import PVE
 from .roles import load_role, role_env
@@ -268,12 +268,18 @@ class _ClusterChecks:
             if f"{spec.name}-{name}" in others:
                 self.error("name", f"VM name {spec.name}-{name} is already used by another range")
 
-    # resources: enough free memory on the node for the whole range (error), and at least 5 GiB free on storage
-    # (warning) >w< *ticks the last box*
+    # resources: the range must fit the node's RAM at all (error; VALOR's adjustable limit is checked by the plan),
+    # and at least 5 GiB free on storage (warning). The range's VMs that already run are already in use, so only
+    # the rest counts >w< *ticks the last box*
     def resources(self) -> None:
         needed = self.spec.router.memory + sum(host.memory for host in self.spec.hosts)
-        free = self.pve.node_status()["memory"]["free"] // 2**20
-        if needed > free:
-            self.error("resources", f"range needs {needed} MiB RAM but only {free} MiB is free on {self.cfg.node}")
+        running = sum(int(vm.get("maxmem") or 0) // 2**20 for vm in self.pve.resources()
+                      if range_tag(self.spec.name) in tag_list(vm.get("tags"))
+                      and vm.get("status") == "running" and vm.get("node") == self.cfg.node)
+        node = capacity.judge(capacity.measure(self.pve), needed - running)
+        if not node["fits_hardware"]:
+            self.error("resources", f"range needs {node['additional_memory_mib']} MiB more RAM than {self.cfg.node} "
+                                    f"can hold ({node['memory_in_use_mib']} of {node['memory_total_mib']} MiB in "
+                                    f"use; VMs may use at most {round(node['hardware_fraction'] * 100)}%)")
         if self.pve.storage_status().get("avail", 0) < 5 * 2**30:
             self.warnings.append({"location": "resources", "message": f"storage {self.cfg.storage} has under 5 GiB free"})

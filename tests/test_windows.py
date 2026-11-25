@@ -177,7 +177,11 @@ class ValidatePVE:
                 for b in (self.cfg.segment_bridge, self.cfg.uplink_bridge)]
 
     def node_status(self):
-        return {"memory": {"free": 64 * 2**30}, "cpuinfo": {"flags": "vmx"}}
+        return {"memory": {"total": 128 * 2**30, "free": 64 * 2**30, "available": 64 * 2**30},
+                "cpuinfo": {"flags": "vmx"}}
+
+    def resources(self):
+        return []
 
     def storage_status(self):
         return {"avail": 100 * 2**30}

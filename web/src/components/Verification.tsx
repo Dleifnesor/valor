@@ -2,10 +2,34 @@
 // What the last verification found: the connectivity and isolation tests, the security baseline on each host, and how
 // that maps onto compliance framework requirements. Before the first verification it lists the tests that WILL run
 // *wags tail*
-import { when } from "../hooks";
-// when (dates), StateBadge, and the range detail type UwU
+import { openTask, when } from "../hooks";
+// when (dates), openTask, StateBadge, and the range detail and verification types UwU
 import { StateBadge } from "./ui";
 import type { Detail } from "../pages/RangeDetail";
+import type { VerifyError, VerifySummary } from "../types";
+
+/** A verification in a few words: "passed · 12/12 tests", "failed · 10/12 tests", or "could not run". */
+// verifyLabel: for the range list and the summary; a verification that stopped with an error has no counts >w<
+export function verifyLabel(result: { ok: boolean; summary?: VerifySummary | null }): string {
+  if (!result.summary) return result.ok ? "passed" : "could not run";
+  return `${result.ok ? "passed" : "failed"} · ${result.summary.tests_passed}/${result.summary.tests_total} tests`;
+}
+
+/** Checks that could not run (a VM's guest agent failing): they count as failed, and this says why. */
+// CouldNotRun: one line per VM and check, with the hint when there is one OwO
+function CouldNotRun({ errors }: { errors: VerifyError[] }) {
+  return (
+    <div className="alert error">
+      Some checks could not run, so they count as failed:
+      <ul>
+        {errors.map((error, i) => (
+          <li key={i}><b>{error.host}</b> ({error.check}): {error.message}
+            {error.hint && <div className="small">Hint: {error.hint}</div>}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 // A range's Verification section: what the last `valor verify` found - the connectivity and isolation tests, the
 // security baseline on each host, and how that maps onto the compliance frameworks' requirements. Before the
@@ -48,11 +72,28 @@ export function Verification({ data }: { data: Detail }) {
       </div>
     );
   }
+  // Could not run at all (e.g. a VM was off): why, and the tests the next verification runs ^w^
+  if (!result.summary) {
+    const at = result.finished ?? result.started;
+    return (
+      <div className="card-body stack">
+        <div className="alert error">
+          The last verification could not run{at ? ` (${when(at)})` : ""}: {result.message ?? result.error ?? "unknown error"}
+          {result.hint && <div className="small">Hint: {result.hint}</div>}
+          {result.job && <div className="small"><button className="link" onClick={() => openTask(result.job!)}>Open the task</button></div>}
+        </div>
+        <div className="muted">These are the tests the verification runs:</div>
+        <Tests data={data} />
+      </div>
+    );
+  }
+  const summary = result.summary;
+  const baseline = result.baseline ?? {};
   // the baseline table: one row per control (in first-seen order), one column per host
   // Collect the controls (rows) and hosts (columns) for the baseline table UwU
-  const hosts = Object.keys(result.baseline || {});
+  const hosts = Object.keys(baseline);
   const controls: { control: string; title: string; area: string }[] = [];
-  for (const rows of Object.values(result.baseline || {})) {
+  for (const rows of Object.values(baseline)) {
     for (const row of rows) if (!controls.find((known) => known.control === row.control)) controls.push(row);
   }
   // The results >w<
@@ -61,19 +102,20 @@ export function Verification({ data }: { data: Detail }) {
       {/* Summary: passed/failed, tests, isolation, baseline, and when */}
       <div className="row">
         <StateBadge state={result.ok ? "ok" : "failed"} label={result.ok ? "passed" : "failed"} />
-        <span>tests {result.summary.tests_passed}/{result.summary.tests_total}</span>
-        <span>· isolation {result.summary.isolation_passed}/{result.summary.isolation_total}</span>
-        <span>· baseline {result.summary.baseline_passed}/{result.summary.baseline_total}</span>
-        <span className="muted">· {when(result.finished)}</span>
+        <span>tests {summary.tests_passed}/{summary.tests_total}</span>
+        <span>· isolation {summary.isolation_passed}/{summary.isolation_total}</span>
+        <span>· baseline {summary.baseline_passed}/{summary.baseline_total}</span>
+        {result.finished && <span className="muted">· {when(result.finished)}</span>}
       </div>
-      {/* The baseline claim (e.g. "aligned with... not a certification") */}
-      {result.summary.baseline_claim && <div className="muted small">Baseline results are {result.summary.baseline_claim}.</div>}
+      {/* Checks that could not run, then the baseline claim (e.g. "aligned with... not a certification") */}
+      {result.errors && result.errors.length > 0 && <CouldNotRun errors={result.errors} />}
+      {summary.baseline_claim && <div className="muted small">Baseline results are {summary.baseline_claim}.</div>}
       {/* Every test: name, from, target, expected, observed (with detail), pass/fail */}
       <div className="table-wrap">
         <table>
           <thead><tr><th>Test</th><th>From</th><th>Target</th><th>Expect</th><th>Observed</th><th></th></tr></thead>
           <tbody>
-            {result.tests.map((test) => (
+            {(result.tests ?? []).map((test) => (
               <tr key={test.name}>
                 <td>{test.name}</td><td>{test.from}</td><td className="mono">{test.target}</td><td>{test.expect}</td>
                 <td>{test.observed} <span className="muted small">({test.detail})</span></td>
@@ -93,7 +135,7 @@ export function Verification({ data }: { data: Detail }) {
                 <tr key={control.control}>
                   <td>{control.title}</td><td className="muted">{control.area}</td>
                   {hosts.map((host) => {
-                    const row = result.baseline[host].find((x) => x.control === control.control);
+                    const row = baseline[host].find((x) => x.control === control.control);
                     return <td key={host}>{!row ? "–" : row.after === "pass" ? <span className="badge ok">pass</span> : <span className="badge bad">{row.after}</span>}</td>;
                   })}
                 </tr>

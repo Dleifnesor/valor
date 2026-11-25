@@ -80,7 +80,8 @@ Proxmox nodes only.
 | Area | Module | Responsibility |
 |---|---|---|
 | Spec | [`spec.py`](../valor/spec.py) | Pydantic models (`RangeSpec`, `Segment`, `Host`, `Rule`, `Test`, `WireGuard`, `Compliance`), safe YAML parsing, defaults, the canonical form and its hash (the spec version), and automatic tests (`effective_tests`). |
-| | [`validate.py`](../valor/validate.py) | Checks against the live cluster: templates exist, VLANs free and in range, networks not reserved or used by other ranges, roles exist and fit the OS family, memory. |
+| | [`validate.py`](../valor/validate.py) | Checks against the live cluster: templates exist, VLANs free and in range, networks not reserved or used by other ranges, roles exist and fit the OS family, the range fits the node's RAM at all. |
+| | [`capacity.py`](../valor/capacity.py) | Node memory for builds: what is really in use (without the page cache, plus what running VMs may still claim), the adjustable limit (default `max_memory_fraction`, or an admin's in `<state_dir>/memory-limit.json`) and the hardware ceiling (RAM minus the host's reserve). A change that adds no memory always fits. |
 | Planning | [`plan.py`](../valor/plan.py) | `desired_state()` turns a spec into one `Desired` per VM with two hashes: `hw_hash` (OS, template, NICs, size) and `conv_hash` (hardware + roles + baseline + policy + login + WireGuard). `make_plan()` compares them with what is stamped on each VM. |
 | Building | [`apply.py`](../valor/apply.py) | The idempotent build ([below](#how-a-build-works-in-code)). `Steps` records every step for the job log, structured errors and the journal. |
 | | [`netpolicy.py`](../valor/netpolicy.py) | Compiles the policy into the router's nftables ruleset: forward default drop, one accept per rule, NAT egress only for `internet: true` segments and never to private or reserved networks. Also the temporary build egress. |

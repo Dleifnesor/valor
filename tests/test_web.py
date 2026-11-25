@@ -433,3 +433,28 @@ def test_checksum_lengths():
     for checksum, algorithm in (("a" * 63, None), ("a" * 64, "sha512"), ("z" * 64, "sha256")):
         with pytest.raises(ValorError):
             isos.check_checksum(checksum, algorithm)
+
+
+# Datacenter > Resources: shows the node's memory, saves a limit up to what the hardware holds, refuses one above
+# it (95% here: the RAM minus the host's reserve), and None goes back to the default ^w^
+def test_resources_settings_save_and_limits(env, monkeypatch):
+    from types import SimpleNamespace
+    from valor import capacity
+    from valor.web import settings as S
+    app, _ = env
+    cfg = app.state.cfg
+    memory = {"total": 256 * 2**30, "free": 64 * 2**30, "available": 100 * 2**30}
+    monkeypatch.setattr(S, "PVE", lambda c: SimpleNamespace(cfg=c, node_status=lambda: {"memory": memory},
+                                                            resources=lambda: []))
+    with client(app) as c:
+        me, _ = enroll(c, "admin")
+        headers = {"X-CSRF-Token": me["csrf"]}
+        shown = c.get("/api/settings/resources").json()
+        assert shown["node"]["hardware_fraction"] == 0.95 and shown["saved"] is None and shown["default_fraction"] == 0.7
+        r = c.put("/api/settings/resources", json={"max_memory_fraction": 0.85}, headers=headers)
+        assert r.status_code == 200 and r.json()["node"]["limit_fraction"] == 0.85
+        assert capacity.limit_fraction(cfg) == 0.85 and capacity.saved_limit(cfg)["by"] == "admin"
+        r = c.put("/api/settings/resources", json={"max_memory_fraction": 0.97}, headers=headers)
+        assert r.status_code == 400 and "95%" in r.json()["message"]
+        r = c.put("/api/settings/resources", json={"max_memory_fraction": None}, headers=headers)
+        assert r.status_code == 200 and r.json()["saved"] is None and capacity.limit_fraction(cfg) == 0.7

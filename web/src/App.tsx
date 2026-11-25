@@ -205,7 +205,7 @@ function Shell({ me, setMe }: { me: Me; setMe: (session: Me | null) => void }) {
       </div>
       {/* The task list, the task viewer dialog, and the right-click menu host */}
       <TaskLog open={logOpen} onOpen={setLogOpen} tab={logTab} onTab={setLogTab} />
-      {task && <Modal title="Task viewer" wide onClose={() => setTask(null)}><JobDetail id={task} /></Modal>}
+      {task && <Modal title="Task viewer" wide onClose={() => setTask(null)}><JobDetail id={task} isAdmin={isAdmin} /></Modal>}
       <ContextMenuHost page={route.join("/")} />
     </div>
   );
@@ -236,7 +236,7 @@ function Datacenter({ me, route, ranges }: { me: Me; route: string[]; ranges: Ra
   if (p0 === "chats") { active = "chats"; page = <Chats isAdmin={isAdmin} />; }
   else if (p0 === "blueprints") { active = "blueprints"; page = <Blueprints canOperate={canOperate} />; }
   else if (p0 === "library") { active = "library"; page = <Library canAdd={canOperate} canDelete={isAdmin} />; }
-  else if (p0 === "jobs") { active = "jobs"; page = p1 ? <JobDetail id={p1} /> : <Jobs />; }
+  else if (p0 === "jobs") { active = "jobs"; page = p1 ? <JobDetail id={p1} isAdmin={isAdmin} /> : <Jobs />; }
   else if (p0 === "users" && isAdmin) { active = "users"; page = <Users me={me} />; }
   else if (p0 === "audit" && isAdmin) { active = "audit"; page = <Audit />; }
   else if (p0 === "settings" && isAdmin) {

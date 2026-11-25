@@ -7,6 +7,7 @@ import { ago, go, useApi } from "../hooks";
 import { Card, ErrorBox, Icon, Loading, StateBadge } from "../components/ui";
 import { showMenu } from "../components/ContextMenu";
 import { rangeMenu } from "../components/RangeActions";
+import { verifyLabel } from "../components/Verification";
 
 // Datacenter -> Summary: VALOR's health checks, the range node's resources, every range with its build and
 // verification state, and the cluster settings VALOR builds with.
@@ -113,7 +114,7 @@ export function Dashboard({ ranges, canOperate }: { ranges: RangeRow[] | null; c
                     <td className="nowrap">{range.last_apply ? <><StateBadge state={range.last_apply.ok ? "ok" : "failed"}
                       label={range.last_apply.ok ? "succeeded" : "failed"} /> <span className="muted small">· {ago(range.last_apply.started)}</span></> : "–"}</td>
                     <td className="nowrap">{range.last_verify ? <StateBadge state={range.last_verify.ok ? "ok" : "failed"}
-                      label={`${range.last_verify.ok ? "passed" : "failed"} · ${range.last_verify.summary?.tests_passed}/${range.last_verify.summary?.tests_total} tests`} /> : "–"}</td>
+                      label={verifyLabel(range.last_verify)} /> : "–"}</td>
                   </tr>
                 ))}
               </tbody>

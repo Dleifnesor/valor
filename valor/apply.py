@@ -40,7 +40,7 @@ from pathlib import Path
 
 # credentials (login), isos/kickstart/windows/wireguard, the baseline bundle, cluster helpers, ValorError, the
 # firewall render + router script, desired state + plan, PVE, role script building, spec helpers, validate_cluster OwO
-from . import credentials, isos, kickstart, windows, wireguard
+from . import capacity, credentials, isos, kickstart, windows, wireguard
 from .baseline import baseline_for, bundle, parse_results
 from .cluster import load_catalog, range_tag, range_vms, render_description, template_ids
 from .errors import ValorError
@@ -707,8 +707,8 @@ class _Build:
         with self.steps.step("plan"):
             plan = make_plan(self.pve, self.spec, self.desired)
             if not plan["node"]["within_limit"]:
-                raise ValorError("insufficient_resources", "the range would exceed the node's memory limit",
-                                 details=plan["node"])
+                message, hint = capacity.refusal(plan["node"])
+                raise ValorError("insufficient_resources", message, details=plan["node"], hint=hint)
         return plan
 
     # ---- phase 2-3: VMs ----

@@ -40,6 +40,8 @@ ACCESS = {
     "GET /api/settings/ldap": "role:admin",
     "PUT /api/settings/ldap": "role:admin",
     "POST /api/settings/ldap/test": "role:admin",
+    "GET /api/settings/resources": "role:admin",
+    "PUT /api/settings/resources": "role:admin",
     "GET /api/audit": "role:admin",
     "GET /api/notifications": "role:viewer",
     "POST /api/notifications/read": "role:viewer",

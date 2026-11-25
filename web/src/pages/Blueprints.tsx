@@ -42,7 +42,8 @@ interface CopyPreview {
 interface Preview {
   copies: CopyPreview[];
   cluster_error: string | null;
-  capacity: { additional_memory_mib: number; memory_total_mib: number; within_limit: boolean } | null;
+  capacity: { additional_memory_mib: number; memory_total_mib: number; within_limit: boolean; fits_hardware: boolean;
+    needed_fraction: number; limit_fraction: number; hardware_fraction: number } | null;
   ok: boolean;
   deploy_hash: string;
 }
@@ -334,7 +335,11 @@ function DeployModal({ bp, onClose }: { bp: Blueprint; onClose: () => void }) {
           {/* Cluster unreachable, or not enough memory for all copies */}
           {preview.cluster_error && <div className="alert warn">Cluster not reachable ({preview.cluster_error}): copies can be saved but not built.</div>}
           {preview.capacity && !preview.capacity.within_limit &&
-            <div className="alert error">Together the copies need {preview.capacity.additional_memory_mib} MiB more memory than the node may use.</div>}
+            <div className="alert error">Together the copies need {preview.capacity.additional_memory_mib} MiB more memory than the
+              node may use (limit {Math.round(preview.capacity.limit_fraction * 100)}%).{" "}
+              {preview.capacity.fits_hardware
+                ? `An administrator can raise the limit to ${Math.round(preview.capacity.needed_fraction * 100)}% or more in Datacenter → Resources (the hardware allows up to ${Math.round(preview.capacity.hardware_fraction * 100)}%).`
+                : "The node's RAM cannot hold them all: deploy fewer copies or give them less memory."}</div>}
           {/* One row per copy: name (and student), its networks, and its plan or problems */}
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table>

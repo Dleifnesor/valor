@@ -75,20 +75,29 @@ def _probe(pve: PVE, vmid: int, proto: str, ip: str, port: int | None, family: s
     return "closed", f"no reply (exit {code})"
 
 
+# WG_SHOW: the router's wg0 port, then one line per peer; exit 127 = WireGuard isn't installed, 1 = wg0 isn't up UwU
+WG_SHOW = "command -v wg >/dev/null || exit 127\nwg show wg0 listen-port && wg show wg0 peers\n"
+
+
 # _wireguard_check: does the router's wg0 listen on the right port and know every peer? UwU
 def _wireguard_check(pve: PVE, router_vmid: int, wg) -> dict:
     """The router's wg0 listens on the spec's port and knows every peer."""
-    port = pve.exec(router_vmid, ["wg", "show", "wg0", "listen-port"], timeout=30)
-    peers = pve.exec(router_vmid, ["wg", "show", "wg0", "peers"], timeout=30)
+    shown = pve.script(router_vmid, WG_SHOW, timeout=30)
+    lines = shown.out.split() if shown.ok else []
     # Listening on the expected port, and as many peers as the spec names >w<
-    listening = port.ok and port.out.strip() == str(wg.port)
-    known = len(peers.out.split()) if peers.ok else 0
+    listening = bool(lines) and lines[0] == str(wg.port)
+    known = max(len(lines) - 1, 0)
     ok = listening and known == len(wg.peers)
+    detail = f"listening: {listening}; peers configured: {known}/{len(wg.peers)}"
+    if shown.exitcode == 127:
+        detail = "WireGuard is not installed on the router: apply the range to set it up"
+    elif not shown.ok:
+        detail = "wg0 is not up on the router: apply the range to set it up"
     # Shaped like a connectivity test, so it shows up in the same list OwO
     return {"name": f"WireGuard access: router listens on udp/{wg.port} for {len(wg.peers)} peer(s)",
             "from": ROUTER, "to": "wireguard", "proto": "udp", "port": wg.port, "expect": "open",
             "origin": "access", "target": f"wg0 udp/{wg.port}", "observed": "open" if ok else "closed",
-            "detail": f"listening: {listening}; peers configured: {known}/{len(wg.peers)}", "pass": ok}
+            "detail": detail, "pass": ok}
 
 
 # _aligned: the wording of the baseline claim: "common CIS Level 1 themes", or the chosen frameworks (honest
@@ -114,18 +123,28 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
     family = {ROUTER: catalog.get(spec.router.os or "", {}).get("family", "debian"),
               **{host.name: catalog.get(host.os or "", {}).get("family", "debian") for host in spec.hosts}}
 
+    # Checks that could not run at all (a VM's guest agent failing): each is reported, the rest still run >w<
+    errors: list[dict] = []
+
     # 1. Connectivity tests, then the WireGuard check ^w^
-    results = _run_tests(pve, spec, vms, family, emit)
+    results = _run_tests(pve, spec, vms, family, emit, errors)
     wireguard = spec.access.wireguard if spec.access else None
     if wireguard:
-        results.append(_wireguard_check(pve, vms[ROUTER].vmid, wireguard))
+        try:
+            results.append(_wireguard_check(pve, vms[ROUTER].vmid, wireguard))
+        except ValorError as e:
+            errors.append({"host": ROUTER, "check": "WireGuard", "message": e.message, "hint": e.hint})
+            results.append({"name": f"WireGuard access: router listens on udp/{wireguard.port}", "from": ROUTER,
+                            "to": "wireguard", "proto": "udp", "port": wireguard.port, "expect": "open",
+                            "origin": "access", "target": f"wg0 udp/{wireguard.port}", "observed": "error",
+                            "detail": e.message, "pass": False})
         emit("test", name=results[-1]["name"], passed=results[-1]["pass"])
 
     # 2. The baseline checks on every VM (when the range has a baseline) UwU
     baseline = load_baseline(pve.cfg.baselines_dir, spec.baseline)
     baseline_rows, baselines_used = ({}, set())
     if baseline:
-        baseline_rows, baselines_used = _check_baselines(pve, spec, vms, wanted, family, emit)
+        baseline_rows, baselines_used = _check_baselines(pve, spec, vms, wanted, family, emit, errors)
 
     # 3. The compliance report (an error message instead, if the mapping is missing) >w<
     try:
@@ -138,9 +157,11 @@ def verify(pve: PVE, spec: RangeSpec, emit=lambda *a, **k: None) -> dict:
     all_rows = [row for rows in baseline_rows.values() for row in rows]
     rows_passed = sum(row["after"] == "pass" for row in all_rows)
     summary = _summary(spec, results, tests_passed, all_rows, rows_passed, baseline, baselines_used, report)
+    summary["errors"] = len(errors)
     return {"range": spec.name, "spec": spec_hash(spec)[:12],
-            "ok": tests_passed == len(results) and rows_passed == len(all_rows),
+            "ok": tests_passed == len(results) and rows_passed == len(all_rows) and not errors,
             "summary": summary, "tests": results, "baseline": baseline_rows, "stale_hosts": stale,
+            "errors": errors,
             **({"compliance": report} if report else {}),
             "seconds": round(time.time() - started, 1)}
 
@@ -164,8 +185,11 @@ def _running_vms(pve: PVE, spec: RangeSpec) -> dict[str, VMState]:
 
 # _run_tests: run every connectivity test. Tests from DIFFERENT VMs run in parallel; one VM's tests run one after
 # another UwU
-def _run_tests(pve: PVE, spec: RangeSpec, vms: dict[str, VMState], family: dict[str, str], emit) -> list[dict]:
-    """Every connectivity test. Tests from different VMs run in parallel; one VM's tests run one after another."""
+def _run_tests(pve: PVE, spec: RangeSpec, vms: dict[str, VMState], family: dict[str, str], emit,
+               errors: list[dict]) -> list[dict]:
+    """Every connectivity test. Tests from different VMs run in parallel; one VM's tests run one after another.
+    A test that cannot run fails with the reason; after that, the VM's other tests fail without trying (each try
+    could wait minutes for a broken agent) and the reason goes into `errors` once."""
     # Group the tests by their source VM >w<
     by_source: dict[str, list[dict]] = {}
     for test in effective_tests(spec, pve.cfg.probe):
@@ -174,17 +198,28 @@ def _run_tests(pve: PVE, spec: RangeSpec, vms: dict[str, VMState], family: dict[
     # run_from(): every test of one source VM OwO
     def run_from(source: str) -> list[dict]:
         out = []
+        broken: ValorError | None = None
         for test in by_source[source]:
             ip, port = _target(spec, test["to"], test["port"], pve.cfg.probe)
             # Probe once, and retry (only expected-open tests that came back closed) ^w^
-            observed, detail = _probe(pve, vms[source].vmid, test["proto"], ip, port, family[source])
             # a service may still be starting (a VM the build just started or rebooted): look again before
             # calling an open port closed. A closed result is never retried - a probe cannot connect by mistake.
-            for _ in range(OPEN_RETRIES):
-                if observed == test["expect"] or test["expect"] != "open":
-                    break
-                time.sleep(OPEN_RETRY_DELAY)
-                observed, detail = _probe(pve, vms[source].vmid, test["proto"], ip, port, family[source])
+            # "error" is never what a test expects, so a test that could not run always fails.
+            if broken:
+                observed, detail = "error", f"not run: {broken.message}"
+            else:
+                try:
+                    observed, detail = _probe(pve, vms[source].vmid, test["proto"], ip, port, family[source])
+                    for _ in range(OPEN_RETRIES):
+                        if observed == test["expect"] or test["expect"] != "open":
+                            break
+                        time.sleep(OPEN_RETRY_DELAY)
+                        observed, detail = _probe(pve, vms[source].vmid, test["proto"], ip, port, family[source])
+                except ValorError as e:
+                    broken = e
+                    errors.append({"host": source, "check": "connectivity tests", "message": e.message,
+                                   "hint": e.hint})
+                    observed, detail = "error", e.message
             # The test's result: where it connected, what was seen, and pass = observed matches expected UwU
             out.append({**test, "target": f"{ip}{':' + str(port) if port else ''}", "observed": observed,
                         "detail": detail, "pass": observed == test["expect"]})
@@ -201,17 +236,22 @@ def _run_tests(pve: PVE, spec: RangeSpec, vms: dict[str, VMState], family: dict[
 
 # _check_baselines: run each host's baseline checks (check only). Returns ({host: rows}, which baselines were used) OwO
 def _check_baselines(pve: PVE, spec: RangeSpec, vms: dict[str, VMState], hosts: list[str], family: dict[str, str],
-                     emit) -> tuple[dict[str, list[dict]], set]:
-    """Run each host's baseline checks (no fixes). Returns ({host: rows}, ids of the baselines used)."""
+                     emit, errors: list[dict]) -> tuple[dict[str, list[dict]], set]:
+    """Run each host's baseline checks (no fixes). Returns ({host: rows}, ids of the baselines used). A host whose
+    checks cannot run has no rows and an entry in `errors`."""
     # check(): one host: pick its baseline (Windows hosts get the Windows profile), run the right script, parse it ^w^
     def check(host: str):
         baseline = baseline_for(pve.cfg.baselines_dir, spec.baseline, family[host])
         if baseline is None:
             return host, None, []
-        if family[host] == "windows":
-            result = pve.ps(vms[host].vmid, windows.baseline_bundle(baseline, False, fix=False), timeout=300)
-        else:
-            result = pve.script(vms[host].vmid, bundle(baseline, host == ROUTER, fix=False), timeout=300)
+        try:
+            if family[host] == "windows":
+                result = pve.ps(vms[host].vmid, windows.baseline_bundle(baseline, False, fix=False), timeout=300)
+            else:
+                result = pve.script(vms[host].vmid, bundle(baseline, host == ROUTER, fix=False), timeout=300)
+        except ValorError as e:
+            errors.append({"host": host, "check": "baseline", "message": e.message, "hint": e.hint})
+            return host, baseline.id, []
         return host, baseline.id, parse_results(baseline, result.out)
 
     # 4 hosts at a time; report each host's pass count as it finishes UwU

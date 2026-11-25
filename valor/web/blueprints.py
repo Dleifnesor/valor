@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # topology (the map), core helpers and the range loader OwO
 from .. import blueprints as bp
 from .. import ops
+from ..capacity import judge as judge_memory
 from ..cluster import vlans_in_use
 from ..errors import ValorError
 from ..plan import make_plan
@@ -104,9 +105,10 @@ def _preview(cfg, bp_id: str, copies: list[CopyIn]) -> dict:
     # Capacity: would ALL copies together stay under the node's memory limit? UwU
     capacity = None
     if node:
-        used = node["memory_total_mib"] - node["memory_free_mib"]
-        capacity = {"additional_memory_mib": extra_memory, "memory_total_mib": node["memory_total_mib"],
-                    "within_limit": used + extra_memory <= node["memory_total_mib"] * node["limit_fraction"]}
+        fit = judge_memory(node, extra_memory)
+        capacity = {key: fit[key] for key in ("additional_memory_mib", "memory_total_mib", "memory_in_use_mib",
+                                              "limit_fraction", "hardware_fraction", "needed_fraction",
+                                              "within_limit", "fits_hardware")}
     # The preview: the copies, a cluster error (if any), the capacity, whether everything is deployable, and the
     # deploy_hash that pins exactly this preview >w<
     return {"copies": out, "cluster_error": cluster_error, "capacity": capacity,

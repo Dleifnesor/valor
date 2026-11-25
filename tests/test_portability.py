@@ -304,3 +304,75 @@ def test_guest_text_is_utf8_both_ways(cfg):
         pve.exec(5040, ["bash", "-c", "echo é"])
     assert e.value.code == "agent_non_ascii" and len(wire.posts) == 2
     assert from_agent("code page 850: \x82") == "code page 850: \x82"                 # not UTF-8: as it came
+
+
+# *sniffs at the missing program* GuestWithout: a Linux guest whose agent fails to start some programs the way
+# the real one does: glib's reason has curly quotes, so Proxmox answers HTTP 596 with no message. `installed`
+# programs exist (but `broken` ones still cannot start); with `confined` nothing at all can start (SELinux) OwO
+class GuestWithout:
+    def __init__(self, installed=("/bin/sh", "/bin/bash", "ip"), broken=(), confined=False):
+        from types import SimpleNamespace
+        self.installed, self.broken, self.confined, self.started = set(installed), set(broken), confined, []
+        self.exec = SimpleNamespace(post=self._exec)
+
+    def __call__(self, name):
+        from types import SimpleNamespace
+        return SimpleNamespace(get=self._status)
+
+    def _exec(self, command, **params):
+        from proxmoxer.core import ResourceException
+        program = command[0]
+        if self.confined or program not in self.installed or program in self.broken:
+            raise ResourceException(596, "Errors during TLS negotiation, request sending and header processing",
+                                    "", errors={"errors": "b''"})
+        self.started.append(command)
+        if command[:3] == ["/bin/sh", "-c", 'command -v "$1"']:          # not_started() asking the shell
+            self.result = (0, f"/usr/bin/{command[4]}\n") if command[4] in self.installed else (1, "")
+        else:
+            self.result = (0, "ok\n")
+        return {"pid": len(self.started)}
+
+    def _status(self, pid):
+        return {"exited": 1, "exitcode": self.result[0], "out-data": self.result[1], "err-data": ""}
+
+
+# A program that isn't installed is exit 127 (as in a shell), not an "HTTP 596" crash: callers handle it like any
+# failed command. One that is there but can't start, or an agent that can't start anything, is a clear error, and
+# only the latter mentions SELinux; Windows programs can't be asked about and say so ^w^
+def test_a_program_that_cannot_start_is_explained(cfg):
+    from types import SimpleNamespace
+
+    def pve_for(wire):
+        pve = PVE.__new__(PVE)
+        pve.cfg, pve.vm = cfg, lambda vmid: SimpleNamespace(agent=wire)
+        return pve
+
+    missing = pve_for(GuestWithout())
+    result = missing.exec(5017, ["wg", "show", "wg0", "listen-port"])
+    assert result.exitcode == 127 and not result.ok and "wg: command not found" in result.err
+    assert missing.exec(5017, ["ip", "-j", "link"]).ok                  # installed programs still just run
+
+    with pytest.raises(ValorError) as e:                                 # there, but cannot start
+        pve_for(GuestWithout(installed=("/bin/sh", "wg"), broken=("wg",))).exec(5017, ["wg", "show"])
+    assert e.value.code == "agent_exec_failed" and "/usr/bin/wg" in e.value.message
+    assert "596" not in e.value.message and "TLS" not in e.value.message
+
+    with pytest.raises(ValorError) as e:                                 # nothing can start: SELinux hint
+        pve_for(GuestWithout(confined=True)).exec(5036, ["/bin/bash", "-s"], input_data="true\n")
+    assert e.value.code == "agent_exec_failed" and "cannot start programs" in e.value.message
+    assert "SELinux" in e.value.hint
+
+    with pytest.raises(ValorError) as e:                                 # Windows: no shell to ask
+        pve_for(GuestWithout(installed=())).exec(5018, ["powershell.exe", "-File", "x.ps1"])
+    assert e.value.code == "agent_exec_failed" and "powershell.exe" in e.value.message
+    assert "SELinux" not in (e.value.hint or "")
+
+
+# Any other 596 says what it is (not "Errors during TLS negotiation") and isn't mistaken for SELinux >w<
+def test_a_596_is_not_reported_as_tls_or_selinux():
+    from proxmoxer.core import ResourceException
+    from valor.pve import _api_error
+    error = _api_error(ResourceException(596, "Errors during TLS negotiation, request sending and header processing",
+                                         "", errors={"errors": "b''"}), "read file in VM 5017")
+    assert error.code == "proxmox_api" and error.status == 596
+    assert "TLS" not in error.message and error.hint is None and error.details is None

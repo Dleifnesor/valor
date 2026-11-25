@@ -1,25 +1,27 @@
 // *fiddles with all the little knobs* OwO web/src/pages/Settings.tsx: the DATACENTER SETTINGS (admins only)! ^w^
-// Notification channels, LDAP / Active Directory sign-in, the AI providers for the chats, and the web certificate.
+// Notification channels, LDAP / Active Directory sign-in, the AI providers for the chats, the memory limit for builds
+// and the web certificate.
 // Each section loads its settings, edits a local copy, and saves it whole with PUT. Secrets come back MASKED and stay
 // unchanged unless typed again *wags tail*
 import { useEffect, useState } from "react";
 // API calls, useApi, and UI pieces UwU
 import { ApiError, get, post, put } from "../api";
-import { useApi } from "../hooks";
+import { useApi, when } from "../hooks";
 import { Card, ErrorBox, IconName, Loading } from "../components/ui";
 
 // Datacenter settings (admins only): notification channels, LDAP / Active Directory sign-in, the AI providers for
 // the chats, and the web certificate. Each section loads its settings, edits a local copy and saves it whole with
 // PUT; secrets (passwords, webhook URLs, API keys) come back blank and stay unchanged unless typed again.
 
-// SettingsTab: the four sections. SETTINGS_TABS: their labels and icons for the Datacenter menu >w<
-export type SettingsTab = "notifications" | "directory" | "ai" | "about";
+// SettingsTab: the five sections. SETTINGS_TABS: their labels and icons for the Datacenter menu >w<
+export type SettingsTab = "notifications" | "directory" | "ai" | "resources" | "about";
 
 /** The settings, one section each in the Datacenter menu. */
 export const SETTINGS_TABS: { id: SettingsTab; label: string; icon: IconName }[] = [
   { id: "directory", label: "Directory (LDAP)", icon: "users" },
   { id: "ai", label: "AI providers", icon: "bot" },
   { id: "notifications", label: "Notifications", icon: "mail" },
+  { id: "resources", label: "Resources", icon: "server" },
   { id: "about", label: "Certificate", icon: "lock" },
 ];
 
@@ -27,6 +29,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string; icon: IconName }[]
 export function Settings({ tab }: { tab: SettingsTab }) {
   if (tab === "directory") return <DirectorySettings />;
   if (tab === "ai") return <AiSettings />;
+  if (tab === "resources") return <ResourceSettings />;
   if (tab === "about") return <About />;
   return <NotificationSettings />;
 }
@@ -441,6 +444,107 @@ function ProviderCard({ provider, onChange, onDefault, onTest, onRemove }: {
         </label>
       </div>
     </div>
+  );
+}
+
+// ---- Resources: the memory limit for builds ---------------------------------------------------------------------
+
+// NodeMemory / Resources: what GET /api/settings/resources returns (sizes in MiB, limits as shares of the RAM) ^w^
+interface NodeMemory {
+  name: string; memory_total_mib: number; memory_in_use_mib: number; memory_growth_mib: number;
+  limit_fraction: number; limit_mib: number; hardware_fraction: number; hardware_mib: number;
+}
+interface Resources {
+  default_fraction: number; min_fraction: number;
+  saved: null | { fraction: number; by: string; at: string };
+  node: NodeMemory | null; cluster_error: string | null;
+}
+
+// gib(): MiB as GiB with one decimal; percent(): a share as whole percent UwU
+const gib = (mib: number) => `${(mib / 1024).toFixed(1)} GiB`;
+const percent = (fraction: number) => Math.round(fraction * 100);
+
+// MemoryBar: the node's RAM as a bar: in use (blue, orange once over the limit), the chosen limit (a line) and the
+// hardware maximum (a red line) >w<
+function MemoryBar({ node, limit }: { node: NodeMemory; limit: number }) {
+  const used = Math.min(100, (node.memory_in_use_mib / node.memory_total_mib) * 100);
+  return (
+    <div>
+      <div className="memory-bar" role="img" aria-label={`${Math.round(used)}% in use, limit ${limit}%`}>
+        <div className="used" style={{ width: `${used}%`, background: used > limit ? "var(--warn)" : undefined }} />
+        <div className="mark" style={{ left: `${limit}%` }} title={`Limit ${limit}%`} />
+        <div className="mark hardware" style={{ left: `${percent(node.hardware_fraction)}%` }} title="Hardware maximum" />
+      </div>
+      <div className="memory-legend small muted">
+        <span><i className="used" />in use {Math.round(used)}%</span>
+        <span><i className="mark" />limit {limit}%</span>
+        <span><i className="mark hardware" />hardware maximum {percent(node.hardware_fraction)}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ResourceSettings: the memory limit: the node's numbers, a slider + number (up to the hardware), Save, and back to
+// the default OwO
+function ResourceSettings() {
+  const [data, setData] = useState<Resources | null>(null);
+  const [limit, setLimit] = useState(70);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const show = (loaded: Resources) => { setData(loaded); setLimit(percent(loaded.node?.limit_fraction ?? loaded.saved?.fraction ?? loaded.default_fraction)); };
+  useEffect(() => { get<Resources>("/api/settings/resources").then(show).catch(setErr); }, []);
+  if (!data) return err ? <ErrorBox error={err} /> : <Loading />;
+  const node = data.node;
+  const min = percent(data.min_fraction);
+  const max = node ? percent(node.hardware_fraction) : 0;
+  const valid = !!node && limit >= min && limit <= max;
+  // save(): PUT the limit (null = back to the default) ^w^
+  const save = async (fraction: number | null) => {
+    setErr(null); setMsg(null);
+    try {
+      show(await put<Resources>("/api/settings/resources", { max_memory_fraction: fraction }));
+      setMsg(fraction === null ? "Back to the default." : "Saved. The next build uses the new limit.");
+    } catch (e) { setErr(e as ApiError); }
+  };
+  return (
+    <Card title="Memory for ranges" actions={<button className="btn primary" disabled={!valid} onClick={() => save(limit / 100)}>Save</button>}>
+      <div className="stack">
+        <div className="muted small">
+          VALOR refuses a build that would push the node's memory use past this limit, so the node keeps room for
+          everything else. It can be raised up to what the hardware holds: the node's RAM minus a reserve the Proxmox
+          host keeps for itself. A build that adds no memory is never refused.
+        </div>
+        {data.cluster_error && <div className="alert warn">Cannot read the node's memory, so the limit cannot be changed now: {data.cluster_error}</div>}
+        {node && <MemoryBar node={node} limit={limit} />}
+        {node && (
+          <dl className="kv">
+            <dt>Node</dt><dd>{node.name}: {gib(node.memory_total_mib)} RAM</dd>
+            <dt>In use</dt><dd>{gib(node.memory_in_use_mib)}, including {gib(node.memory_growth_mib)} that running VMs may still
+              claim (the page cache, which Linux frees on demand, is left out)</dd>
+            <dt>Hardware maximum</dt><dd>{max}% ({gib(node.hardware_mib)})</dd>
+            <dt>Limit now</dt><dd>{percent(node.limit_fraction)}% ({gib(node.limit_mib)}), {data.saved
+              ? `set by ${data.saved.by} ${when(data.saved.at)}` : `the installer's default`}</dd>
+          </dl>
+        )}
+        {node && (
+          <label className="field">Limit, in % of the node's RAM <span className="hint">{min}–{max}%, default {percent(data.default_fraction)}%</span>
+            <div className="row">
+              <input name="memory-limit-slider" type="range" className="grow" min={min} max={max} value={Math.min(Math.max(limit, min), max)}
+                onChange={(e) => setLimit(Number(e.target.value))} />
+              <input name="memory-limit" type="number" min={min} max={max} style={{ maxWidth: 90 }} value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))} /> %
+            </div>
+          </label>
+        )}
+        {node && !valid && <div className="alert error small">Choose between {min}% and {max}%: above {max}% the VMs could need more memory than the node has.</div>}
+        {node && valid && (
+          <div className="small">With {limit}%, builds may fill the node up to {gib(node.memory_total_mib * limit / 100)}: {gib(Math.max(0, node.memory_total_mib * limit / 100 - node.memory_in_use_mib))} more than is in use now.</div>
+        )}
+        {data.saved && <div className="row"><button className="btn" onClick={() => save(null)}>Back to the default ({percent(data.default_fraction)}%)</button></div>}
+        {msg && <div className="alert info">{msg}</div>}
+        <ErrorBox error={err} />
+      </div>
+    </Card>
   );
 }
 

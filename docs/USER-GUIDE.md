@@ -145,8 +145,9 @@ Every build and every teardown shows its plan before it runs. Per VM the plan sa
 | `keep` | nothing to do |
 | `remove` | the host is no longer in the spec: the VM is deleted |
 
-The plan also shows memory totals against free memory on the node, and the full text of any `custom-script` role it
-would run (those scripts run as root or SYSTEM).
+The plan also shows how much memory the range adds and whether that fits the node's memory limit (an admin can
+change the limit in **Datacenter -> Resources**, up to what the hardware holds), and the full text of any
+`custom-script` role it would run (those scripts run as root or SYSTEM).
 
 **What you approve is what runs.** When you approve, VALOR computes the plan again; if it differs from the one you
 looked at (because the spec or the cluster changed in between), the build is refused and you review the new plan.
@@ -339,6 +340,7 @@ The settings:
 | Directory (LDAP) | Sign in with LDAP or Active Directory: server, service account, user search, and the groups that map to admin / operator / viewer. **Test** checks a user lookup. |
 | AI providers | One or more providers for the chats: OpenRouter (hosted models, Claude among them) or any OpenAI-compatible server (LM Studio, vLLM, Ollama's OpenAI API...). One is the default; a chat can pick another. Per provider: model, base URL, API key (encrypted, never shown again), max tokens per answer, and a silence timeout for slow local models. Also: the daily token budget per user (0 = unlimited), where failed builds go, and the AI tokens per user and day for the last 30 days. |
 | Notifications | Where VALOR reports builds and problems: email (SMTP), Discord, Slack, Microsoft Teams, and in-app notifications (**Notifications** next to **Tasks**). Each channel gets problems only or all events; **Test** sends a test message. |
+| Resources | The memory limit for builds: VALOR refuses a build that would push the range node's memory use past it (70% of its RAM by default). It shows what is in use now (without the page cache, plus memory that running VMs may still claim) and can be raised up to what the hardware holds: the RAM minus a reserve the Proxmox host keeps for itself (5%, at least 2 GiB). A build that adds no memory is never refused. The setting survives `install.sh --upgrade`. |
 | Certificate | The certificate the web UI uses and when it expires; VALOR's version and instance. |
 
 A local model needs a large context window: load it with at least 32,768 tokens of context (VALOR's prompt alone
