@@ -4,7 +4,7 @@
 import { useState } from "react";
 // post/ApiError, JobSummary, hooks, UI pieces, and the task table helpers UwU
 import { ApiError, post } from "../api";
-import { JobSummary } from "../types";
+import { JobSummary, VerifyResult } from "../types";
 import { go, useApi, when } from "../hooks";
 import { Card, ErrorBox, Loading, StateBadge } from "../components/ui";
 import { TaskTable, jobTarget, jobTitle, who } from "../components/TaskLog";
@@ -52,13 +52,24 @@ function visible(events: JobDetailData["recent_events"]) {
   return events.filter((e) => e.event !== "step_start" || !finished.has(`${e.step}|${e.host ?? ""}`));
 }
 
-// JobDetail: one job, refreshed every 2.5 s UwU
-export function JobDetail({ id }: { id: string }) {
+// detailText(): an error's details as text people can read: a list one item per line, anything else as indented
+// JSON (never "[object Object]") ^w^
+export function detailText(details: unknown): string {
+  if (typeof details === "string") return details;
+  if (Array.isArray(details)) return details.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
+  return JSON.stringify(details, null, 2);
+}
+
+// JobDetail: one job, refreshed every 2.5 s; isAdmin links a memory refusal to the limit's setting UwU
+export function JobDetail({ id, isAdmin = false }: { id: string; isAdmin?: boolean }) {
   const { data, error } = useApi<JobDetailData>(`/api/jobs/${id}?tail=400`, 2500);
   if (!data) return error ? <ErrorBox error={error} /> : <Loading />;
-  // The result and the range it's about >w<
+  // The result, the range it's about, and its verification (a verify job's own result, or a build's) >w<
   const result = data.result;
   const name = jobTarget(data.target);
+  const verification: VerifyResult | null = result?.verify ?? (result?.summary ? result as VerifyResult : null);
+  const scores = verification?.summary ? `tests ${verification.summary.tests_passed}/${verification.summary.tests_total}, `
+    + `baseline ${verification.summary.baseline_passed}/${verification.summary.baseline_total}` : "";
   // The detail view OwO
   return (
     <>
@@ -70,13 +81,25 @@ export function JobDetail({ id }: { id: string }) {
         <span className="grow" />
         {name && <a className="btn" href={`#/ranges/${name}`}>Open range</a>}
       </div>
-      {/* Failed: the error, step, host output and hint */}
-      {result && !result.ok && (
+      {/* Failed with an error: the error, step, host output and hint (and, for admins, the memory limit's setting) */}
+      {result && !result.ok && result.error && (
         <div className="alert error">
           <b>{result.error}</b>: {result.message}
           {result.step && <div className="small">Step: {result.step}{result.host ? ` on ${result.host}` : ""}</div>}
-          {result.details && <pre className="mono small job-details">{String(result.details).slice(-2000)}</pre>}
+          {result.details && <pre className="mono small job-details">{detailText(result.details).slice(-2000)}</pre>}
           {result.hint && <div className="small">Hint: {result.hint}</div>}
+          {result.error === "insufficient_resources" && isAdmin && (
+            <div className="small"><button className="link" onClick={() => go("settings/resources")}>Change the memory limit (Datacenter → Resources)</button></div>
+          )}
+        </div>
+      )}
+      {/* Failed without an error: a verification that ran and found problems */}
+      {result && !result.ok && !result.error && (
+        <div className="alert error">
+          Verification failed{scores ? `: ${scores}` : ""}.
+          {verification?.errors && verification.errors.length > 0 && (
+            <ul>{verification.errors.map((e, i) => <li key={i}><b>{e.host}</b> ({e.check}): {e.message}</li>)}</ul>
+          )}
         </div>
       )}
       {/* A failed build can go to the assistant */}
@@ -85,8 +108,7 @@ export function JobDetail({ id }: { id: string }) {
       {result && result.ok && (
         <div className="alert ok">
           Finished{result.seconds ? ` in ${result.seconds} s` : ""}.
-          {result.verify && ` Verification ${result.verify.ok ? "passed" : "failed"}: tests ${result.verify.summary.tests_passed}/${result.verify.summary.tests_total}, baseline ${result.verify.summary.baseline_passed}/${result.verify.summary.baseline_total}.`}
-          {result.summary && !result.verify && ` Tests ${result.summary.tests_passed}/${result.summary.tests_total}, baseline ${result.summary.baseline_passed}/${result.summary.baseline_total}.`}
+          {verification && ` Verification ${verification.ok ? "passed" : "failed"}${scores ? `: ${scores}` : ""}.`}
           {result.changed === false && " No changes were needed."}
         </div>
       )}

@@ -84,10 +84,32 @@ def from_agent(text: str) -> str:
         return text
 
 
+# UNRELAYED: the status Proxmox answers when it cannot finish a reply. For the guest agent that happens when the
+# agent's error message has non-ASCII text: pvedaemon dies on it ("Wide character in die"), and the reason is lost.
+# The usual case is glib's 'Failed to execute child process “wg” (No such file or directory)' (curly quotes) UwU
+UNRELAYED = 596
+NOT_STARTED = "Failed to execute child process"         # the agent's error when a program cannot be started
+CONFINED_HINT = ("On Rocky/Alma templates built by older VALOR versions SELinux confines the guest agent: rebuild "
+                 "the template on a Proxmox node (./install.sh --template <os> --rebuild). Otherwise open the VM's "
+                 "console and check that it is healthy.")
+
+
+# ProxmoxApiError: an error answer from Proxmox, keeping its HTTP status (exec tells a 596 apart by it) >w<
+class ProxmoxApiError(ValorError):
+    def __init__(self, status: int, message: str, **kwargs):
+        super().__init__("proxmox_api", message, **kwargs)
+        self.status = status
+
+
 # _api_error: turn a failed request into a ValorError ^w^
 def _api_error(e: Exception, what: str) -> ValorError:
     """A failed API call as a ValorError. `what` says what VALOR was doing ("clone template 9000 to 4001")."""
     if isinstance(e, ResourceException):
+        # A 596 carries no message of its own (Proxmox's text for it, "Errors during TLS negotiation...", is
+        # misleading here) and no details UwU
+        if e.status_code == UNRELAYED:
+            return ProxmoxApiError(UNRELAYED, f"{what}: HTTP 596, Proxmox could not complete the request or pass on "
+                                              "its answer")
         # An HTTP error: status and message, the error details, and a hint for common cases UwU
         msg = f"{what}: HTTP {e.status_code} {e.status_message}"
         detail = {"errors": e.errors} if getattr(e, "errors", None) else {"content": str(e.content)[:500]}
@@ -96,14 +118,8 @@ def _api_error(e: Exception, what: str) -> ValorError:
         if e.status_code == 403:
             hint = ("The engine's API token is not allowed to do this. It may only act on VMs in its pool, "
                     "its storage and its bridges; check the spec targets those.")
-        elif "command" in what and (e.status_code == 596 or "Permission denied" in str(e.content or e.errors or "")):
-            # Proxmox cannot relay agent errors with non-ASCII text (HTTP 596); on RHEL-family guests that error is
-            # usually SELinux confining the agent, which templates built by VALOR 0.2+ take care of
-            hint = ("The guest agent refused to run the command (SELinux confines it on Rocky/Alma templates built "
-                    "by older VALOR versions). Rebuild the template on a Proxmox node: "
-                    "./install.sh --template <os> --rebuild")
-        # Anything else (network errors) = Proxmox unreachable OwO
-        return ValorError("proxmox_api", msg, details=detail, hint=hint)
+        return ProxmoxApiError(e.status_code, msg, details=detail, hint=hint)
+    # Anything else (network errors) = Proxmox unreachable OwO
     return ValorError("proxmox_unreachable", f"{what}: {e.__class__.__name__}: {e}")
 
 
@@ -403,8 +419,35 @@ class PVE:
         params: dict = {"command": command}
         if input_data is not None:
             params["input-data"] = to_agent(input_data)
-        started = self.agent_call(vmid, f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
+        try:
+            started = self.agent_call(vmid, f"run command in VM {vmid}", self.vm(vmid).agent.exec.post, **params)
+        except ProxmoxApiError as e:
+            # The program did not start, and Proxmox may have lost the agent's reason: find out why OwO
+            if e.status != UNRELAYED and NOT_STARTED not in f"{e.message} {e.details}":
+                raise
+            return self.not_started(vmid, command[0], e)
         return self.exec_wait(vmid, started["pid"], timeout)
+
+    # not_started: why the agent could not start a program, asked of a shell (see UNRELAYED). A program that isn't
+    # installed is exit 127, as in a shell, so callers treat it like any failed command; anything else is an error
+    # that says what is wrong ^w^
+    def not_started(self, vmid: int, program: str, error: ProxmoxApiError) -> ExecResult:
+        """The guest agent could not start `program`: a missing program becomes exit 127 (as in a shell); a program
+        that is there but cannot start, or an agent that cannot start anything, raises agent_exec_failed."""
+        # No shell to ask (Windows), or the shell itself is what failed: say so, with the agent's reason if it came >w<
+        if program == "/bin/sh" or "\\" in program or program.lower().endswith((".exe", ".cmd")):
+            lost = "Proxmox could not pass on the agent's reason (it contains non-ASCII text)."
+            raise ValorError("agent_exec_failed", f"the guest agent of VM {vmid} could not start {program}",
+                             details=error.details, hint=lost if error.status == UNRELAYED else None) from error
+        try:
+            found = self.exec(vmid, ["/bin/sh", "-c", 'command -v "$1"', "sh", program], timeout=30)
+        except ValorError:
+            raise ValorError("agent_exec_failed", f"the guest agent of VM {vmid} cannot start programs",
+                             hint=CONFINED_HINT) from error
+        if not found.ok:
+            return ExecResult(127, "", f"{program}: command not found (it is not installed in VM {vmid})\n")
+        raise ValorError("agent_exec_failed", f"VM {vmid} has {found.out.strip() or program} but its guest agent "
+                         "could not start it", hint="Check the program's permissions. " + CONFINED_HINT) from error
 
     # exec_wait: poll the process's status (0.5 s at first, growing to 3 s) until it exits; collect its output UwU
     def exec_wait(self, vmid: int, pid: int, timeout: int = 900) -> ExecResult:

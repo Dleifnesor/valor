@@ -6,7 +6,7 @@ import { useState } from "react";
 // API error type, hooks, the map type, UI pieces, and every section's component UwU
 import { ApiError } from "../api";
 import { ago, go, openTask, useApi, when } from "../hooks";
-import { Topology } from "../types";
+import { Topology, VerifyResult } from "../types";
 import { Card, DropButton, ErrorBox, Icon, Loading, MenuEntry, StateBadge, ToolButton, View } from "../components/ui";
 import { RangeMapTab } from "../components/RangeEditing";
 import { Markdown } from "../components/Markdown";
@@ -14,7 +14,7 @@ import { TopologyMap } from "../components/Topology";
 import { HostPower, SnapshotsTab, rangeActions, vmMenu } from "../components/RangeActions";
 import { showMenu } from "../components/ContextMenu";
 import { AccessTab } from "../components/Access";
-import { type ComplianceReport, Verification } from "../components/Verification";
+import { type ComplianceReport, Verification, verifyLabel } from "../components/Verification";
 import { RangeEditor } from "./RangeEditor";
 
 // One range: its title-bar actions (start, shut down, verify, plan, ...) and its sections - summary, the editable
@@ -35,14 +35,7 @@ export interface Detail {
   tests: { name: string; from: string; to: string; proto: string; port: number | null; expect: string; origin: string }[];
   history: { kind: string; started: string; ok: boolean; seconds: number; error?: string; message?: string; job?: string }[];
   journal: string | null;
-  verify: null | {
-    ok: boolean;
-    finished?: string;
-    summary: Record<string, any>;
-    tests: { name: string; from: string; target: string; expect: string; observed: string; detail: string; pass: boolean }[];
-    baseline: Record<string, { control: string; title: string; area: string; after: string }[]>;
-    compliance?: ComplianceReport | { error: string };
-  };
+  verify: null | (VerifyResult & { compliance?: ComplianceReport | { error: string } });
   last_apply: null | { ok: boolean; started: string; seconds: number; error?: string; message?: string };
   logins: boolean;
 }
@@ -154,7 +147,7 @@ function Summary({ data, canOperate, onError }: { data: Detail; canOperate: bool
               {" "}· {ago(data.last_apply.started)}</> : "–"}</dd>
             <dt>Verification</dt>
             <dd>{data.verify ? <><StateBadge state={data.verify.ok ? "ok" : "failed"}
-              label={`${data.verify.ok ? "passed" : "failed"} ${data.verify.summary?.tests_passed ?? ""}/${data.verify.summary?.tests_total ?? ""} tests`} />
+              label={verifyLabel(data.verify)} />
               {" "}· {ago(data.verify.finished)}</> : "–"}</dd>
           </dl>
         </Card>

@@ -562,6 +562,14 @@ td.fill { width: 100%; max-width: 0; }                /* takes the spare width; 
 .progress { height: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 1px; overflow: hidden; margin-top: 6px; }
 .progress > div { height: 100%; background: var(--accent); transition: width 0.4s; }
 .qr svg { display: block; max-width: 100%; height: auto; }
+/* The memory bar on Datacenter > Resources: in use, the limit (a line) and the hardware maximum (a red line) OwO */
+.memory-bar { position: relative; height: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 1px; }
+.memory-bar > .used { position: absolute; top: 0; bottom: 0; left: 0; background: var(--accent); }
+.memory-bar > .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text); }
+.memory-bar > .mark.hardware, .memory-legend i.mark.hardware { background: var(--bad); }
+.memory-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.memory-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; background: var(--accent); }
+.memory-legend i.mark { width: 2px; background: var(--text); }
 /* chat builder */
 /*
  * The chat builder: two columns (one on narrow screens), the chat card, the scrolling log, user and assistant

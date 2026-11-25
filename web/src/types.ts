@@ -144,7 +144,7 @@ export interface RangeRow {
   machines?: Machine[];
   error?: string;
   last_apply: null | { ok: boolean; started: string; seconds: number; error?: string };
-  last_verify: null | { ok: boolean; finished: string; summary: Record<string, any> };
+  last_verify: null | { ok: boolean; finished?: string; summary?: VerifySummary | null; job?: string };
 }
 
 // Check: one health check OwO *ties a bow on the last box*
@@ -153,4 +153,21 @@ export interface Check {
   status: "ok" | "problem" | "unknown";
   detail: string;
   hint?: string;
+}
+
+// VerifySummary / VerifyResult: a verification's counts and full result. A verification that stopped before it
+// could test anything (e.g. the range was not running) is only an error: no summary, tests or baseline UwU
+export interface VerifySummary {
+  tests_passed: number; tests_total: number; isolation_passed: number; isolation_total: number;
+  baseline_passed: number; baseline_total: number; baseline_claim: string | null; errors?: number;
+}
+export interface VerifyError { host: string; check: string; message: string; hint?: string | null }
+export interface VerifyResult {
+  ok: boolean; started?: string; finished?: string; job?: string;
+  summary?: VerifySummary;
+  tests?: { name: string; from: string; target: string; expect: string; observed: string; detail: string; pass: boolean }[];
+  baseline?: Record<string, { control: string; title: string; area: string; after: string }[]>;
+  compliance?: any;
+  errors?: VerifyError[];                    // checks that could not run (the rest did)
+  error?: string; message?: string; hint?: string;     // the verification could not run at all
 }

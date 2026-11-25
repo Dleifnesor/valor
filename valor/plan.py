@@ -30,7 +30,7 @@ from pathlib import Path
 
 # Everything that feeds a fingerprint: credentials (login version), wireguard (VPN digest), baselines, the cluster
 # (VMs, catalog, templates), the firewall render, PVE, roles, spec bits, and the Windows prep version OwO
-from . import credentials, wireguard
+from . import capacity, credentials, wireguard
 from .baseline import baseline_for, load_baseline
 from .cluster import VMState, load_catalog, range_vms, template_ids
 from .netpolicy import render
@@ -310,24 +310,14 @@ def _action(want: Desired, vm: VMState | None, current_spec: str) -> dict:
     }
 
 
-# _node_memory: would the node stay under max_memory_fraction with this range running? UwU
+# _node_memory: does the range fit the node's memory limit once it runs? (capacity.py has the numbers) UwU
 def _node_memory(pve: PVE, desired: list[Desired], existing: dict[str, VMState], range_memory: int) -> dict:
-    """Would the node stay under max_memory_fraction once the range runs? Memory of the range's VMs that already
-    run is in use today, so only the difference counts."""
-    cfg = pve.cfg
-    # Free and total memory in MiB (Proxmox gives bytes) >w<
-    status = pve.node_status()
-    free = status["memory"]["free"] // 2**20
-    total = status["memory"]["total"] // 2**20
+    """Does the node stay under VALOR's memory limit once the range runs? Memory of the range's VMs that already
+    run is in use today, so only the difference counts; a range that adds nothing always fits."""
     # Memory of this range's VMs that ALREADY run is in use today, so only the extra counts OwO
     running_now = 0
     for want in desired:
         vm = existing.get(want.host)
         if vm and vm.status == "running":
             running_now += int(vm.config.get("memory") or 0)
-    extra = range_memory - running_now
-    # Within limit = (used now + extra) <= total x fraction ^w^ *checks the math twice*
-    within_limit = (total - free + max(extra, 0)) <= total * cfg.max_memory_fraction
-    return {"name": cfg.node, "memory_total_mib": total, "memory_free_mib": free,
-            "additional_memory_mib": max(extra, 0), "within_limit": within_limit,
-            "limit_fraction": cfg.max_memory_fraction}
+    return capacity.judge(capacity.measure(pve), range_memory - running_now)

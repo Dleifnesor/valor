@@ -1,10 +1,11 @@
 # *tweaks the little control panel* OwO valor/web/settings.py is the admin settings API! ^w^
 #   notification channels  email / Discord / Slack / Teams: list, save (secrets sealed), send a test
 #   LDAP                   the directory sign-in settings: show (password masked), save (validated), test
+#   resources              the node's memory and VALOR's memory limit for builds (up to what the hardware holds)
 #   audit log              search and page through who did what
 #   notifications          each person's in-app list and marking items read
 # *wags tail*
-"""Admin settings (notification channels, LDAP), the audit log and per-user in-app notifications."""
+"""Admin settings (notification channels, LDAP, the memory limit), the audit log and per-user notifications."""
 
 # Lazy type hints UwU
 from __future__ import annotations
@@ -19,7 +20,10 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-# db, ldapauth, notify; core helpers ^w^
+# capacity (the memory limit), ValorError and PVE (the node's memory); db, ldapauth, notify; core helpers ^w^
+from .. import capacity
+from ..errors import ValorError
+from ..pve import PVE
 from . import db, ldapauth, notify
 from .core import ApiError, Session, require
 
@@ -232,6 +236,52 @@ def audit_log(s: Session = Depends(require("admin")), before: int | None = Query
     rows = [dict(row) for row in s.conn.execute(sql + " ORDER BY id DESC LIMIT ?", (*args, limit))]
     # `next` = the id to pass as `before` for the next page (None on the last page) UwU
     return {"entries": rows, "next": rows[-1]["id"] if len(rows) == limit else None}   # next: id to page from
+
+
+# ---- Resources: the memory limit for builds -----------------------------------------------------------------------
+
+# ResourcesIn: the limit as a share of the node's RAM; None = back to the installer's default >w<
+class ResourcesIn(_In):
+    max_memory_fraction: float | None = Field(default=None, ge=0, le=1)
+
+
+# _resources: the node's memory now, the limit in force, the default and who changed it last; the cluster's error
+# instead of the node when Proxmox can't be asked OwO
+def _resources(cfg) -> dict:
+    out = {"default_fraction": cfg.max_memory_fraction, "min_fraction": capacity.MIN_FRACTION,
+           "saved": capacity.saved_limit(cfg), "node": None, "cluster_error": None}
+    try:
+        out["node"] = capacity.measure(PVE(cfg))
+    except ValorError as e:
+        out["cluster_error"] = e.message
+    return out
+
+
+# GET /api/settings/resources ^w^
+@router.get("/settings/resources")
+def get_resources(request: Request, s: Session = Depends(require("admin"))) -> dict:
+    return _resources(request.app.state.cfg)
+
+
+# PUT /api/settings/resources: save the limit. It may never go above what the node's RAM can hold (all of it minus
+# the host's reserve), so the node is measured first UwU
+@router.put("/settings/resources")
+def put_resources(body: ResourcesIn, request: Request, s: Session = Depends(require("admin"))) -> dict:
+    cfg = request.app.state.cfg
+    fraction = body.max_memory_fraction
+    if fraction is not None:
+        try:
+            node = capacity.measure(PVE(cfg))
+        except ValorError as e:
+            raise ApiError(503, "cluster_unreachable", f"Cannot check the node's memory: {e.message}")
+        if not capacity.MIN_FRACTION <= round(fraction, 2) <= node["hardware_fraction"]:
+            raise ApiError(400, "limit_out_of_range",
+                           f"The limit must be between {round(capacity.MIN_FRACTION * 100)}% and "
+                           f"{round(node['hardware_fraction'] * 100)}%: {node['name']}'s RAM minus what the Proxmox "
+                           "host keeps for itself.")
+    capacity.save_limit(cfg, fraction, s.username)
+    s.audit("settings.resources", detail={"max_memory_fraction": fraction})
+    return _resources(cfg)
 
 
 # ---- In-app notifications --------------------------------------------------------------------------------------

@@ -83,3 +83,70 @@ def test_verify_looks_again_before_calling_an_open_port_closed(cfg, ref_spec, mo
     assert r["late service"]["pass"] and calls[80] == 2
     assert not r["never"]["pass"] and calls[81] == 1 + V.OPEN_RETRIES
     assert r["isolated"]["pass"] and calls[22] == 1
+
+
+# *peeks at the router* WireGuard that isn't set up on the router is a failed check that says why - never a crash
+# (decella, 2026-11-25: the spec gained access but the apply was refused, then `wg` was missing on verify) UwU
+def test_wireguard_check_says_what_is_missing():
+    from types import SimpleNamespace
+    from valor import verify as V
+    from valor.pve import ExecResult
+    wg = SimpleNamespace(port=51820, peers=["admin1", "admin2"])
+
+    def router(result):
+        return SimpleNamespace(script=lambda vmid, body, timeout=900: result)
+    missing = V._wireguard_check(router(ExecResult(127, "", "")), 5017, wg)
+    assert not missing["pass"] and "not installed" in missing["detail"]
+    down = V._wireguard_check(router(ExecResult(1, "", "Unable to access interface: No such device")), 5017, wg)
+    assert not down["pass"] and "wg0 is not up" in down["detail"]
+    up = V._wireguard_check(router(ExecResult(0, "51820\nkeyA=\nkeyB=\n", "")), 5017, wg)
+    assert up["pass"] and up["detail"] == "listening: True; peers configured: 2/2"
+
+
+# A VM whose guest agent fails mid-run fails ITS tests (with the reason, asked only once) and its baseline; every
+# other VM's tests still run, the result keeps its summary, and the verification is not ok >w<
+def test_verify_keeps_going_when_one_vm_cannot_run_checks(cfg, ref_spec, monkeypatch):
+    from valor import verify as V
+    from valor.errors import ValorError
+    from valor.cluster import VMState
+    from valor.spec import ROUTER, spec_hash
+    spec = ref_spec.model_copy(update={"baseline": "none"})
+    hosts = [ROUTER, *(h.name for h in spec.hosts)]
+    vms = [VMState(100 + i, f"{spec.name}-{h}", "running", [], {"host": h, "spec": spec_hash(spec)})
+           for i, h in enumerate(hosts)]
+    monkeypatch.setattr(V, "range_vms", lambda pve, name: vms)
+    monkeypatch.setattr(V, "load_catalog", lambda c: {})
+    monkeypatch.setattr(V, "effective_tests", lambda s, probe: [
+        {"name": f"{source} {port}", "from": source, "to": hosts[0], "proto": "tcp", "port": port, "expect": "closed"}
+        for source in hosts[1:3] for port in (22, 23)])
+    probed = []
+
+    def probe(pve, vmid, proto, ip, port, family="debian"):
+        probed.append((vmid, port))
+        if vmid == 101:
+            raise ValorError("agent_exec_failed", "the guest agent of VM 101 cannot start programs")
+        return "closed", "filtered (timed out)"
+    monkeypatch.setattr(V, "_probe", probe)
+    result = V.verify(type("P", (), {"cfg": cfg})(), spec)
+    tests = {t["name"]: t for t in result["tests"]}
+    assert not result["ok"] and result["summary"]["tests_total"] == 4 and result["summary"]["tests_passed"] == 2
+    assert tests[f"{hosts[1]} 22"]["observed"] == "error" and "cannot start programs" in tests[f"{hosts[1]} 22"]["detail"]
+    assert tests[f"{hosts[1]} 23"]["detail"].startswith("not run:") and (101, 23) not in probed
+    assert tests[f"{hosts[2]} 22"]["pass"] and tests[f"{hosts[2]} 23"]["pass"]
+    assert result["errors"] == [{"host": hosts[1], "check": "connectivity tests",
+                                 "message": "the guest agent of VM 101 cannot start programs", "hint": None}]
+
+
+# The journal shows a verification that stopped with an error as "could not run" with its hint, never as
+# "tests None/None"; checks that could not run are listed above the tests ^w^
+def test_journal_shows_a_verification_that_could_not_run(cfg, ref_spec):
+    from valor import journal
+    stopped = {"ok": False, "error": "range_not_running", "message": "VMs not running: web",
+               "hint": "Re-apply the spec to start them.", "started": "2026-11-25T19:26:32+0000"}
+    text = "\n".join(journal._verification(cfg, ref_spec, stopped))
+    assert "**Could not run**: VMs not running: web" in text and "Hint: Re-apply" in text and "None" not in text
+    overview = "\n".join(journal._overview(ref_spec, None, {}, stopped))
+    assert "could not run: VMs not running: web" in overview and "None" not in overview
+    partial = {"ok": False, "summary": {"tests_passed": 1, "tests_total": 2}, "tests": [], "baseline": {},
+               "errors": [{"host": "web", "check": "baseline", "message": "the guest agent of VM 4001 cannot start programs"}]}
+    assert "- Could not run on web (baseline): the guest agent" in "\n".join(journal._verification(cfg, ref_spec, partial))
